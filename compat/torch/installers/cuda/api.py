@@ -1238,13 +1238,10 @@ def _api_cuda_manual_seed(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
-    backend = _curand(required=False)
-    if backend is None:
-        # Same reasoning as fork_rng: without offset tracking a seed is all
-        # this build can express, and a seed is what manual_seed promises.
-        jt.set_seed(seed)
+    if _uses_acl_rng():
+        jt.core.rng_manual_seed("acl", seed, _rng_device_index(None))
         return
-    backend.curand_restore_state(_rng_device_index(None), seed, 0)
+    _curand().curand_restore_state(_rng_device_index(None), seed, 0)
 
 
 def _api_cuda_manual_seed_all(s):
@@ -1255,10 +1252,10 @@ def _api_cuda_manual_seed_all(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
-    backend = _curand(required=False)
-    if backend is None:
-        jt.set_seed(seed)
+    if _uses_acl_rng():
+        jt.core.rng_manual_seed_all("acl", seed)
         return
+    backend = _curand()
     for index in range(count):
         backend.curand_restore_state(index, seed, 0)
 
@@ -1428,9 +1425,31 @@ def _curand(required=True):
     return backend
 
 
+def _uses_acl_rng():
+    return bool(getattr(jt.compiler, "has_acl", False))
+
+
+def _acl_rng_state_pack(payload):
+    import numpy as np
+    owner = get_install_context(jt).target_namespace
+    return owner.tensor(np.frombuffer(payload.encode("ascii"), dtype=np.uint8).copy(),
+                        dtype=owner.uint8, device="cpu")
+
+
+def _acl_rng_state_unpack(state):
+    from jittor._core.dtypes import dtype_name
+    if (not isinstance(state, jt.Var) or dtype_name(state.dtype) != "uint8"
+            or len(state.shape) != 1 or state.device.type != "cpu"):
+        raise TypeError("ACL RNG state must be a one-dimensional CPU ByteTensor")
+    try:
+        return state.numpy().tobytes().decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("not a native ACL generator snapshot") from error
+
+
 def cuda_rng_state_is_supported():
     """Whether this build can save and restore the CUDA RNG position."""
-    return _curand(required=False) is not None
+    return _uses_acl_rng() or _curand(required=False) is not None
 
 
 def _rng_device_index(device):
@@ -1467,6 +1486,8 @@ def _api_cuda_get_rng_state(device=None, *a, **k):
     # Everything queued has to have happened, or the offset describes a
     # position the device has not reached: the saved state would then be ahead
     # of the data the checkpoint was taken with.
+    if _uses_acl_rng():
+        return _acl_rng_state_pack(jt.core.rng_state("acl", _rng_device_index(device)))
     jt.sync_all(True)
     backend = _curand()
     index = _rng_device_index(device)
@@ -1478,6 +1499,8 @@ def _api_cuda_get_rng_state_all(*a, **k):
     count = device_count()
     if not count:
         return []
+    if _uses_acl_rng():
+        return [_acl_rng_state_pack(payload) for payload in jt.core.rng_states("acl")]
     jt.sync_all(True)
     backend = _curand()
     return [_rng_state_pack(backend.curand_generator_seed(i), backend.curand_generator_offset(i))
@@ -1485,6 +1508,9 @@ def _api_cuda_get_rng_state_all(*a, **k):
 
 
 def _api_cuda_set_rng_state(state, device=None, *a, **k):
+    if _uses_acl_rng():
+        jt.core.set_rng_state("acl", _acl_rng_state_unpack(state), _rng_device_index(device))
+        return
     seed, offset = _rng_state_unpack(state)
     # Parsed before anything is touched, so a malformed state leaves the
     # generator where it was rather than half-restored.
@@ -1493,6 +1519,11 @@ def _api_cuda_set_rng_state(state, device=None, *a, **k):
 
 
 def _api_cuda_set_rng_state_all(states, *a, **k):
+    if _uses_acl_rng():
+        payloads = [_acl_rng_state_unpack(state) for state in states]
+        if payloads:
+            jt.core.set_rng_states("acl", payloads)
+        return
     parsed = [_rng_state_unpack(state) for state in states]
     if not parsed:
         return
@@ -1503,6 +1534,8 @@ def _api_cuda_set_rng_state_all(states, *a, **k):
 
 
 def _api_cuda_initial_seed(*a, **k):
+    if _uses_acl_rng():
+        return int(jt.core.rng_initial_seed("acl", _rng_device_index(None)))
     return int(_curand().curand_generator_seed(_rng_device_index(None)))
 
 
