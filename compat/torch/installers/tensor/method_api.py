@@ -177,6 +177,7 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    slices = _drop_trailing_full_slices(slices)
     slices = _align_advanced_index(self, slices)
     self._check_inplace_autograd()
     # Jittor's indexed-assignment backward exposes one gradient row per
@@ -847,6 +848,23 @@ def _normalize_index_sequence(index):
     return index
 
 
+
+def _drop_trailing_full_slices(index):
+    """``x[idx, :, :]`` indexes exactly like ``x[idx]``.
+
+    An explicit run of full slices after an advanced index only makes the
+    ACL getitem take its slice path, which rejects Var indices ("ACL getitem
+    does not support Var slice indices"). Dropping them keeps the advanced
+    path and leaves the result unchanged.
+    """
+    if isinstance(index, tuple) and len(index) > 1:
+        rest = index[1:]
+        if all(isinstance(item, slice) and item.start is None
+               and item.stop is None and item.step is None for item in rest):
+            return index[0]
+    return index
+
+
 def _align_advanced_index(data, index):
     """Move tensor indices beside the indexed tensor before native dispatch."""
     if isinstance(index, _NativeVar):
@@ -876,6 +894,7 @@ def _torch_getitem(self, slices):
         return index
 
     slices = normalize(slices)
+    slices = _drop_trailing_full_slices(slices)
     slices = _align_advanced_index(self, slices)
     if (isinstance(slices, _NativeVar) and slices.ndim == 0
             and _jittor_dtype_name(slices.dtype) == "bool"):

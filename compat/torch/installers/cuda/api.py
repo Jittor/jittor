@@ -1228,7 +1228,13 @@ def _api_cuda_manual_seed(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
-    _curand().curand_restore_state(_rng_device_index(None), seed, 0)
+    backend = _curand(required=False)
+    if backend is None:
+        # Same reasoning as fork_rng: without offset tracking a seed is all
+        # this build can express, and a seed is what manual_seed promises.
+        jt.set_seed(seed)
+        return
+    backend.curand_restore_state(_rng_device_index(None), seed, 0)
 
 
 def _api_cuda_manual_seed_all(s):
@@ -1239,7 +1245,10 @@ def _api_cuda_manual_seed_all(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
-    backend = _curand()
+    backend = _curand(required=False)
+    if backend is None:
+        jt.set_seed(seed)
+        return
     for index in range(count):
         backend.curand_restore_state(index, seed, 0)
 
