@@ -9,6 +9,7 @@ namespace jittor
         ExpandOpRunner();
 
     protected:
+        bool allowsFlattenedElementwise() const override { return true; }
         void executeOp(AclOpRegistry::const_iterator &it) override;
     };
 }

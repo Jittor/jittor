@@ -34,6 +34,7 @@ Understand when work executes, inspect runtime state without changing it, and le
 - [Runtime introspection](runtime/runtime-introspection.en.md)
 - [CUDA library plan caches](runtime/cuda-library-plan-caches.en.md)
 - [Native Triton and TileLang kernels](runtime/external-kernels.en.md)
+- [CUTLASS memory-efficient attention](runtime/efficient-attention.en.md)
 
 <!-- sphinx-only
 ```{toctree}
@@ -44,5 +45,6 @@ runtime/pipelined-execution.en
 runtime/runtime-introspection.en
 runtime/cuda-library-plan-caches.en
 runtime/external-kernels.en
+runtime/efficient-attention.en
 ```
 -->

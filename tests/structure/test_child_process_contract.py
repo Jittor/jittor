@@ -321,6 +321,10 @@ def test_a_timeout_ends_the_grandchildren_too(tmp_path):
             _HANGS_WITH_A_GRANDCHILD % str(pid_file),
             timeout=2,
             directory=str(tmp_path),
+            # This probe only exercises stdlib process cleanup. Importing the
+            # Torch shim at startup can consume its entire two-second budget
+            # before the grandchild exists, hiding the behavior under test.
+            without_torch_mode=True,
         )
     except AssertionError as failure:
         assert "did not finish within 2 s" in str(failure), failure

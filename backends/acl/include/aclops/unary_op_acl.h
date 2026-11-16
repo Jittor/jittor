@@ -7,8 +7,12 @@ namespace jittor
     struct UnaryOpRunner : public BaseOpRunner
     {
         UnaryOpRunner();
+        void setupInputDesc() override;
+        void setupOutputDesc() override;
 
     protected:
+        bool allowsFlattenedElementwise() const override { return true; }
+        bool stridedHighRankCast() const;
         void executeOp(AclOpRegistry::const_iterator &it) override;
     };
 }

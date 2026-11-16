@@ -177,6 +177,7 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    slices = _drop_trailing_full_slices(self, slices)
     slices = _align_advanced_index(self, slices)
     self._check_inplace_autograd()
     # Jittor's indexed-assignment backward exposes one gradient row per
@@ -847,6 +848,27 @@ def _normalize_index_sequence(index):
     return index
 
 
+
+def _drop_trailing_full_slices(data, index):
+    """Canonicalize a tensor index without discarding rank validation."""
+    if not isinstance(index, tuple) or len(index) < 2:
+        return index
+    first, rest = index[0], index[1:]
+    if not all(isinstance(item, slice) and item.start is None
+               and item.stop is None and item.step is None for item in rest):
+        return index
+    if isinstance(first, int) and not isinstance(first, bool):
+        if 1 + len(rest) > data.ndim:
+            raise IndexError("too many indices for tensor of dimension %d" % data.ndim)
+        return index
+    if not isinstance(first, _NativeVar):
+        return index
+    consumed = first.ndim if _jittor_dtype_name(first.dtype) in ("bool", "uint8") else 1
+    if consumed + len(rest) > data.ndim:
+        raise IndexError("too many indices for tensor of dimension %d" % data.ndim)
+    return first
+
+
 def _align_advanced_index(data, index):
     """Move tensor indices beside the indexed tensor before native dispatch."""
     if isinstance(index, _NativeVar):
@@ -876,6 +898,7 @@ def _torch_getitem(self, slices):
         return index
 
     slices = normalize(slices)
+    slices = _drop_trailing_full_slices(self, slices)
     slices = _align_advanced_index(self, slices)
     if (isinstance(slices, _NativeVar) and slices.ndim == 0
             and _jittor_dtype_name(slices.dtype) == "bool"):

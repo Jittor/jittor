@@ -287,6 +287,27 @@ class TestExternalBackend(unittest.TestCase):
                     if key == module_name or key.startswith(module_name + "."):
                         sys.modules.pop(key, None)
 
+    def test_direct_source_compiler_does_not_shadow_python_packages(self):
+        name = self._name('direct-compiler')
+        module_name = '_jittor_backend_' + uuid.uuid4().hex
+        env_name = 'JITTOR_TEST_SOURCE_' + uuid.uuid4().hex.upper()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            Path(root, module_name + '.py').write_text(
+                "raise RuntimeError('upstream package must not shadow the facade')\n")
+            backend = ModuleType(module_name + '_compiled')
+            backend.execute = lambda: 7
+            resolver = external_backend.ExternalBackend(
+                external_backend.ExternalBackendSpec(
+                    name=name, public_functions=('execute',),
+                    source_envs=(env_name,), source_predicates=(lambda path: path == root,)),
+                special_source_loader=lambda path: backend)
+            before = tuple(sys.path)
+            with mock.patch.dict(os.environ, {env_name: os.fspath(root)}, clear=False):
+                self.assertIs(resolver.load(), backend)
+            self.assertEqual(tuple(sys.path), before)
+            self.assertIsNone(importlib.util.find_spec(module_name))
+
     def test_source_exception_restores_state_before_installed_fallback(self):
         backend_name = self._name("source-failure")
         module_name = "_jittor_backend_" + uuid.uuid4().hex

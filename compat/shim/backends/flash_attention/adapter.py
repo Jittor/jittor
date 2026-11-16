@@ -145,6 +145,48 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
             return result.to(dtype)
         return result[0].to(dtype), result[1], result[2]
 
+    def _opaque_capture_boundary():
+        from jittor._runtime import step_capture
+        if step_capture.active():
+            step_capture.refuse('this FlashAttention call requires its Python extension boundary')
+
+    def _graph_dense_forward(q, k, v, scale, causal, wl, wr):
+        address = int(packed_low_level._raw_dense_fwd_address())
+        b, m, h, d = map(int, q.shape)
+        n, hk = int(k.shape[1]), int(k.shape[2])
+        if (len(k.shape) != 4 or tuple(k.shape) != tuple(v.shape)
+                or int(k.shape[0]) != b or int(k.shape[3]) != d
+                or hk <= 0 or h % hk or not 0 < d <= 256 or d % 8):
+            raise RuntimeError('unsupported dense FlashAttention graph shape')
+        inputs = [value.contiguous() for value in (q, k, v)]
+        header = '''
+#include "stream_compat.h"
+using FlashDenseLaunch = void (*)(void*, void*, void*, void*, float*,
+    int, int, int, int, int, int, float, bool, int, int, bool, cudaStream_t);
+'''
+        source = (
+            'int device; CHECK(cudaGetDevice(&device) == cudaSuccess);\n'
+            'auto launch = reinterpret_cast<FlashDenseLaunch>(uintptr_t(%dULL));\n' % address
+            + 'launch(in0_p, in1_p, in2_p, out0_p, out1_p, '
+            + ', '.join(map(str, (b, m, n, h, hk, d)))
+            + ', %sf, %s, %d, %d, %s, jittor::cuda_compute_stream(device));\n' % (
+                repr(float(scale)), str(bool(causal)).lower(), wl, wr,
+                str(_facade._dtype_name(q) == 'bfloat16').lower())
+            + 'CHECK(cudaGetLastError() == cudaSuccess);')
+        out, _lse = jt.code([(b, m, h, d), (b, h, m)], [q.dtype, 'float32'], inputs,
+                            cuda_header=header, cuda_src=source)
+        return out
+
+    def _can_graph_dense(q, k, v):
+        from jittor._runtime.dispatch import dispatch_context
+        return (all(len(value.shape) == 4 and all(int(size) > 0 for size in value.shape)
+                    and isinstance(value, jt.Var) for value in (q, k, v))
+                and dispatch_context(q, k, v).backend == 'cuda'
+                and _facade._dtype_name(q) == _facade._dtype_name(k) == _facade._dtype_name(v)
+                and tuple(k.shape) == tuple(v.shape) and q.shape[0] == k.shape[0]
+                and q.shape[3] == k.shape[3] and 0 < int(q.shape[3]) <= 256
+                and int(q.shape[3]) % 8 == 0 and int(q.shape[2]) % int(k.shape[2]) == 0)
+
     class _DenseNativeAttention(jt.Function):
         def __init__(self, dropout, scale, causal, wl, wr, deterministic,
                      return_attn_probs):
@@ -163,6 +205,10 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
             finally:
                 _facade._restore_readonly_borrow(saved)
             out, softmax_lse, probability, rng_state = result
+            # The C++ extension returns a frozen factory allocation. This
+            # Function supplies its backward, so the output must be eligible
+            # before Function tapes it under the explicit-grad policy.
+            out.start_grad()
             self.saved = (q, k, v, out, softmax_lse, rng_state)
             if return_attn_probs:
                 return out, softmax_lse, probability
@@ -208,6 +254,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
             finally:
                 _facade._restore_readonly_borrow(saved)
             out, softmax_lse, probability, rng_state = result
+            out.start_grad()
             self.saved = (q, k, v, out, softmax_lse, rng_state)
             if return_probs:
                 return out, softmax_lse, probability
@@ -252,14 +299,27 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
         wl, wr = _facade._window_size_pair(kwargs.get("window_size", window_size))
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** -0.5
+        # A Function rebinds saved tapes to its original inputs after forward.
+        # Normalize before taping: the extension bridge exposes dense strides,
+        # while clone() may preserve a Torch input's noncontiguous layout.
+        q, k, v = (x.contiguous() if not x.is_contiguous() else x for x in (q, k, v))
         needs_grad = _grad_enabled(q, k, v)
         dropout = float(dropout_p or 0.0)
         _check_dropout_backward(q, dropout, needs_grad)
+        from jittor._runtime import step_capture
+        if step_capture.active():
+            if (not needs_grad and dropout == 0.0 and not return_attn_probs
+                    and packed_low_level is not None
+                    and hasattr(packed_low_level, '_raw_dense_fwd_address')
+                    and _can_graph_dense(q, k, v)):
+                return _graph_dense_forward(q, k, v, float(softmax_scale), causal, wl, wr)
+            # Opaque extension launches are not lazy graph nodes. A replay
+            # would otherwise reuse settled outputs unrelated to new inputs.
+            step_capture.refuse('this FlashAttention call requires its Python extension boundary')
         if (packed_low_level is not None and not needs_grad and dropout == 0.0
                 and not return_attn_probs):
             # Materialize logical views before exposing pointers to the native
             # bridge, so their physical storage matches the reported strides.
-            q, k, v = (x.contiguous() if not x.is_contiguous() else x for x in (q, k, v))
             return packed_low_level.fwd(q, k, v, float(softmax_scale), bool(causal), wl, wr)
         if needs_grad:
             return _DenseNativeAttention(
@@ -278,6 +338,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                   causal=False, window_size=(-1, -1), softcap=0.0,
                                   alibi_slopes=None, deterministic=False,
                                   return_attn_probs=False, *args, **kwargs):
+        _opaque_capture_boundary()
         if (packed_low_level is not None and _facade._native_supported_dtype(qkv)
                 and not _grad_enabled(qkv) and float(dropout_p or 0.0) == 0.0
                 and not return_attn_probs):
@@ -301,6 +362,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                  causal=False, window_size=(-1, -1), softcap=0.0,
                                  alibi_slopes=None, deterministic=False,
                                  return_attn_probs=False, *args, **kwargs):
+        _opaque_capture_boundary()
         if (packed_low_level is not None and _facade._native_supported_dtype(q)
                 and _facade._native_supported_dtype(kv) and not _grad_enabled(q, kv)
                 and float(dropout_p or 0.0) == 0.0 and not return_attn_probs):
@@ -328,6 +390,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                alibi_slopes=None, deterministic=False,
                                return_attn_probs=False, block_table=None,
                                *args, **kwargs):
+        _opaque_capture_boundary()
         _check_args(dropout_p, softcap, alibi_slopes, return_attn_probs)
         if not (_facade._native_supported_dtype(q) and _facade._native_supported_dtype(k) and _facade._native_supported_dtype(v)):
             target = _facade._float32_cast_target()
@@ -348,6 +411,9 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
             softmax_scale = q.shape[-1] ** -0.5
         seqused_k = kwargs.get("seqused_k", None)
         leftpad_k = kwargs.get("leftpad_k", None)
+        q, k, v = (x.contiguous() if not x.is_contiguous() else x for x in (q, k, v))
+        cu_seqlens_q = cu_seqlens_q.contiguous()
+        cu_seqlens_k = cu_seqlens_k.contiguous()
         needs_grad = _grad_enabled(q, k, v)
         dropout = float(dropout_p or 0.0)
         _check_dropout_backward(q, dropout, needs_grad)
@@ -389,6 +455,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                          softcap=0.0, alibi_slopes=None,
                                          deterministic=False,
                                          return_attn_probs=False, *args, **kwargs):
+        _opaque_capture_boundary()
         if (packed_low_level is not None and _facade._native_supported_dtype(qkv)
                 and not _grad_enabled(qkv) and float(dropout_p or 0.0) == 0.0
                 and not return_attn_probs):
@@ -447,6 +514,7 @@ def _make_official_backend(low_level: ModuleType, root: pathlib.Path,
                                         softcap=0.0, alibi_slopes=None,
                                         deterministic=False,
                                         return_attn_probs=False, *args, **kwargs):
+        _opaque_capture_boundary()
         if (packed_low_level is not None and _facade._native_supported_dtype(q)
                 and _facade._native_supported_dtype(kv) and not _grad_enabled(q, kv)
                 and float(dropout_p or 0.0) == 0.0 and not return_attn_probs):

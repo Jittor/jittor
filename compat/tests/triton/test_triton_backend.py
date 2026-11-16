@@ -287,6 +287,29 @@ class TestTritonBackend(unittest.TestCase):
             add_kernel[(triton.cdiv(n, BLOCK),)](x, y, out, n, BLOCK=BLOCK)
             self.ac(out.numpy(), xn + yn, atol=1e-6, msg=f"add n={n}")
 
+    def test_c_launcher_matches_the_python_launch(self):
+        from jittor.compat.triton import fastlaunch
+        rs = np.random.RandomState(7)
+        xn, yn = rs.randn(1000).astype("float32"), rs.randn(1000).astype("float32")
+        outputs = {}
+        with mock.patch.dict(os.environ, {"JITTOR_TRITON_GUARD_ENABLE": "0"}), \
+             mock.patch.object(fastlaunch, "_tried", False), \
+             mock.patch.object(fastlaunch, "_module", None):
+            with mock.patch.dict(os.environ, {"JITTOR_TRITON_FASTLAUNCH": "1"}):
+                launcher = fastlaunch.load()
+            self.assertIsNotNone(launcher, "C launcher must build for this CUDA test")
+            with mock.patch.object(launcher, "launch", wraps=launcher.launch) as launch:
+                for flag in ("1", "0"):
+                    before = launch.call_count
+                    with mock.patch.dict(os.environ, {"JITTOR_TRITON_FASTLAUNCH": flag}):
+                        x, y = jt.array(xn), jt.array(yn)
+                        out = jt.zeros(1000, dtype="float32")
+                        add_kernel[(triton.cdiv(1000, 256),)](x, y, out, 1000, BLOCK=256)
+                        outputs[flag] = np.asarray(out.numpy())
+                    self.assertEqual(launch.call_count - before, int(flag))
+        np.testing.assert_array_equal(outputs["1"], outputs["0"])
+        np.testing.assert_allclose(outputs["1"], xn + yn, atol=1e-6)
+
     def test_optional_pointers_preserve_branches_abi_and_cached_variants(self):
         from jittor.compat.triton import backend as bridge
         values = np.arange(97, dtype=np.float32) + 0.25
@@ -534,7 +557,10 @@ class TestOptionalPointerPacking(unittest.TestCase):
             stack.enter_context(mock.patch.object(bridge, "_COMPILE_CACHE", {}))
             stack.enter_context(mock.patch.object(bridge, "_is_var", return_value=False))
             stack.enter_context(mock.patch.object(jt, "sync_all"))
-            for name, result in (("_stats_on", False), ("_guard_enabled", False),
+            # This fixture inspects the ctypes argument array. The real C
+            # launcher is exercised separately by the CUDA parity test.
+            for name, result in (("_fast_launcher", None),
+                                 ("_stats_on", False), ("_guard_enabled", False),
                                  ("_fast_sync_enabled", True), ("_sync_before_launch_enabled", False),
                                  ("_sync_after_launch_enabled", False)):
                 stack.enter_context(mock.patch.object(bridge, name, return_value=result))

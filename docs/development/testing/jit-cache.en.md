@@ -38,6 +38,23 @@ kernels and 57 single-operator kernels. The same suite took 37:03 cold and 1:02 
 360 passed, 71 skipped and 948 subtests in both runs. These numbers illustrate attribution;
 **they are not a current-commit performance baseline or a universal warmup ratio**.
 
+## Incremental compilation during development
+
+Distinguish the host library from kernels generated on demand. Ordinary Python changes
+do not rebuild C++; a local `.cc` edit usually rebuilds its object and relinks the host
+library, rather than recompiling every kernel. Unary, binary, reduction, broadcast, and
+ternary operators keep host implementations separate from `.jit.cc` templates, preventing
+host line shifts from changing kernel source locations and causing unnecessary invalidation.
+Other operators can still use combined sources; see the
+[operator source contract](../runtime/jit-operator-source.en.md).
+
+Template, header, compiler-option, and generated-code changes still require dependency
+checks and rebuilding affected products. Changing the toolchain, backend, or source
+directory may select another cache tree; splitting templates does not eliminate cold
+builds or the cost of changing shared headers. Record the actual cache path and changes
+to `.o` and kernel `.so` files rather than interpreting build-scan progress as evidence
+that every file invoked the compiler.
+
 ## Cache identity: compiler probes must be locale-independent
 
 The `archXXXXXXXXXX` component comes from the instruction set expanded by

@@ -102,9 +102,23 @@ namespace jittor
         return;
     }
 
+    bool BaseOpRunner::flattenDenseElementwise() const
+    {
+        if (out_.empty() || out_[0]->shape.size() <= 8
+            || !allowsFlattenedElementwise()) return false;
+        const auto count = out_[0]->num;
+        for (auto* value : out_)
+            if (!value->is_contiguous() || value->num != count) return false;
+        for (auto* value : in_)
+            if (!value->is_contiguous() || (value->num != 1 && value->num != count))
+                return false;
+        return true;
+    }
+
     void BaseOpRunner::setupInputDesc()
     {
         auto input_num = in_.size();
+        const bool flattened = flattenDenseElementwise();
         inputShapes.resize(input_num);
         // CANN infers the result shape from the operands, so collapsing *every*
         // operand to one element would make it infer a one-element result and
@@ -134,6 +148,13 @@ namespace jittor
                 continue;
             }
             const auto &var_shape = v->shape;
+            if (flattened)
+            {
+                // Dense pointwise work (including scalar Expand in backward)
+                // has the same element order after removing logical axes.
+                shape.assign(1, v->num);
+                continue;
+            }
             shape.resize(var_shape.size());
             for (int j = 0; j < var_shape.size(); j++)
             {
@@ -150,7 +171,7 @@ namespace jittor
             // apply_storage_strides would put the stride-0 view back.
             const bool collapsed = inputShapes[idx].size() == 1 && inputShapes[idx][0] == 1
                                    && in_[idx]->num > 1;
-            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, collapsed ? nullptr : in_[idx]);
+            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, (collapsed || flattened) ? nullptr : in_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
     }
@@ -177,12 +198,18 @@ namespace jittor
     void BaseOpRunner::setupOutputDesc()
     {
         auto output_num = out_.size();
+        const bool flattened = flattenDenseElementwise();
 
         outputShapes.resize(output_num);
         for (size_t output_idx = 0; output_idx < output_num; output_idx++)
         {
             auto &shape = outputShapes[output_idx];
             const auto &var_shape = out_[output_idx]->shape;
+            if (flattened)
+            {
+                shape.assign(1, out_[output_idx]->num);
+                continue;
+            }
             shape.resize(var_shape.size());
             for (int j = 0; j < var_shape.size(); j++)
             {
@@ -194,7 +221,7 @@ namespace jittor
         for (size_t idx = 0; idx < output_num; idx++)
         {
             outputTensors[idx] = nullptr;
-            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
+            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, flattened ? nullptr : out_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }

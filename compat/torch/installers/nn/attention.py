@@ -6,6 +6,7 @@ from jittor.nn.backends import hooks as _backend_hooks
 from jittor.nn.functional.attention import (
     causal_mask_rewrite,
     scaled_dot_product_attention as _native_scaled_dot_product_attention,
+    _scaled_dot_product_attention as _native_attention_dispatch,
     LAST_FUSED_KERNEL as _NATIVE_LAST_FUSED,
 )
 from ....diagnostics import EXPECTED, swallowed, sdpa_flash_stats
@@ -73,7 +74,7 @@ def _sdpa_flash_float32_cast_target():
 
 def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                             dropout_p, is_causal, sf,
-                                            enable_gqa=False):
+                                            enable_gqa=False, *, allow_math_fallback=True):
     _sdpa_flash_backend_cache = get_install_context(jt).state["sdpa_backend_cache"]
     acl_attention = _backend_hooks.acl_scaled_dot_product_attention
     # The hook answers with whatever kernel the backend registered. On CUDA
@@ -127,6 +128,28 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     if q_shape[-1] != k_shape[-1] or q_shape[-1] != v_shape[-1]:
         _sdpa_flash_miss("head_dim_mismatch")
         return None
+    if is_causal and 0 < int(q_shape[-2]) != int(k_shape[-2]) > 0:
+        # Torch SDPA aligns causality at top left; the public FlashAttention
+        # API aligns rectangular matrices at bottom right. Trim keys that no
+        # query can use, or split off the fully visible query suffix. Both
+        # pieces still run the official kernel and retain their slice grads.
+        queries, keys = int(q_shape[-2]), int(k_shape[-2])
+        if queries < keys:
+            return _try_flash_scaled_dot_product_attention(
+                query, key[..., :queries, :], value[..., :queries, :],
+                None, dropout, True, sf, enable_gqa,
+                allow_math_fallback=allow_math_fallback)
+        prefix = _try_flash_scaled_dot_product_attention(
+            query[..., :keys, :], key, value, None, dropout, True, sf, enable_gqa,
+            allow_math_fallback=allow_math_fallback)
+        if prefix is None:
+            return None
+        suffix = _try_flash_scaled_dot_product_attention(
+            query[..., keys:, :], key, value, None, dropout, False, sf, enable_gqa,
+            allow_math_fallback=allow_math_fallback)
+        if suffix is None:
+            return None
+        return get_install_context(jt).target_namespace.cat((prefix, suffix), dim=-2)
     # For CLIP-style short self-attention, the two cuBLAS matmuls plus the
     # fused softmax are faster than materializing the three layout copies
     # required by the separate-QKV FlashAttention wrapper. Keep this
@@ -144,7 +167,7 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
         and _jittor_dtype_name(query.dtype) == _jittor_dtype_name(key.dtype) == _jittor_dtype_name(value.dtype)
         and _jittor_dtype_name(query.dtype) == "float16"
         and _sdpa_static_backend_cache_enabled())
-    if short_square_math:
+    if allow_math_fallback and short_square_math:
         _sdpa_flash_miss("short_square_math")
         return None
     template_dim = _sdpa_flash_template_dim(q_shape[-1])
@@ -180,7 +203,8 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
             and not _fa_jittor.required()):
         _sdpa_flash_miss("no_backend")
         return None
-    if training_requested and dropout == 0.0 and not _fa_jittor.required():
+    if (allow_math_fallback and training_requested and dropout == 0.0
+            and not _fa_jittor.required()):
         min_scores = _fa_jittor.training_min_scores()
         score_elements = query_heads * int(q_shape[-2]) * int(k_shape[-2])
         for size in q_shape[:-3]:
@@ -348,10 +372,50 @@ _flash_loader = [None]
 _dispatch_state = [_dispatch_module]
 
 
+def _requested_attention(query, key, value, mask, dropout, causal, scale, gqa, precision):
+    """Honor explicit backend policies before consulting cached automatic routes."""
+    cuda = get_install_context(jt).target_namespace.backends.cuda
+    flags = tuple(getattr(cuda, name+'_sdp_enabled')() for name in
+                  ('flash', 'mem_efficient', 'math', 'cudnn'))
+    if flags == (True, True, True, True):
+        return None
+    flash, efficient, math, cudnn = flags
+    sf = 1./_math.sqrt(int(query.shape[-1])) if scale is None else scale
+    if flash:
+        output = _try_flash_scaled_dot_product_attention(
+            query, key, value, mask, dropout, causal, sf, enable_gqa=gqa,
+            allow_math_fallback=math)
+        if output is not None:
+            return output
+    for enabled, operation in ((efficient, 'nn.memory_efficient_attention'),
+                               (cudnn, 'nn.cudnn_attention')):
+        if enabled:
+            output = _dispatch_module.try_dispatch(
+                operation, query, key, value, attn_mask=mask, dropout_p=dropout,
+                is_causal=causal, scale=scale, enable_gqa=gqa, **precision)
+            if output is not None:
+                return output
+    if math:
+        return _native_attention_dispatch(
+            query, key, value, mask, dropout, causal, scale, gqa,
+            use_fused=False, **precision)
+    raise RuntimeError('No available kernel for the requested SDPA backends')
+
+
 def scaled_dot_product_attention(query, key, value, attn_mask=None,
                                  dropout_p=0.0, is_causal=False,
                                  scale=None, enable_gqa=False, **kw):
     del kw
+    from ...amp import autocast_dtype
+    target = autocast_dtype('cuda')
+    if target is not None and _dispatch_module.dispatch_context(query, key, value).backend != 'cuda':
+        target = None
+    if target is not None:
+        eligible = ('float32', 'float16', 'bfloat16')
+        query, key, value = [tensor.to(target) if _jittor_dtype_name(tensor.dtype) in eligible
+                             else tensor for tensor in (query, key, value)]
+        if attn_mask is not None and _jittor_dtype_name(attn_mask.dtype) in eligible:
+            attn_mask = attn_mask.to(target)
     if causal_mask_rewrite(query, key, attn_mask, is_causal):
         # The mask states exactly what `is_causal` states, and every backend
         # runs the latter more cheaply: cuDNN one engine call instead of a
@@ -367,6 +431,10 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         {"allow_reduced_precision": True}
         if _jittor_dtype_name(query.dtype) == "bfloat16" else {}
     )
+    selected = _requested_attention(query, key, value, attn_mask, dropout_p,
+                                     is_causal, scale, enable_gqa, precision_options)
+    if selected is not None:
+        return selected
     route_key = _route_key(query, key, value, attn_mask, dropout_p, is_causal,
                            scale, enable_gqa)
     if route_key is not None:

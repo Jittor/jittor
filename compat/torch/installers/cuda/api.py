@@ -1123,9 +1123,19 @@ class _CudnnBackendModule(_types.ModuleType):
 
 
 class _SDPKernel:
-    def __init__(self, *a, **k): pass
-    def __enter__(self): return self
-    def __exit__(self, *a): return False
+    def __init__(self, enable_flash=True, enable_math=True,
+                 enable_mem_efficient=True, enable_cudnn=True):
+        self.requested = dict(flash=bool(enable_flash), math=bool(enable_math),
+                              mem_efficient=bool(enable_mem_efficient), cudnn=bool(enable_cudnn))
+
+    def __enter__(self):
+        self.previous = _SDP_BACKEND_FLAGS.copy()
+        _SDP_BACKEND_FLAGS.update(self.requested)
+        return self
+
+    def __exit__(self, *args):
+        _SDP_BACKEND_FLAGS.update(self.previous)
+        return False
 
 
 class _MatmulBackend:
@@ -1228,6 +1238,9 @@ def _api_cuda_manual_seed(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
+    if _uses_acl_rng():
+        jt.core.rng_manual_seed("acl", seed, _rng_device_index(None))
+        return
     _curand().curand_restore_state(_rng_device_index(None), seed, 0)
 
 
@@ -1239,6 +1252,9 @@ def _api_cuda_manual_seed_all(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
+    if _uses_acl_rng():
+        jt.core.rng_manual_seed_all("acl", seed)
+        return
     backend = _curand()
     for index in range(count):
         backend.curand_restore_state(index, seed, 0)
@@ -1409,9 +1425,31 @@ def _curand(required=True):
     return backend
 
 
+def _uses_acl_rng():
+    return bool(getattr(jt.compiler, "has_acl", False))
+
+
+def _acl_rng_state_pack(payload):
+    import numpy as np
+    owner = get_install_context(jt).target_namespace
+    return owner.tensor(np.frombuffer(payload.encode("ascii"), dtype=np.uint8).copy(),
+                        dtype=owner.uint8, device="cpu")
+
+
+def _acl_rng_state_unpack(state):
+    from jittor._core.dtypes import dtype_name
+    if (not isinstance(state, jt.Var) or dtype_name(state.dtype) != "uint8"
+            or len(state.shape) != 1 or state.device.type != "cpu"):
+        raise TypeError("ACL RNG state must be a one-dimensional CPU ByteTensor")
+    try:
+        return state.numpy().tobytes().decode("ascii")
+    except UnicodeDecodeError as error:
+        raise ValueError("not a native ACL generator snapshot") from error
+
+
 def cuda_rng_state_is_supported():
     """Whether this build can save and restore the CUDA RNG position."""
-    return _curand(required=False) is not None
+    return _uses_acl_rng() or _curand(required=False) is not None
 
 
 def _rng_device_index(device):
@@ -1448,6 +1486,8 @@ def _api_cuda_get_rng_state(device=None, *a, **k):
     # Everything queued has to have happened, or the offset describes a
     # position the device has not reached: the saved state would then be ahead
     # of the data the checkpoint was taken with.
+    if _uses_acl_rng():
+        return _acl_rng_state_pack(jt.core.rng_state("acl", _rng_device_index(device)))
     jt.sync_all(True)
     backend = _curand()
     index = _rng_device_index(device)
@@ -1459,6 +1499,8 @@ def _api_cuda_get_rng_state_all(*a, **k):
     count = device_count()
     if not count:
         return []
+    if _uses_acl_rng():
+        return [_acl_rng_state_pack(payload) for payload in jt.core.rng_states("acl")]
     jt.sync_all(True)
     backend = _curand()
     return [_rng_state_pack(backend.curand_generator_seed(i), backend.curand_generator_offset(i))
@@ -1466,6 +1508,9 @@ def _api_cuda_get_rng_state_all(*a, **k):
 
 
 def _api_cuda_set_rng_state(state, device=None, *a, **k):
+    if _uses_acl_rng():
+        jt.core.set_rng_state("acl", _acl_rng_state_unpack(state), _rng_device_index(device))
+        return
     seed, offset = _rng_state_unpack(state)
     # Parsed before anything is touched, so a malformed state leaves the
     # generator where it was rather than half-restored.
@@ -1474,6 +1519,11 @@ def _api_cuda_set_rng_state(state, device=None, *a, **k):
 
 
 def _api_cuda_set_rng_state_all(states, *a, **k):
+    if _uses_acl_rng():
+        payloads = [_acl_rng_state_unpack(state) for state in states]
+        if payloads:
+            jt.core.set_rng_states("acl", payloads)
+        return
     parsed = [_rng_state_unpack(state) for state in states]
     if not parsed:
         return
@@ -1484,6 +1534,8 @@ def _api_cuda_set_rng_state_all(states, *a, **k):
 
 
 def _api_cuda_initial_seed(*a, **k):
+    if _uses_acl_rng():
+        return int(jt.core.rng_initial_seed("acl", _rng_device_index(None)))
     return int(_curand().curand_generator_seed(_rng_device_index(None)))
 
 
@@ -1576,21 +1628,19 @@ def _api_cudnn_version():
     return None
 
 
-def _api_cuda_backend_sdp_kernel(*a, **k):
-    return _SDPKernel()
+def _api_cuda_backend_sdp_kernel(enable_flash=True, enable_math=True,
+                                  enable_mem_efficient=True, enable_cudnn=True):
+    return _SDPKernel(enable_flash, enable_math, enable_mem_efficient, enable_cudnn)
 
 
-#: torch's four SDPA backend switches. Attention here picks its own kernel, so
-#: these only record the requested state -- but torch pairs every setter with a
-#: getter, and callers read it back (MiniMax-H3's encoder saves
-#: `cudnn_sdp_enabled()`, forces cuDNN SDPA on, and restores the saved value).
-#: There is no cuDNN fused SDPA here, so `cudnn_sdp_enabled()` defaults to False;
-#: the other three match torch's defaults.
+#: The attention frontend honors explicit policies before its automatic route
+#: cache. Enabling an engine does not establish that its source, dtype and
+#: device requirements are available. Defaults allow all engines, as in Torch.
 _SDP_BACKEND_FLAGS = {
     "flash": True,
     "mem_efficient": True,
     "math": True,
-    "cudnn": False,
+    "cudnn": True,
 }
 
 
