@@ -108,6 +108,10 @@ namespace jittor
         // inputs, so each runner opts in; matmul and friends read the expanded
         // shape as part of their contract and must not.
         virtual bool collapsesScalarInputs() const { return false; }
+        // Only pointwise runners may erase logical axes. The shared check
+        // additionally requires dense full-size or single-element operands.
+        virtual bool allowsFlattenedElementwise() const { return false; }
+        bool flattenDenseElementwise() const;
 
         virtual void executeOp(AclOpRegistry::const_iterator &it) = 0;
         void cleanupAttr();

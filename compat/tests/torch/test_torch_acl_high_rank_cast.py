@@ -43,3 +43,13 @@ def test_acl_high_rank_cast_preserves_input_gradient():
         gradient.sync()
         assert gradient.location() == 'device'
         np.testing.assert_array_equal(gradient.cpu().numpy(), np.ones((2,) * 9))
+
+
+def test_acl_dense_high_rank_pointwise_with_scalar_broadcast():
+    with jt.flag_scope(use_acl=1, use_cuda=1, backend_fallback='error'), forbid_backend_fallbacks():
+        data = (np.arange(512, dtype=np.float32) % 64).reshape((2,) * 9)
+        source = torch.tensor(data, device='cuda')
+        actual = source * torch.full_like(source, 2.) + 3.
+        actual.sync()
+        assert actual.location() == 'device'
+        np.testing.assert_array_equal(actual.cpu().numpy(), data * 2 + 3)

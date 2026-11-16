@@ -9,6 +9,7 @@ namespace jittor
         BinaryOpRunner();
 
     protected:
+        bool allowsFlattenedElementwise() const override { return true; }
         // Every CANN binary broadcasts its operands, so a one-element operand
         // may be handed over as a one-element tensor.
         bool collapsesScalarInputs() const override { return true; }
