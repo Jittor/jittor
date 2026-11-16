@@ -854,10 +854,14 @@ def _drop_trailing_full_slices(data, index):
     if not isinstance(index, tuple) or len(index) < 2:
         return index
     first, rest = index[0], index[1:]
-    if not isinstance(first, _NativeVar):
-        return index
     if not all(isinstance(item, slice) and item.start is None
                and item.stop is None and item.step is None for item in rest):
+        return index
+    if isinstance(first, int) and not isinstance(first, bool):
+        if 1 + len(rest) > data.ndim:
+            raise IndexError("too many indices for tensor of dimension %d" % data.ndim)
+        return index
+    if not isinstance(first, _NativeVar):
         return index
     consumed = first.ndim if _jittor_dtype_name(first.dtype) in ("bool", "uint8") else 1
     if consumed + len(rest) > data.ndim:
