@@ -178,8 +178,16 @@ class TestLtLinearCuda(unittest.TestCase):
     def test_short_captured_training_matches_float64_products(self):
         # Short sequence batches have fewer than 512 rows but still large
         # GEMMs. Capture amortizes the custom Function's eager host cost.
-        xn, wn, bn = self._arrays((96, 1024), 1024, 1024)
-        dn = self.rs.randn(96, 1024).astype('float32') * .1
+        self._check_short_captured_training(96, 1024, 1024)
+
+    def test_short_sequence_captured_training_matches_float64_products(self):
+        for rows, cin, cout in [(39, 1024, 4096), (57, 4096, 1024)]:
+            with self.subTest(rows=rows, cin=cin, cout=cout):
+                self._check_short_captured_training(rows, cin, cout)
+
+    def _check_short_captured_training(self, rows, cin, cout):
+        xn, wn, bn = self._arrays((rows, cin), cin, cout)
+        dn = self.rs.randn(rows, cout).astype('float32') * .1
         x, w, b, dout = (jt.array(a) for a in (xn, wn, bn, dn))
         self.assertIsNone(_lt.lt_linear_train_cuda(x, w, b))
         providers = []

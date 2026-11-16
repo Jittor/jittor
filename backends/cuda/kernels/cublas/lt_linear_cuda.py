@@ -869,10 +869,10 @@ def _supports_training(x, weight, bias, *, transposed_weight=False):
     product = rows * cin * cout
     if rows >= _MIN_ROWS and product >= minimum_product:
         return True
-    if dtype == "float32" and rows >= 64 and product >= (1 << 26):
+    if dtype == "float32" and rows >= 32 and product >= (1 << 26):
         # A whole-step capture pays Function/tape construction only once.
-        # Short sequence batches still have substantial GEMMs: 180 rows by
-        # 1024 by 4096, for example. A 512-row floor left those on the
+        # Short sequence batches still have substantial GEMMs: 39 rows by
+        # 1024 by 4096, for example. A 64-row floor left those on the
         # heuristic-only path even though replays amortize the host cost.
         # Keep the eager and low-precision floors above independent.
         from jittor._runtime import step_capture
