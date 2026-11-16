@@ -40,5 +40,6 @@ def test_acl_high_rank_cast_preserves_input_gradient():
                               device='cuda', requires_grad=True)
         result = source.to(torch.float16)
         gradient, = torch.autograd.grad(result, source, torch.ones_like(result))
+        gradient.sync()
         assert gradient.location() == 'device'
         np.testing.assert_array_equal(gradient.cpu().numpy(), np.ones((2,) * 9))

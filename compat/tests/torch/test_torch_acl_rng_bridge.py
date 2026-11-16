@@ -44,6 +44,7 @@ def test_acl_rng_state_and_nested_fork_restore_real_device(seed):
         torch.rand(5, device='cuda').sync()
         before = torch.cuda.get_rng_state()
         expected = torch.rand(31, device='cuda')
+        expected.sync()
         assert expected.location() == 'device'
         expected = expected.cpu().numpy().copy()
         torch.cuda.set_rng_state(before)
@@ -54,6 +55,7 @@ def test_acl_rng_state_and_nested_fork_restore_real_device(seed):
                     torch.rand(7, device='cuda').sync()
                     raise ValueError('inside')
         actual = torch.rand(31, device='cuda')
+        actual.sync()
         assert actual.location() == 'device'
         np.testing.assert_array_equal(actual.cpu().numpy(), expected)
         np.testing.assert_array_equal(torch.get_rng_state().numpy(), cpu)
