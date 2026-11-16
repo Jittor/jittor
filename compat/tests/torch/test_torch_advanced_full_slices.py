@@ -50,3 +50,26 @@ def test_trailing_slice_mask_assignment_keeps_rhs_gradient(device):
     hidden[mask, :] = rhs
     hidden.sum().backward()
     np.testing.assert_array_equal(rhs.grad.cpu().numpy(), np.full(4, 3.))
+
+
+@pytest.mark.parametrize('empty', [False, True])
+def test_acl_native_prefix_mask_assignment_and_gradient(empty):
+    import jittor as jt
+    if not jt.compiler.has_acl:
+        pytest.skip('requires ACL')
+    data = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    mask = np.zeros((2, 3), dtype=bool) if empty else np.array(
+        [[True, False, True], [False, True, False]])
+    source = torch.tensor(data, device='cuda', requires_grad=True)
+    rhs = torch.tensor([10., 20., 30., 40.], device='cuda', requires_grad=True)
+    # Exercise the native backend Function directly, without the compat
+    # differentiable mask shortcut used by __setitem__.
+    out = source.setitem(torch.tensor(mask, device='cuda'), rhs)
+    out.sum().backward()
+    expected = data.copy()
+    expected[mask] = np.array([10., 20., 30., 40.])
+    np.testing.assert_array_equal(out.cpu().numpy(), expected)
+    np.testing.assert_array_equal(rhs.grad.cpu().numpy(), np.full(4, mask.sum()))
+    expected_grad = np.ones_like(data)
+    expected_grad[mask] = 0
+    np.testing.assert_array_equal(source.grad.cpu().numpy(), expected_grad)
