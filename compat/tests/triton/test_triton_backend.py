@@ -557,7 +557,10 @@ class TestOptionalPointerPacking(unittest.TestCase):
             stack.enter_context(mock.patch.object(bridge, "_COMPILE_CACHE", {}))
             stack.enter_context(mock.patch.object(bridge, "_is_var", return_value=False))
             stack.enter_context(mock.patch.object(jt, "sync_all"))
-            for name, result in (("_stats_on", False), ("_guard_enabled", False),
+            # This fixture inspects the ctypes argument array. The real C
+            # launcher is exercised separately by the CUDA parity test.
+            for name, result in (("_fast_launcher", None),
+                                 ("_stats_on", False), ("_guard_enabled", False),
                                  ("_fast_sync_enabled", True), ("_sync_before_launch_enabled", False),
                                  ("_sync_after_launch_enabled", False)):
                 stack.enter_context(mock.patch.object(bridge, name, return_value=result))
