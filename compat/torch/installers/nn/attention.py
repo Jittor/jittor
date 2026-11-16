@@ -74,7 +74,7 @@ def _sdpa_flash_float32_cast_target():
 
 def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                             dropout_p, is_causal, sf,
-                                            enable_gqa=False):
+                                            enable_gqa=False, *, allow_math_fallback=True):
     _sdpa_flash_backend_cache = get_install_context(jt).state["sdpa_backend_cache"]
     acl_attention = _backend_hooks.acl_scaled_dot_product_attention
     # The hook answers with whatever kernel the backend registered. On CUDA
@@ -137,13 +137,16 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
         if queries < keys:
             return _try_flash_scaled_dot_product_attention(
                 query, key[..., :queries, :], value[..., :queries, :],
-                None, dropout, True, sf, enable_gqa)
+                None, dropout, True, sf, enable_gqa,
+                allow_math_fallback=allow_math_fallback)
         prefix = _try_flash_scaled_dot_product_attention(
-            query[..., :keys, :], key, value, None, dropout, True, sf, enable_gqa)
+            query[..., :keys, :], key, value, None, dropout, True, sf, enable_gqa,
+            allow_math_fallback=allow_math_fallback)
         if prefix is None:
             return None
         suffix = _try_flash_scaled_dot_product_attention(
-            query[..., keys:, :], key, value, None, dropout, False, sf, enable_gqa)
+            query[..., keys:, :], key, value, None, dropout, False, sf, enable_gqa,
+            allow_math_fallback=allow_math_fallback)
         if suffix is None:
             return None
         return get_install_context(jt).target_namespace.cat((prefix, suffix), dim=-2)
@@ -164,7 +167,7 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
         and _jittor_dtype_name(query.dtype) == _jittor_dtype_name(key.dtype) == _jittor_dtype_name(value.dtype)
         and _jittor_dtype_name(query.dtype) == "float16"
         and _sdpa_static_backend_cache_enabled())
-    if short_square_math:
+    if allow_math_fallback and short_square_math:
         _sdpa_flash_miss("short_square_math")
         return None
     template_dim = _sdpa_flash_template_dim(q_shape[-1])
@@ -200,7 +203,8 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
             and not _fa_jittor.required()):
         _sdpa_flash_miss("no_backend")
         return None
-    if training_requested and dropout == 0.0 and not _fa_jittor.required():
+    if (allow_math_fallback and training_requested and dropout == 0.0
+            and not _fa_jittor.required()):
         min_scores = _fa_jittor.training_min_scores()
         score_elements = query_heads * int(q_shape[-2]) * int(k_shape[-2])
         for size in q_shape[:-3]:
@@ -379,7 +383,8 @@ def _requested_attention(query, key, value, mask, dropout, causal, scale, gqa, p
     sf = 1./_math.sqrt(int(query.shape[-1])) if scale is None else scale
     if flash:
         output = _try_flash_scaled_dot_product_attention(
-            query, key, value, mask, dropout, causal, sf, enable_gqa=gqa)
+            query, key, value, mask, dropout, causal, sf, enable_gqa=gqa,
+            allow_math_fallback=math)
         if output is not None:
             return output
     for enabled, operation in ((efficient, 'nn.memory_efficient_attention'),

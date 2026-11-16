@@ -105,3 +105,43 @@ def test_cuda_autocast_converts_float_bias_with_attention_inputs():
         for value in values:
             assert value.grad.dtype == torch.float32 and value.grad.device.type == 'cuda'
             assert np.isfinite(value.grad.detach().cpu().numpy()).all()
+
+
+@pytest.mark.parametrize('query_length,key_length', [(17, 17), (17, 29), (29, 17)])
+def test_flash_only_short_training_does_not_choose_disabled_math(monkeypatch, query_length, key_length):
+    if not capability.check_accelerator('cuda', backend=jt).enabled:
+        pytest.skip('CUDA is unavailable')
+    if not os.environ.get('JITTOR_FLASH_ATTN_JITTOR_SRC'):
+        pytest.skip('requires official FlashAttention CUDA backend')
+    from jittor.compat.diagnostics import sdpa_flash_stats
+
+    monkeypatch.setenv('JITTOR_FLASH_ATTN_JITTOR_REQUIRED', '0')
+    monkeypatch.setenv('JITTOR_FLASH_ATTN_TRAINING_MIN_SCORES', str(1 << 24))
+    rng = np.random.default_rng(714)
+    shapes = [(1, 2, query_length, 64), (1, 2, key_length, 64),
+              (1, 2, key_length, 64)]
+    values = [torch.tensor(rng.normal(0, .2, shape).astype('float32'), device='cuda',
+                           dtype=torch.bfloat16, requires_grad=True) for shape in shapes]
+    q, k, v = [x.detach().float().cpu().numpy().astype('float64') for x in values]
+    dy = torch.tensor(rng.normal(size=shapes[0]).astype('float32'), device='cuda',
+                      dtype=torch.bfloat16)
+    cotangent = dy.float().cpu().numpy().astype('float64')
+    scores = q @ k.swapaxes(-1, -2) * .125
+    scores[..., np.triu(np.ones((query_length, key_length), bool), 1)] = -np.inf
+    p = np.exp(scores - scores.max(-1, keepdims=True))
+    p /= p.sum(-1, keepdims=True)
+    dp = cotangent @ v.swapaxes(-1, -2)
+    ds = p * (dp - (p * dp).sum(-1, keepdims=True))
+    expected = [p @ v, ds @ k * .125, ds.swapaxes(-1, -2) @ q * .125,
+                p.swapaxes(-1, -2) @ cotangent]
+    hits = sdpa_flash_stats(jt)['hits']
+    fallback = jt.core.backend_fallback_count()
+    with sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+        result = torch.nn.functional.scaled_dot_product_attention(*values, is_causal=True)
+        (result.float() * dy.float()).sum().backward()
+    assert sdpa_flash_stats(jt)['hits'] > hits
+    assert jt.core.backend_fallback_count() == fallback
+    for actual, wanted in zip([result] + [x.grad for x in values], expected):
+        assert actual.device.type == 'cuda'
+        np.testing.assert_allclose(actual.detach().float().cpu().numpy(), wanted,
+                                   rtol=.04, atol=max(1e-7, np.abs(wanted).max()*.004))
