@@ -342,7 +342,7 @@ def _repeated_heads(tensor):
 LAST_FUSED_KERNEL = [None]
 
 
-def scaled_dot_product_attention(
+def _scaled_dot_product_attention(
     query,
     key,
     value,
@@ -353,6 +353,7 @@ def scaled_dot_product_attention(
     enable_gqa=False,
     *,
     allow_reduced_precision=False,
+    use_fused=True,
 ):
     """Compute scaled dot-product attention with Torch-compatible masks.
 
@@ -380,7 +381,7 @@ def scaled_dot_product_attention(
         and _jittor_dtype_name(query.dtype) == "bfloat16"
         else {}
     )
-    if not enable_gqa and len(query.shape) == 4:
+    if use_fused and not enable_gqa and len(query.shape) == 4:
         repeated_key, repeated_value = _repeated_heads(key), _repeated_heads(value)
         if (
             repeated_key is not None
@@ -413,7 +414,7 @@ def scaled_dot_product_attention(
             is_causal=is_causal,
             scale=scale,
             **precision_options,
-        )
+        ) if use_fused else None
         if fused is not None:
             return fused
         key = _expand_heads(query, key, "key")
@@ -448,7 +449,7 @@ def scaled_dot_product_attention(
         dropout_p=probability,
         is_causal=is_causal,
         scale=scale,
-    )
+    ) if use_fused else None
     if fast is not None:
         return fast
     # A fused kernel never writes the [..., Lq, Lk] scores to memory; see
@@ -464,7 +465,7 @@ def scaled_dot_product_attention(
         is_causal=is_causal,
         scale=scale,
         **precision_options,
-    )
+    ) if use_fused else None
     fused = (
         None
         if fused_kernel is None
@@ -515,6 +516,18 @@ def scaled_dot_product_attention(
             )
         )
     return jt.concat(outputs, dim=-2)
+
+
+def scaled_dot_product_attention(query, key, value, attn_mask=None, dropout_p=0.0,
+                                 is_causal=False, scale=None, enable_gqa=False, *,
+                                 allow_reduced_precision=False):
+    """Compute scaled dot-product attention with backend fusion when available."""
+    return _scaled_dot_product_attention(
+        query, key, value, attn_mask, dropout_p, is_causal, scale, enable_gqa,
+        allow_reduced_precision=allow_reduced_precision)
+
+
+scaled_dot_product_attention.__doc__ = _scaled_dot_product_attention.__doc__
 
 
 #: Score bytes, counted at 4 per element, above which attention without a

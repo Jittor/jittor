@@ -8,6 +8,7 @@ include shim/cpp_extension/include/ATen/ATen.h
 include shim/cpp_extension/include/ATen/cuda/CUDAContext.h
 include shim/cpp_extension/include/ATen/cuda/CUDAGeneratorImpl.h
 include shim/cpp_extension/include/ATen/cuda/CUDAUtils.h
+include shim/cpp_extension/include/ATen/cuda/PhiloxUtils.cuh
 include shim/cpp_extension/include/ATen/cuda/detail/UnpackRaw.cuh
 include shim/cpp_extension/include/c10/cuda/CUDAException.h
 include shim/cpp_extension/include/c10/cuda/CUDAGuard.h

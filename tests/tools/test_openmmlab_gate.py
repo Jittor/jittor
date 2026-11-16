@@ -230,7 +230,11 @@ class OpenMMLabGateTests(unittest.TestCase):
         path = ROOT / "compat/tests/torch/test_ecosystem_openmmlab.py"
         spec = importlib.util.spec_from_file_location("openmmlab_admission_probe", path)
         module = importlib.util.module_from_spec(spec)
-        with mock.patch.dict(sys.modules, {"_ecosystem_harness": fake}):
+        training = types.ModuleType("_ecosystem_openmmlab_harness")
+        training.compare_training = mock.Mock(
+            side_effect=AssertionError("training must not start before admission"))
+        with mock.patch.dict(sys.modules, {"_ecosystem_harness": fake,
+                                           "_ecosystem_openmmlab_harness": training}):
             spec.loader.exec_module(module)
         gate = module.EcosystemOpenMMLab()
         with self.assertRaisesRegex(AssertionError, "independent real Torch"):
