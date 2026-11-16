@@ -1167,11 +1167,8 @@ def _current_device(rt):
 
 def _fast_launcher():
     """The optional C launcher, or None when it is disabled or unbuildable."""
-    try:
-        from .fastlaunch import load as _load
-        return _load()
-    except Exception:
-        return None
+    from .fastlaunch import load as _load
+    return _load()
 
 
 def _scalar_bits(sig, v):

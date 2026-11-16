@@ -292,22 +292,23 @@ class TestTritonBackend(unittest.TestCase):
         rs = np.random.RandomState(7)
         xn, yn = rs.randn(1000).astype("float32"), rs.randn(1000).astype("float32")
         outputs = {}
-        for flag in ("1", "0"):
-            fastlaunch._tried = False
-            fastlaunch._module = None
-            with mock.patch.dict(os.environ,
-                                 {"JITTOR_TRITON_FASTLAUNCH": flag}):
-                if flag == "1" and fastlaunch.load() is None:
-                    self.skipTest("the C launcher could not be built here")
-                x, y = jt.array(xn), jt.array(yn)
-                out = jt.zeros(1000, dtype="float32")
-                add_kernel[(triton.cdiv(1000, 256),)](x, y, out, 1000,
-                                                      BLOCK=256)
-                outputs[flag] = np.asarray(out.numpy())
-        fastlaunch._tried = False
-        fastlaunch._module = None
-        self.ac(outputs["1"], outputs["0"], atol=0,
-                msg="C launcher against the ctypes launch")
+        with mock.patch.dict(os.environ, {"JITTOR_TRITON_GUARD_ENABLE": "0"}), \
+             mock.patch.object(fastlaunch, "_tried", False), \
+             mock.patch.object(fastlaunch, "_module", None):
+            with mock.patch.dict(os.environ, {"JITTOR_TRITON_FASTLAUNCH": "1"}):
+                launcher = fastlaunch.load()
+            self.assertIsNotNone(launcher, "C launcher must build for this CUDA test")
+            with mock.patch.object(launcher, "launch", wraps=launcher.launch) as launch:
+                for flag in ("1", "0"):
+                    before = launch.call_count
+                    with mock.patch.dict(os.environ, {"JITTOR_TRITON_FASTLAUNCH": flag}):
+                        x, y = jt.array(xn), jt.array(yn)
+                        out = jt.zeros(1000, dtype="float32")
+                        add_kernel[(triton.cdiv(1000, 256),)](x, y, out, 1000, BLOCK=256)
+                        outputs[flag] = np.asarray(out.numpy())
+                    self.assertEqual(launch.call_count - before, int(flag))
+        np.testing.assert_array_equal(outputs["1"], outputs["0"])
+        np.testing.assert_allclose(outputs["1"], xn + yn, atol=1e-6)
 
     def test_optional_pointers_preserve_branches_abi_and_cached_variants(self):
         from jittor.compat.triton import backend as bridge

@@ -1,21 +1,21 @@
-"""Optional C launcher for the Triton bridge's kernel launches.
+"""Compile the optional CUDA launcher with an ABI-specific cache identity.
 
-The Python launch path builds a ``ctypes`` parameter array (one cast per
-argument) before every launch.  This module compiles a tiny extension once
-into the Jittor cache and hands the packed slots to ``cuLaunchKernel`` in
-one call.  ``JITTOR_TRITON_FASTLAUNCH=0`` or any build/import failure falls
-back to the ctypes path, so the bridge keeps working without a compiler.
+An unavailable compiler or Python development headers leaves the ctypes path
+usable with a diagnostic. Unexpected implementation errors remain visible.
 """
 
 import hashlib
 import importlib.util
+import json
 import os
+import shlex
 import subprocess
 import sys
 import sysconfig
+import tempfile
+import warnings
 
-_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "fastlaunch.c")
+_SOURCE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fastlaunch.c")
 _module = None
 _tried = False
 
@@ -27,47 +27,51 @@ def _cache_dir():
 
 
 def _build():
-    """Compile the extension into the cache; returns its path or None."""
-    try:
-        with open(_SOURCE, "rb") as handle:
-            digest = hashlib.sha1(handle.read()).hexdigest()[:12]
-        # An extension module's file name has to match its PyInit_ symbol,
-        # so each build gets its own directory named by content.
-        out_dir = os.path.join(_cache_dir(), digest)
-        target = os.path.join(out_dir, "_fastlaunch.so")
-        if os.path.exists(target):
-            return target
-        os.makedirs(out_dir, exist_ok=True)
-        include = sysconfig.get_paths().get("include")
-        compiler = os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc"
-        compiler = compiler.split()[0]
-        tmp = target + ".%d.tmp" % os.getpid()
-        subprocess.run([compiler, "-O2", "-shared", "-fPIC",
-                        "-I" + include, _SOURCE, "-o", tmp, "-ldl"],
-                       check=True, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=120)
-        os.replace(tmp, target)
+    """Compile for this Python ABI, preserving compiler wrappers and flags."""
+    include = sysconfig.get_paths()["include"]
+    compiler = shlex.split(os.environ.get("CC") or sysconfig.get_config_var("CC") or "cc")
+    suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
+    recipe = [compiler, include, suffix, sys.version, sysconfig.get_platform()]
+    with open(_SOURCE, "rb") as handle:
+        digest = hashlib.sha256(handle.read() + json.dumps(recipe).encode()).hexdigest()[:20]
+    out_dir = os.path.join(_cache_dir(), digest)
+    target = os.path.join(out_dir, "_fastlaunch" + suffix)
+    if os.path.exists(target):
         return target
-    except Exception:
-        return None
+    os.makedirs(out_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix="build-", suffix=".so", dir=out_dir)
+    os.close(fd)
+    try:
+        subprocess.run(compiler + ["-O2", "-shared", "-fPIC", "-I" + include,
+                                   _SOURCE, "-o", tmp, "-ldl"],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                       text=True, timeout=120)
+        os.replace(tmp, target)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return target
 
 
 def load():
-    """The compiled module, or None when it is disabled or not buildable."""
+    """Return the launcher, or diagnose a known optional-toolchain failure."""
     global _module, _tried
-    if _tried:
-        return _module
-    _tried = True
+    # Honor a per-call opt-out even after the module has been loaded.
     if os.environ.get("JITTOR_TRITON_FASTLAUNCH", "1") == "0":
         return None
-    path = _build()
-    if path is None:
-        return None
+    if _tried:
+        return _module
     try:
+        path = _build()
         spec = importlib.util.spec_from_file_location("_fastlaunch", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        _module = module
-    except Exception:
-        _module = None
+    except (OSError, ImportError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        detail = getattr(exc, "stderr", None) or str(exc)
+        warnings.warn("Triton C launcher unavailable; using ctypes: " + str(detail),
+                      RuntimeWarning, stacklevel=2)
+        _tried = True
+        return None
+    _module = module
+    _tried = True
     return _module
