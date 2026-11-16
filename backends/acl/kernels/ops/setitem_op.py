@@ -180,6 +180,28 @@ class SetItemACL(jt.Function):
             self.value_var = False
         if isinstance(slices, jt.Var):
             if _jittor_dtype_name(slices.dtype) == "bool":
+                if 0 < slices.ndim < x.ndim:
+                    if tuple(slices.shape) != tuple(x.shape[:slices.ndim]):
+                        raise IndexError("setitem mask must match the indexed dimensions")
+                    # A prefix mask selects whole trailing rows. Keep the
+                    # nonzero coordinates paired, rather than constructing
+                    # a Cartesian product of the indexed axes.
+                    coordinates = slices.nonzero()
+                    count = coordinates.shape[0]
+                    self.type_ = "index"
+                    self.value_shape = tuple(value.shape) if self.value_var else ()
+                    if not isinstance(value, jt.Var):
+                        value = jt.array(value, dtype=x.dtype)
+                    value = value.broadcast((count,) + tuple(x.shape[slices.ndim:])).contiguous()
+                    if count == 0:
+                        return x.clone()
+                    self.indices = [coordinates[:, axis].int32().contiguous()
+                                    for axis in range(slices.ndim)]
+                    return setitem_cmd(
+                        "IndexPutImpl", inputs=[x.contiguous(), value] + self.indices,
+                        outputs=[jt.empty(x.shape, x.dtype)],
+                        attr_code='op.jt_name = "indexputimpl";',
+                    )[0]
                 scalar_value = isinstance(value, (int, float)) or (
                     isinstance(value, jt.Var) and value.ndim == 0)
                 self.mask_scalar = scalar_value
