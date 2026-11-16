@@ -1165,6 +1165,29 @@ def _current_device(rt):
     return int(dev.value)
 
 
+def _fast_launcher():
+    """The optional C launcher, or None when it is disabled or unbuildable."""
+    try:
+        from .fastlaunch import load as _load
+        return _load()
+    except Exception:
+        return None
+
+
+def _scalar_bits(sig, v):
+    """The kernel argument's bytes as one little-endian unsigned integer."""
+    import struct as _struct
+    if sig in ("i64", "u64"):
+        return int(v) & 0xFFFFFFFFFFFFFFFF
+    if sig in ("i32", "u32", "i16", "u16", "i8", "u8", "i1"):
+        return int(v) & 0xFFFFFFFF
+    if sig == "fp32":
+        return _struct.unpack("<I", _struct.pack("<f", float(v)))[0]
+    if sig == "fp64":
+        return _struct.unpack("<Q", _struct.pack("<d", float(v)))[0]
+    raise JittorTritonError("cannot pack scalar of triton type %r" % sig)
+
+
 def run(jitfn, args, kwargs, grid):
     """Launch on the operands' device, and leave the caller's device current.
 
@@ -1475,6 +1498,10 @@ def _run(jitfn, args, kwargs, grid):
     pointers = {name: _tensor_ptr(value) for name, signature, value in runtime_vals
                 if signature.startswith("*") and value is not None}
     guard_enabled = _guard_enabled()
+    # The C path packs the same slots without a ctypes array per launch.  The
+    # guard path rewrites pointers, so it stays on the Python path.
+    fast = None if guard_enabled else _fast_launcher()
+    fast_vals = [] if fast is not None else None
     overlapping = _overlapping_argument_names({
         name: _tensor_byte_range(value, pointers[name], signature)
         for name, signature, value in runtime_vals if name in pointers
@@ -1487,6 +1514,9 @@ def _run(jitfn, args, kwargs, grid):
             else:
                 ptr = pointers[name]
                 nbytes = _tensor_nbytes(val, sig) if guard_enabled else 0
+                if fast_vals is not None:
+                    fast_vals.append(ptr)
+                    continue
                 # Only a contiguous operand can be bounced: the copy is a flat
                 # memcpy of the payload and the kernel keeps the caller's
                 # strides, so a strided view would be copied wrongly and then
@@ -1514,6 +1544,9 @@ def _run(jitfn, args, kwargs, grid):
                 else:
                     cv = ctypes.c_uint64(ptr)
         else:
+            if fast_vals is not None:
+                fast_vals.append(_scalar_bits(sig, val))
+                continue
             cv = _pack_scalar(sig, val)
         keepalive.append(cv)
         cvals.append(cv)
@@ -1524,7 +1557,7 @@ def _run(jitfn, args, kwargs, grid):
     # the cubin declares even when its size is zero, in which case triton passes
     # a null pointer, so presence drives the packing and size only drives the
     # allocation. The buffer is per program instance, hence the grid scaling.
-    n_expected = len(cvals)
+    n_expected = len(fast_vals) if fast_vals is not None else len(cvals)
     scratch_bases = []
     grid_programs = g[0] * g[1] * g[2]
     for have, size in ((info["has_scratch"], info["scratch"]),
@@ -1535,6 +1568,10 @@ def _run(jitfn, args, kwargs, grid):
         if size > 0:
             base = drv.alloc(size * grid_programs)
             scratch_bases.append(base)
+        if fast_vals is not None:
+            fast_vals.append(base)
+            n_expected += 1
+            continue
         cv = ctypes.c_uint64(base)
         keepalive.append(cv)
         cvals.append(cv)
@@ -1550,8 +1587,11 @@ def _run(jitfn, args, kwargs, grid):
             "jittor backend doesn't model yet — refusing to launch rather than "
             "corrupt memory." % (kname, n_expected, n_ptx, signature, constants))
 
-    params = (ctypes.c_void_p * len(cvals))(
-        *[ctypes.cast(ctypes.byref(cv), ctypes.c_void_p) for cv in cvals])
+    if fast_vals is not None:
+        params = None
+    else:
+        params = (ctypes.c_void_p * len(cvals))(
+            *[ctypes.cast(ctypes.byref(cv), ctypes.c_void_p) for cv in cvals])
 
     block = (info["num_warps"] * 32, 1, 1)
     drv.ensure_ctx()
@@ -1563,7 +1603,14 @@ def _run(jitfn, args, kwargs, grid):
             g, block, info["shared"], len(cvals), len(bounced)), file=_sys.stderr)
         _sys.stderr.flush()
     _stats_t2 = time.perf_counter() if _stats_on() else 0.0
-    drv.launch(func, g, block, info["shared"], params)
+    if fast_vals is not None:
+        rc = fast.launch(func.value, g[0], g[1], g[2],
+                         block[0], block[1], block[2],
+                         info["shared"], _launch_stream(), fast_vals)
+        if rc != 0:
+            raise JittorTritonError("cuLaunchKernel -> cudaError %d" % rc)
+    else:
+        drv.launch(func, g, block, info["shared"], params)
     _stats_t3 = time.perf_counter() if _stats_on() else 0.0
 
     # -- copy bounced tensors' results back into their Vars -------------------- #
