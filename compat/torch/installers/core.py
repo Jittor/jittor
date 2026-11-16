@@ -1168,8 +1168,17 @@ class _ForkRng:
             # raises "int() argument must be ... not 'device'". The accessors
             # below already take an index, a device or a string.
             self._targets = tuple(devices)
-            self._device_states = tuple(
-                cuda.get_rng_state(device) for device in self._targets)
+            try:
+                self._device_states = tuple(
+                    cuda.get_rng_state(device) for device in self._targets)
+            except NotImplementedError:
+                # A build without cuRAND offset tracking has no position to
+                # save or restore (see cuda_rng_state_is_supported). Fork the
+                # host generator and leave the device one alone instead of
+                # failing the block: the sequence is reproducible from its
+                # seed, only resuming a position is unsupported.
+                self._targets = ()
+                self._device_states = ()
         return self
 
     def __exit__(self, exc_type, exc, traceback):
