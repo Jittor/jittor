@@ -126,7 +126,11 @@ class TestPackedEntryDeviceGuard(unittest.TestCase):
         self.assertNotIn(
             "device_guard{0}", source,
             "a generated entry pins the launch to device 0 again")
-        entries = source.count("m.def(")
+        # The address accessor returns metadata; the CodeOp executor binds its
+        # device before invoking it. It is not another Tensor launch entry.
+        accessors = source.count('m.def("_raw_dense_fwd_address"')
+        self.assertEqual(accessors, 1)
+        entries = source.count("m.def(") - accessors
         guards = source.count("at::cuda::CUDAGuard device_guard{")
         self.assertEqual(entries, 6, "the generated entry set changed")
         self.assertEqual(
