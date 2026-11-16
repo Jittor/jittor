@@ -134,6 +134,14 @@ namespace jittor
                 continue;
             }
             const auto &var_shape = v->shape;
+            if (name == "Cast" && var_shape.size() > 8)
+            {
+                // aclnnCast rejects more than eight dimensions. Cast is
+                // elementwise, so describe the same storage in one dimension
+                // and keep the Var's logical shape.
+                shape.assign(1, v->num);
+                continue;
+            }
             shape.resize(var_shape.size());
             for (int j = 0; j < var_shape.size(); j++)
             {
@@ -150,7 +158,8 @@ namespace jittor
             // apply_storage_strides would put the stride-0 view back.
             const bool collapsed = inputShapes[idx].size() == 1 && inputShapes[idx][0] == 1
                                    && in_[idx]->num > 1;
-            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, collapsed ? nullptr : in_[idx]);
+            const bool flattened = name == "Cast" && in_[idx]->shape.size() > 8;
+            auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, (collapsed || flattened) ? nullptr : in_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
     }
@@ -183,6 +192,11 @@ namespace jittor
         {
             auto &shape = outputShapes[output_idx];
             const auto &var_shape = out_[output_idx]->shape;
+            if (name == "Cast" && var_shape.size() > 8)
+            {
+                shape.assign(1, out_[output_idx]->num);
+                continue;
+            }
             shape.resize(var_shape.size());
             for (int j = 0; j < var_shape.size(); j++)
             {
@@ -194,7 +208,8 @@ namespace jittor
         for (size_t idx = 0; idx < output_num; idx++)
         {
             outputTensors[idx] = nullptr;
-            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
+            const bool flattened = name == "Cast" && out_[idx]->shape.size() > 8;
+            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, flattened ? nullptr : out_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }
