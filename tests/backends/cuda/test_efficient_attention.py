@@ -6,6 +6,7 @@ import pytest
 
 import jittor as jt
 from _helpers import capability
+from _helpers.child_process import run_child_script
 
 
 @pytest.fixture
@@ -85,6 +86,41 @@ def test_registered_sdpa_uses_the_upstream_provider(kernel):
     actual = scaled_dot_product_attention(*values)
     direct = kernel._efficient_attention(*values)
     np.testing.assert_allclose(actual.numpy(), direct.numpy(), rtol=1e-6, atol=1e-7)
+
+
+def test_standalone_provider_does_not_require_native_torch(kernel):
+    # A parent test session may have loaded native Torch as an oracle, hiding
+    # unresolved c10 symbols in a kernel compiled with the wrong headers.
+    result = run_child_script(r'''
+import builtins
+import sys
+assert 'torch' not in sys.modules
+original_import = builtins.__import__
+def independent_import(name, *args, **kwargs):
+    if name == 'torch' or name.startswith('torch.'):
+        raise AssertionError('standalone attention imported native Torch')
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = independent_import
+import numpy as np
+import jittor as jt
+from jittor.backends.cuda.kernels.nn import efficient_attention_cuda as provider
+with jt.flag_scope(use_cuda=1, backend_fallback='error'):
+    q = jt.zeros((1, 2, 9, 16)).start_grad()
+    k = jt.zeros((1, 2, 13, 16)).start_grad()
+    v = jt.ones((1, 2, 13, 16)).start_grad()
+    output = provider._efficient_attention(q, k, v)
+    assert output is not None
+    gradients = jt.grad(output.sum(), [q, k, v])
+    for actual, expected in zip([output, *gradients], [1., 0., 0., 9./13.]):
+        actual.sync()
+        assert actual.location() == 'device'
+        np.testing.assert_allclose(actual.numpy(), expected, atol=1e-6, rtol=1e-6)
+    assert jt.core.backend_fallback_count() == 0
+assert 'torch' not in sys.modules
+print('STANDALONE_ATTENTION_OK')
+''', without_torch_mode=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert b'STANDALONE_ATTENTION_OK' in result.stdout
 
 
 @pytest.mark.parametrize('dtype', ['float32', 'float16', 'bfloat16'])
