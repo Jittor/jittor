@@ -3,6 +3,7 @@ from importlib import import_module
 from collections.abc import Sequence
 import warnings
 import contextlib
+import sys
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
@@ -172,7 +173,26 @@ def _set_data_owner(view, slices, value):
     return _write_data_owner_numpy(view, value, slices)
 
 
+def _try_captured_indexed_store(self, slices, value):
+    capture = sys.modules.get('jittor._runtime.step_capture')
+    if capture is None or not capture.active() or not isinstance(value, _NativeVar):
+        return False
+    if getattr(self, '_torch_data_owner', None) is not None:
+        return False
+    parts = slices if isinstance(slices, tuple) else (slices,)
+    indices, axes = [], []
+    for axis, part in enumerate(parts):
+        if isinstance(part, _NativeVar):
+            indices.append(part)
+            axes.append(axis)
+        elif not (isinstance(part, slice) and part == slice(None)):
+            return False
+    return self._try_indexed_storage_write(value, indices, axes)
+
+
 def _torch_setitem(self, slices, value):
+    if _try_captured_indexed_store(self, slices, value):
+        return self
     slices = _normalize_index_sequence(slices)
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
