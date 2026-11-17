@@ -790,6 +790,9 @@ include src/ops/composite/getitem_op.h
 include src/ops/composite/index_bounds.h
 include src/ops/composite/index_op.cc
 include src/ops/composite/index_op.h
+include src/ops/composite/indexed_storage_write_cuda.h
+include src/ops/composite/indexed_storage_write_op.cc
+include src/ops/composite/indexed_storage_write_op.h
 include src/ops/composite/mapped_concat_op.cc
 include src/ops/composite/mapped_concat_op.h
 include src/ops/composite/mapped_matmul_op.cc

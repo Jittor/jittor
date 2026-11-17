@@ -1972,6 +1972,79 @@ VarHolder* VarHolder::update_copy_result(VarHolder* value) {
     return this;
 }
 
+bool VarHolder::try_indexed_storage_write(VarHolder* values,
+        vector<VarHolder*>&& indices, NanoVector axes) {
+    if (!state_capture_active() || !no_grad || graph_capture_active()) return false;
+    auto* root = is_view() ? view->base : this;
+    if (!root || (view && !view->physical_storage)) return false;
+    for (auto* sibling = root->views; sibling; sibling = sibling->next)
+        if (!sibling->physical_storage) return false;
+    auto* target = var;
+    auto* source = values->var;
+    const int rank = target->shape.size();
+    const int count = indices.size();
+    if (rank <= 0 || rank > 16 || count <= 0 || count > rank || count != axes.size()
+            || axes[0] != 0 || target->dtype() != ns_float32 || source->dtype() != ns_float32
+            || !source->is_contiguous() || source->shape.size() != rank - count + 1
+            || construction_target_backend(target) != BackendId::Cuda
+            || construction_target_backend(source) != BackendId::Cuda) return false;
+
+    auto canonical = [](Var* value) {
+        while (value->share_src) value = value->share_src;
+        return value;
+    };
+    auto* allocation = canonical(root->var);
+    if (!allocation->mem_ptr) return false;
+    auto may_alias = [&](Var* value) {
+        if (canonical(value) == allocation || value->shares_allocation_with(allocation)) return true;
+        if (value->mem_ptr) {
+            const uintptr_t begin = reinterpret_cast<uintptr_t>(allocation->mem_ptr);
+            const uintptr_t end = begin + allocation->storage_span_bytes();
+            const uintptr_t candidate = reinterpret_cast<uintptr_t>(value->mem_ptr);
+            return candidate < end && candidate + value->storage_span_bytes() > begin;
+        }
+        // These pending producers can become storage aliases during graph
+        // optimization. Keep them on the ordinary assignment path.
+        auto* producer = value->input();
+        return producer && (producer->is_storage_view()
+            || producer->is_op(op_ids::getitem()) || producer->is_op(op_ids::setitem()));
+    };
+    if (may_alias(source)) return false;
+    const int64 rows = indices[0]->var->num;
+    if (!rows || source->shape[0] != rows || !source->num) return false;
+    vector<bool> indexed(rank, false);
+    vector<Var*> native_indices;
+    for (int i = 0; i < count; ++i) {
+        const int axis = axes[i];
+        auto* index = indices[i]->var;
+        if (axis < 0 || axis >= rank || (i && axes[i-1] >= axis)
+                || index->shape.size() != 1 || index->num != rows || !index->is_contiguous()
+                || (index->dtype() != ns_int32 && index->dtype() != ns_int64)
+                || construction_target_backend(index) != BackendId::Cuda || may_alias(index)) return false;
+        indexed[axis] = true;
+        native_indices.push_back(index);
+    }
+    vector<std::pair<int64, int64>> layout;
+    int dimension = 1;
+    for (int i = 0; i < rank; ++i) {
+        const int64 stride = target->storage_stride(i);
+        if (stride < 0 || (!indexed[i] && source->shape[dimension++] != target->shape[i])) return false;
+        if (target->shape[i] > 1) layout.emplace_back(stride, target->shape[i]);
+    }
+    std::sort(layout.begin(), layout.end());
+    int64 extent = 1;
+    for (auto item : layout) {
+        if (item.first < extent) return false;
+        extent = item.first * item.second;
+    }
+    check_inplace_autograd();
+    static auto make_store = op_constructor<VarPtr, Var*, Var*, Var*, vector<Var*>&&, NanoVector>(
+        "indexed_storage_write");
+    auto updated = make_store(root->var, target, source, move(native_indices), axes);
+    *root = move(updated);
+    return true;
+}
+
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
     if (!logical_write) {
         ExecutorEntryScope entry;
