@@ -48,6 +48,12 @@ makes that device current, then allocates outputs and launches kernels. At the e
 of a run it waits for every device it touched and restores the caller's original
 current device.
 
+Explicit placement also governs array construction. The operator's output graph edges
+are not connected yet, so array constructors read the construction context through
+`construction_target_backend()` when selecting host or device implementations and
+staging buffers. The global CUDA switch and host allocator option do not change an
+explicit CPU array's execution device.
+
 ## There is only one way to change devices: `device_copy`
 
 `Var.to_device(i)` is the `device_copy` operator, and is the only route by which
