@@ -1,5 +1,6 @@
 """Exercise the bridge's real binding path without a compiler or GPU launch."""
 import ast
+import importlib.util
 import inspect
 import os
 from pathlib import Path
@@ -32,6 +33,11 @@ def bind_launch():
         "_ptr_sig": lambda value: "*fp32",
         "_Driver": types.SimpleNamespace(get=lambda device: types.SimpleNamespace(ensure_ctx=lambda: None)),
     }
+    spec = importlib.util.spec_from_file_location(
+        "triton_argument_binding", path.with_name("argument_binding.py"))
+    binding = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(binding)
+    namespace["bind_arguments"] = binding.bind_arguments
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(path), "exec"), namespace)
 
     def compile_kernel(kernel, signature, constants, options, device):
@@ -109,3 +115,17 @@ def test_bare_callable_remains_supported(bind_launch):
         pass
 
     assert bind_launch(function, (Operand(),), {})[1] == {"BLOCK": 64}
+
+
+def test_tensor_inventory_preserves_device_and_missing_operand_checks(bind_launch):
+    def function(left, right=None):
+        pass
+
+    kernel = types.SimpleNamespace(fn=function, signature=inspect.signature(function))
+    other = Operand()
+    other.device_id = 1
+    with pytest.raises(bind_launch.error, match="operands on devices 0 and 1"):
+        bind_launch(kernel, (Operand(), other), {})
+    with pytest.raises(bind_launch.error, match="no tensor arguments"):
+        bind_launch(kernel, (3,), {})
+    assert bind_launch(kernel, (other, None), {})[3] == 1
