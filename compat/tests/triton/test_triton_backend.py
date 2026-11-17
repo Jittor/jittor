@@ -1102,6 +1102,48 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
             finally:
                 bystander.sync(True, False)
 
+    def test_inplace_launch_preserves_pending_value_and_view_snapshots(self):
+        self._prepare()
+        n, block = 32, 32
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0), mock.patch.dict(
+                os.environ, {"JITTOR_TRITON_FAST_SYNC": "1",
+                             "JITTOR_TRITON_SYNC_BEFORE_LAUNCH": "0",
+                             "JITTOR_TRITON_SYNC_AFTER_LAUNCH": "0"}):
+            expected = np.arange(n, dtype="float32")
+            x = jt.array(expected)
+            x.sync(True, False)
+            old = x.clone()
+            old_view = x.reshape((4, 8))[:, ::2].clone()
+            self.assertEqual(jt.core._first_finished([old, old_view]), -1)
+            y = jt.ones((n,), dtype="float32")
+            add_kernel[(1,)](x, y, x, n, BLOCK=block)
+            jt.sync([x], True, False)
+            np.testing.assert_array_equal(old.numpy(), expected)
+            np.testing.assert_array_equal(
+                old_view.numpy(), expected.reshape((4, 8))[:, ::2])
+            np.testing.assert_array_equal(x.numpy(), expected + 1)
+
+    def test_pending_output_view_preserves_its_base_snapshot(self):
+        self._prepare()
+        n, block = 32, 32
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0), mock.patch.dict(
+                os.environ, {"JITTOR_TRITON_FAST_SYNC": "1",
+                             "JITTOR_TRITON_SYNC_BEFORE_LAUNCH": "0",
+                             "JITTOR_TRITON_SYNC_AFTER_LAUNCH": "0"}):
+            expected = np.arange(n + 1, dtype="float32")
+            base = jt.array(expected)
+            base.sync(True, False)
+            old = base.clone()
+            view = base[1:]
+            self.assertEqual(jt.core._first_finished([old, view]), -1)
+            increment = jt.ones((n,), dtype="float32")
+            add_kernel[(1,)](view, increment, view, n, BLOCK=block)
+            jt.sync([base], True, False)
+            np.testing.assert_array_equal(old.numpy(), expected)
+            updated = expected.copy()
+            updated[1:] += 1
+            np.testing.assert_array_equal(base.numpy(), updated)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

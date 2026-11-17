@@ -1475,6 +1475,9 @@ def _run(jitfn, args, kwargs, grid):
         # A weak sync also submits older, unrelated pending holders. The
         # foreign launch needs only these operands and their dependencies.
         jt.sync(operand_vars, not _fast_sync_enabled(), False)
+        # Materialize views before walking their sharing rings. Any pointer
+        # parameter may be written, so retain its pending readers' old bytes.
+        jt.core._preserve_step_readers(operand_vars)
     elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
         # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
         # cannot be named to `jt.sync`; keep the broad sweep for that case.
