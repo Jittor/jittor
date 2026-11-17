@@ -1080,6 +1080,11 @@ def _compile(jitfn, signature, constants, options=None, device=0):
         name = md.name
         ptx = compiled.asm.get("ptx", "")
         info = {
+            # The key uses id(jitfn). Keep that identity alive while this entry
+            # is reusable: otherwise a collected JITFunction's address can be
+            # reused by a different kernel with the same argument signature,
+            # silently launching the first kernel's cubin for the second one.
+            "_kernel_owner": jitfn,
             "cubin": compiled.asm["cubin"],
             "name": name,
             "num_warps": int(md.num_warps),
