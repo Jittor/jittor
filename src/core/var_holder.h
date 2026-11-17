@@ -1063,6 +1063,7 @@ public:
 int64 host_readback_count();
 // An implicit dynamic-shape read can make a trace ineligible before the
 // optimizer runs, just as an explicit value read does.
+// @pyjt(_state_capture_active)
 bool state_capture_active();
 void note_shape_readback();
 
