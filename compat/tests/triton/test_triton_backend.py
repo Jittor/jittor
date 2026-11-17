@@ -1065,7 +1065,10 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
     def test_the_launch_leaves_unrelated_pending_work_unsubmitted(self):
         self._prepare()
         n, block = 32, 32
-        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0):
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0), mock.patch.dict(
+                os.environ, {"JITTOR_TRITON_FAST_SYNC": "1",
+                             "JITTOR_TRITON_SYNC_BEFORE_LAUNCH": "0",
+                             "JITTOR_TRITON_SYNC_AFTER_LAUNCH": "0"}):
             # Compile before introducing the bystander: compiler initialization
             # is outside the steady launch whose submission scope is tested.
             warm = jt.zeros((n,), dtype="float32")
