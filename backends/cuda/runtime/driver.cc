@@ -600,6 +600,15 @@ void copy(void* dst, Device target, const void* src, Device source, size_t size,
     int device = target.backend == BackendId::Cpu ? source.index : target.index;
     on_device_void(device, [&] {
         if (ordered && source.backend != BackendId::Cpu && target.backend != BackendId::Cpu) {
+            // Small same-device feeds need compute order, not a separate
+            // transfer engine. Two event joins cost more than copying these
+            // bytes and serialize every input of a replayed step. Keep large
+            // and peer transfers on the existing copy-stream path.
+            if (source.index == target.index && size <= (64u << 10)) {
+                copy_async(dst, target, src, source, size,
+                           backend_stream(target, BackendStreamKind::Compute));
+                return;
+            }
             if (source.index != device) accelerator_peer(source.index, device);
             auto stream = backend_stream(target, BackendStreamKind::Copy);
             backend_side_stream_wait_default(BackendStreamKind::Copy, device, source.index);
