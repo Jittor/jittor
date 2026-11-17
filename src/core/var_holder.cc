@@ -13,6 +13,7 @@
 #include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "core/executor.h"
+#include "core/event_queue.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
@@ -2206,6 +2207,16 @@ void sync_all(bool device_sync) {
         vars.push_back(v.ptr);
     graph_check();
     runtime_executor().run_sync(vars, device_sync); //need sync at last
+    #ifdef HAS_ACCELERATOR
+    if (!device_sync) {
+        // A ready fetch callback must progress even when no pending graph
+        // remains. run_sync drains callbacks after a device wait; an async
+        // caller deliberately avoids that wait and may otherwise poll forever.
+        // CUDA enqueues these callbacks only after its transfer completes.
+        ExecutorEntryScope entry;
+        event_queue.flush();
+    }
+    #endif
     graph_check();
 }
 
