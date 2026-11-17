@@ -146,6 +146,20 @@ PyObject* state_capture_end() {
         // Rebound and back again, or state created inside the capture: a
         // temporary's first Var is not an executed leaf.
         if (holder->var == old || !old->is_finished() || !old->mem_ptr) continue;
+        // A root rebind refreshes its physical view holders as bookkeeping.
+        // They are not independent state: restoring each with _update writes
+        // through the root again, and later replay write-backs can overwrite
+        // the root's new bytes with an alias snapshot. The root owns those
+        // writes and refreshes the aliases when its record is committed.
+        if (holder->view && holder->view->base && holder->view->physical_storage) {
+            auto* base = holder->view->base;
+            auto found = records->find(base);
+            if (found != records->end()) {
+                auto* previous = found->second.ptr;
+                if (base->var != previous && previous->is_finished() && previous->mem_ptr)
+                    continue;
+            }
+        }
         PyObject* holder_obj = GET_OBJ_FROM_RAW_PTR(holder);
         Py_INCREF(holder_obj);
         PyObjHolder item(PyTuple_New(3));
