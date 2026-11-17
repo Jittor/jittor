@@ -1,12 +1,96 @@
 """Torch generator handles over the native CPU and CUDA stream owners."""
 
 import builtins as _builtins
+import math as _math
 
 import jittor as jt
 import numpy as np
 
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from .types import device as _device
+
+
+class _TorchCPUStream:
+    """PyTorch's CPU MT19937 stream, bit for bit.
+
+    ATen seeds ``std::mt19937`` with the seed, draws 64 bits as
+    ``(hi << 32) | lo`` (``random64``), maps the low 53 bits to a double
+    (``uniform_real``), and turns pairs of doubles into normals with the cached
+    Box-Muller of ``normal_distribution`` (ATen/core/DistributionsHelper.h).
+    This implementation's native engine is a different generator, so a
+    request that seeds ``torch.Generator`` and expects torch's sequence --
+    diffusion pipelines draw their initial noise that way -- only reproduces
+    it through this class.
+    """
+
+    MASK53 = (1 << 53) - 1
+    INV53 = 1.0 / (1 << 53)
+
+    def __init__(self, seed=0):
+        self._mt = [0] * 624
+        self._index = 624
+        self._cached = None
+        self.reseed(seed)
+
+    def reseed(self, seed):
+        seed = int(seed) & 0xFFFFFFFF
+        mt = self._mt
+        mt[0] = seed
+        for i in range(1, 624):
+            mt[i] = (1812433253 * (mt[i - 1] ^ (mt[i - 1] >> 30)) + i) & 0xFFFFFFFF
+        self._index = 624
+        self._cached = None
+
+    def _next32(self):
+        if self._index >= 624:
+            mt = self._mt
+            for i in range(624):
+                y = (mt[i] & 0x80000000) | (mt[(i + 1) % 624] & 0x7FFFFFFF)
+                mt[i] = mt[(i + 397) % 624] ^ (y >> 1) ^ (0x9908B0DF if y & 1 else 0)
+            self._index = 0
+        y = self._mt[self._index]
+        self._index += 1
+        y ^= y >> 11
+        y ^= (y << 7) & 0x9D2C5680
+        y ^= (y << 15) & 0xEFC60000
+        return (y ^ (y >> 18)) & 0xFFFFFFFF
+
+    def uniform_double(self):
+        value = (self._next32() << 32) | self._next32()
+        return (value & self.MASK53) * self.INV53
+
+    def normal_double(self):
+        cached = self._cached
+        if cached is not None:
+            self._cached = None
+            return cached
+        u1 = self.uniform_double()
+        u2 = self.uniform_double()
+        r = _math.sqrt(-2.0 * _math.log1p(-u2))
+        theta = 2.0 * _math.pi * u1
+        self._cached = r * _math.sin(theta)
+        return r * _math.cos(theta)
+
+    def fill_normal(self, count):
+        return [self.normal_double() for _ in range(count)]
+
+
+def _new_global_cpu_stream():
+    import secrets
+    return _TorchCPUStream(secrets.randbits(32))
+
+
+# The default CPU draw sequence. Torch seeds its default CPU generator from
+# the OS at first use and replaces that seed when ``torch.manual_seed`` runs.
+_GLOBAL_CPU_STREAM = _new_global_cpu_stream()
+
+
+def _global_cpu_stream():
+    return _GLOBAL_CPU_STREAM
+
+
+def _reseed_global_cpu_stream(seed):
+    _GLOBAL_CPU_STREAM.reseed(seed)
 
 
 class Generator:
@@ -23,6 +107,8 @@ class Generator:
         if selected.type == "cpu":
             self.device = _device("cpu")
             native_device = "cpu"
+            # Torch's CPU sequence, mirrored for randn (see _TorchCPUStream).
+            self._torch_stream = _TorchCPUStream()
         else:
             index = selected.index
             if index is None:
@@ -40,11 +126,14 @@ class Generator:
         result = cls.__new__(cls)
         result.device = _device("cpu")
         result._native = None
+        result._torch_stream = None
         return result
 
     def manual_seed(self, seed):
         from .installers.core import _normalize_seed
         seed = _normalize_seed(seed, integer=True)
+        if getattr(self, "_torch_stream", None) is not None:
+            self._torch_stream.reseed(seed)
         if self._native is None:
             from .installers.core import _manual_seed_cpu
             _manual_seed_cpu(seed)

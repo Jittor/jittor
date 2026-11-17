@@ -412,6 +412,13 @@ def _manual_seed(s):
     # never calls the convenience API that also reseeds Python and NumPy.
     jt.core._set_seed64(value)
     ctx.state["core_misc"]["seed"] = value
+    # torch.manual_seed also resets the CPU draw sequence every torch.randn
+    # without an explicit generator comes from (generator._TorchCPUStream).
+    try:
+        from .. import generator as _generator
+        _generator._reseed_global_cpu_stream(value)
+    except Exception:
+        pass
     return ctx.target_namespace.default_generator
 
 
@@ -419,6 +426,11 @@ def _manual_seed_cpu(s):
     value = _normalize_seed(s, integer=True)
     jt.core.rng_manual_seed("cpu", value)
     _misc_context().state["core_misc"]["seed"] = value
+    try:
+        from .. import generator as _generator
+        _generator._reseed_global_cpu_stream(value)
+    except Exception:
+        pass
 
 
 def _torch_seed():

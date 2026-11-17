@@ -182,11 +182,70 @@ def randint(*args, **kwargs):
     return _invoke_factory("randint", args, kwargs)
 
 
+def _torch_stream_randn(name, args, kwargs):
+    """Host float draws from torch's MT19937 stream, with or without a generator.
+
+    Returns ``None`` when the draw is not a host float randn, so the caller
+    falls through to the native sampler.
+    """
+    if name not in ("randn", "randn_like"):
+        return None
+    requested = kwargs.get("device")
+    if requested is not None:
+        # An explicit device decides, as in torch.
+        if str(requested).split(":")[0] not in ("cpu", ""):
+            return None
+    if kwargs.get("out") is not None:
+        return None
+    src = None
+    if name == "randn_like":
+        src = args[0] if args else kwargs.get("input")
+        if src is None:
+            return None
+        shape = tuple(int(s) for s in src.shape)
+        dtype = kwargs.get("dtype") or src.dtype
+    else:
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            shape = tuple(int(a) for a in args[0])
+        elif args and all(isinstance(a, int) and not isinstance(a, bool) for a in args):
+            shape = tuple(int(a) for a in args)
+        elif "size" in kwargs:
+            shape = tuple(int(a) for a in kwargs["size"])
+        else:
+            return None
+        dtype = kwargs.get("dtype")
+    cast_to = _dtype_to_str(dtype) if dtype is not None else None
+    if cast_to is None:
+        cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
+    if cast_to not in ("float32", "float64"):
+        return None
+    generator = kwargs.get("generator")
+    if generator is not None:
+        stream = getattr(generator, "_torch_stream", None)
+    else:
+        from .. import generator as _generator
+        stream = _generator._global_cpu_stream()
+    if stream is None:
+        return None
+    count = 1
+    for dim in shape:
+        count *= int(dim)
+    numpy_dtype = np.float32 if cast_to == "float32" else np.float64
+    array = np.asarray(stream.fill_normal(count), dtype=np.float64).astype(numpy_dtype).reshape(shape)
+    return _make_cpu_resident(jt.array(array))
+
+
 def randn(*args, **kwargs):
+    fixed = _torch_stream_randn("randn", args, kwargs)
+    if fixed is not None:
+        return fixed
     return _invoke_factory("randn", args, kwargs)
 
 
 def randn_like(*args, **kwargs):
+    fixed = _torch_stream_randn("randn_like", args, kwargs)
+    if fixed is not None:
+        return fixed
     return _invoke_factory("randn_like", args, kwargs)
 
 
