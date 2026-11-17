@@ -20,6 +20,7 @@
 #include "core/var_holder.h"
 #include "mem/swap.h"
 #include "runtime/backend.h"
+#include "runtime/device.h"
 
 namespace jittor {
 
@@ -210,9 +211,12 @@ ArrayOp::ArrayOp(PyObject* obj) {
     void* host_ptr = nullptr;
     #ifdef HAS_ACCELERATOR
     // Fused scalar values are emitted inside generated kernels on both backends.
-    if (runtime_flag_use_cuda() && output->flag(VarFlags::_force_fuse))
+    const bool device_array = construction_target_backend() != BackendId::Cpu;
+    if (device_array && output->flag(VarFlags::_force_fuse))
         set_flag(OpFlags::_cuda, 1);
-    if (runtime_flag_use_cuda() && !save_mem && !use_pinned_host_memory()) {
+    // The output's graph edges are not installed during construction. Use
+    // the construction placement, not the ambient flag or graph placement.
+    if (device_array && !save_mem && !use_pinned_host_memory()) {
         set_flag(OpFlags::_cpu, 0);
         set_flag(OpFlags::_cuda, 1);
         if (!output->flag(VarFlags::_force_fuse)) {

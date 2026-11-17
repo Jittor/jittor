@@ -2,6 +2,7 @@ import importlib
 import unittest
 
 import numpy as np
+import pytest
 
 import jittor as jt
 import torch
@@ -94,6 +95,33 @@ class TestTorchFactoryFidelity(unittest.TestCase):
             value = factories.empty_like(source)
         self.assertEqual(tuple(value.shape), (2, 3))
         self.assertEqual(value.dtype, source.dtype)
+
+
+@pytest.mark.parametrize('ambient_cuda', [0, 1])
+@pytest.mark.parametrize('host_allocator', [0, 1])
+@pytest.mark.parametrize('device', ['cpu', 'cuda'])
+@pytest.mark.parametrize('shape', [(), (1,), (8,), (0, 3)])
+@pytest.mark.parametrize('dtype', ['int32', 'int64', 'float32', 'float64'])
+def test_array_construction_honors_explicit_device_before_graph_edges_exist(
+        ambient_cuda, host_allocator, device, shape, dtype):
+    if not jt.has_cuda:
+        pytest.skip('real CUDA build and device required for mixed-placement coverage')
+    expected = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
+    if dtype == 'int64':
+        expected += 2 ** 40
+    elif dtype == 'float64':
+        expected = np.nextafter(expected + 1, np.inf)
+    source = expected.copy()
+    with jt.flag_scope(use_cuda=ambient_cuda, use_cuda_host_allocator=host_allocator,
+                       auto_graph_replay=0):
+        value = torch.tensor(source, dtype=getattr(torch, dtype), device=device)
+        source.fill(-9)
+        value.sync(True, False)
+        assert value.device.type == device
+        assert value.dtype == getattr(torch, dtype)
+        if expected.size:
+            assert value.location() == ('cpu' if device == 'cpu' else 'device')
+        np.testing.assert_array_equal(value.numpy(), expected)
 
 
 if __name__ == "__main__":
