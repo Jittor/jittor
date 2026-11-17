@@ -63,7 +63,7 @@ struct BackendExecutionPolicy {
 // The registry copies this versioned table; callback code and allocator pools
 // must outlive the runtime. Published callbacks retain the serialized contract.
 struct BackendOps {
-    uint32 abi_version = 4;
+    uint32 abi_version = 5;
     uint32 struct_size = sizeof(BackendOps);
     BackendId id = BackendId::Cpu;
     const char* name = nullptr;
@@ -87,6 +87,12 @@ struct BackendOps {
     Allocator* (*allocator)(int, BackendMemoryKind) = nullptr;
     void (*copy)(void*, Device, const void*, Device, size_t, bool) = nullptr;
     void (*copy_async)(void*, Device, const void*, Device, size_t, BackendStream) = nullptr;
+    // Optional same-device copy from dense storage into a validated strided
+    // destination. Shape/strides are in elements; the provider enqueues on the
+    // compute stream and copies metadata before returning. False means the
+    // caller must use its contiguous-run fallback. No dtype conversion.
+    bool (*copy_strided_from_dense)(void*, const void*, Device, const int64*,
+                                    const int64*, int, size_t) = nullptr;
     void (*synchronize)(uint64) = nullptr;
     void* (*stream)(int, BackendStreamKind) = nullptr;
     void (*enable_peer)(int, int) = nullptr;
@@ -156,6 +162,9 @@ EXTERN_LIB void backend_copy(void* dst, Device dst_device, const void* src,
                             Device src_device, size_t size, bool ordered = false);
 EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src,
                                   Device src_device, size_t size, BackendStream stream);
+EXTERN_LIB bool backend_copy_strided_from_dense(void* dst, const void* src, Device device,
+                                               const vector<int64>& shape,
+                                               const vector<int64>& strides, size_t item_size);
 EXTERN_LIB void backend_synchronize(Device device);
 EXTERN_LIB BackendStream backend_stream(Device device, BackendStreamKind kind);
 EXTERN_LIB BackendEvent backend_event(Device device, bool timing = false);

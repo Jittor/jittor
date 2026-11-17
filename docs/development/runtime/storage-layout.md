@@ -80,6 +80,18 @@ ACL 描述符助手接受源 Var，把它真实的 stride 和物理存储跨度�
 覆盖强制 expand 的别名标识、其后的算术/归约/索引、分配预算、赋值刷新、NumPy 导出、
 正步长的存储偏移、稠密库边界以及梯度。
 
+## 保留布局的存储拷贝
+
+`Var._copy_into` 在校验 dtype、大小、目的布局和重叠关系后保留原分配、视图及写版本。
+源不连续时先生成稠密快照。对于同一 CUDA 设备上的稠密源与非连续目的，后端在计算流上
+发射一次按原生 stride 寻址的字节保持内核，避免按每个连续片段切换拷贝流。
+跨设备拷贝以及没有注册该可选能力的后端继续使用连续片段路径。
+
+这是存储写入原语；调用方仍需先处理已有读者，普通用户应通过 `Tensor.copy_` 等公开接口
+获得完整的原地写入语义。回归入口为 `compat/tests/torch/test_strided_storage_copy_kernel.py`
+与 `compat/tests/torch/test_tensor_copy_strided.py`，分别检查逐位拷贝、未写入区域及既有
+视图、梯度和别名契约。后端回调表 ABI 为 5，旧二进制 provider 需要重新构建。
+
 ## 显式异步存储拷贝
 
 卸载器等需要自行管理执行顺序的代码可以使用 `jt.core._copy_into_async(dst, src)`，
