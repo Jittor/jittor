@@ -95,6 +95,12 @@ capture's training step. At capture completion, pending detached outputs and pos
 readouts consume already executed kept values; they must not execute the optimizer twice.
 These temporary execution boundaries do not change graph lifetime or finished flags.
 
+Physical views refreshed by a root storage rebind belong to the same state. If the
+root has a valid capture record, commit and write back the root only, letting it
+refresh its views. Restoring those views as independent state would write through
+the root again; later replays could overwrite fresh data with an old view snapshot.
+Logical views and views without a valid root record retain their own state records.
+
 When a capture is refused, submit only unfinished computations for its explicit
 outputs and state roots. Already executed kept values form boundaries, then
 complete their ordinary execution lifetime. This batch does not pull in sibling
