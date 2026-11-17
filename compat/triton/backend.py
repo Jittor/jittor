@@ -1232,6 +1232,11 @@ def _run(jitfn, args, kwargs, grid):
 
     fn = getattr(jitfn, "fn", jitfn)
     kname = getattr(jitfn, "__name__", getattr(fn, "__name__", "triton_kernel"))
+    # Upstream JITCallable freezes this alongside params at construction. Its
+    # binder uses the same signature even if the Python function later changes.
+    python_signature = getattr(jitfn, "signature", None)
+    if not isinstance(python_signature, inspect.Signature):
+        python_signature = inspect.signature(fn)
 
     if os.environ.get("JT_TRITON_PTRTRACE"):
         import sys as _sys
@@ -1260,30 +1265,20 @@ def _run(jitfn, args, kwargs, grid):
 
     # -- which params are constexpr? (use triton's own param metadata if present)
     constexpr_names = set()
-    # `inspect.signature` builds a new Signature object (and walks the
-    # function's code) on every call; a serving loop launches the same
-    # kernels every step, so keep the one it produced.
-    bridge_signature = getattr(jitfn, "_jt_bridge_signature", None)
-    if bridge_signature is None:
-        bridge_signature = inspect.signature(fn)
-        try:
-            jitfn._jt_bridge_signature = bridge_signature
-        except AttributeError as exc:
-            swallowed("triton/backend.py run: JIT function does not allow signature caching", exc)
     params = getattr(jitfn, "params", None)
     if params:
         for p in params:
             if getattr(p, "is_constexpr", False):
                 constexpr_names.add(p.name)
     else:
-        for n, p in bridge_signature.parameters.items():
+        for n, p in python_signature.parameters.items():
             ann = p.annotation
             if "constexpr" in str(ann):
                 constexpr_names.add(n)
 
     # -- bind call args to parameter names ---------------------------------- #
     try:
-        bound = bridge_signature.bind(*args, **kwargs)
+        bound = python_signature.bind(*args, **kwargs)
         bound.apply_defaults()
     except TypeError as e:
         raise JittorTritonError(
