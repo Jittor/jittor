@@ -1472,7 +1472,9 @@ def _run(jitfn, args, kwargs, grid):
     # operands are jittor Vars -- under the shim, all of them.
     operand_vars = [v for (_, _, v) in runtime_vals if _is_var(v)]
     if operand_vars:
-        jt.sync(operand_vars, not _fast_sync_enabled())
+        # A weak sync also submits older, unrelated pending holders. The
+        # foreign launch needs only these operands and their dependencies.
+        jt.sync(operand_vars, not _fast_sync_enabled(), False)
     elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
         # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
         # cannot be named to `jt.sync`; keep the broad sweep for that case.

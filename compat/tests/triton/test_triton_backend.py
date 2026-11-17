@@ -1062,6 +1062,43 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
             "the launch swept the whole process with jt.sync_all(False); name the "
             "operand Vars instead, or every launch pays for every live holder")
 
+    def test_the_launch_leaves_unrelated_pending_work_unsubmitted(self):
+        self._prepare()
+        n, block = 32, 32
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0):
+            # Compile before introducing the bystander: compiler initialization
+            # is outside the steady launch whose submission scope is tested.
+            warm = jt.zeros((n,), dtype="float32")
+            add_kernel[(1,)](warm, warm, warm, n, BLOCK=block)
+            warm.sync(True, False)
+            counter = jt.zeros((1,), dtype="int32")
+            counter.sync(True, False)
+            bystander = jt.code(
+                (1,), "int32", [counter],
+                cuda_src="""
+                __global__ static void mark_bystander(@ARGS_DEF) {
+                    @PRECALC
+                    if (threadIdx.x == 0) {
+                        atomicAdd(in0_p, 1);
+                        @out0(0) = 0;
+                    }
+                }
+                mark_bystander<<<1, 1>>>(@ARGS);
+                """)
+            try:
+                expected = np.arange(n, dtype="float32") + 3
+                x = jt.array(expected - 1) + 0.0
+                y = jt.ones((n,), dtype="float32")
+                out = jt.empty((n,), dtype="float32")
+                add_kernel[(1,)](x, y, out, n, BLOCK=block)
+                jt.sync([out], True, False)
+                self.assertEqual(
+                    jt.core._first_finished([bystander]), -1,
+                    "the foreign launch submitted an unrelated pending graph")
+                np.testing.assert_array_equal(out.numpy(), expected)
+            finally:
+                bystander.sync(True, False)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
