@@ -38,6 +38,7 @@ from jittor._core.flags import _output_requires_grad
 from jittor._runtime.dispatch import register_kernel
 
 _MAX_HEAD_DIM = 128
+_FORWARD_KEY_TILE = 64
 #: Below this many blocks a forward grid leaves SMs idle; see `_forward`.
 _SM_BLOCKS = 128
 #: A row recomputes its softmax term when ``1 / sum_k exp(score_k - max)``
@@ -262,13 +263,16 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
     }
 }
 
-template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT, bool FUSED_MADD = false>
+constexpr int KEY_TILE = 64;
+
+template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT, bool FUSED_MADD = false,
+          bool TRIM_KEYS = false, bool SAVE_NORMALIZER = true>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Dropout dropout, mea::Rows ol) {
-    constexpr int BQ = 16 * RPT, BK = 64;
+    constexpr int BQ = 16 * RPT, BK = KEY_TILE;
     constexpr int QP = BQ + 4, KP = BK + 4, DPT = (D + 15) / 16;
     constexpr int KV = D * KP > BK * D ? D * KP : BK * D;
     extern __shared__ float smem[];
@@ -294,6 +298,7 @@ __global__ void __launch_bounds__(THREADS) forward(
     }
     const int kend = CAUSAL ? min(lk, q0 + BQ) : lk;
     for (int k0 = 0; k0 < kend; k0 += BK) {
+        const int tile_keys = TRIM_KEYS ? min(BK, lk - k0) : BK;
         const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL, BQ, BK>(
             mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
         if (!shown) continue;
@@ -312,17 +317,19 @@ __global__ void __launch_bounds__(THREADS) forward(
                 mea::bias4(mask, mask_base + (q0 + ty * RPT + r) * mask.row_stride,
                            k0 + tx * 4, lk, bias[r]);
         }
-        #pragma unroll 4
-        for (int d = 0; d < D; d++) {
-            float qv[RPT];
-            load_rows<RPT>(sq + d * QP + ty * RPT, qv);
-            const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
-            #pragma unroll
-            for (int r = 0; r < RPT; r++) {
-                s[r][0] = FUSED_MADD ? fmaf(qv[r], kv.x, s[r][0]) : s[r][0] + qv[r] * kv.x;
-                s[r][1] = FUSED_MADD ? fmaf(qv[r], kv.y, s[r][1]) : s[r][1] + qv[r] * kv.y;
-                s[r][2] = FUSED_MADD ? fmaf(qv[r], kv.z, s[r][2]) : s[r][2] + qv[r] * kv.z;
-                s[r][3] = FUSED_MADD ? fmaf(qv[r], kv.w, s[r][3]) : s[r][3] + qv[r] * kv.w;
+        if (!TRIM_KEYS || tx * 4 < tile_keys) {
+            #pragma unroll 4
+            for (int d = 0; d < D; d++) {
+                float qv[RPT];
+                load_rows<RPT>(sq + d * QP + ty * RPT, qv);
+                const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    s[r][0] = FUSED_MADD ? fmaf(qv[r], kv.x, s[r][0]) : s[r][0] + qv[r] * kv.x;
+                    s[r][1] = FUSED_MADD ? fmaf(qv[r], kv.y, s[r][1]) : s[r][1] + qv[r] * kv.y;
+                    s[r][2] = FUSED_MADD ? fmaf(qv[r], kv.z, s[r][2]) : s[r][2] + qv[r] * kv.z;
+                    s[r][3] = FUSED_MADD ? fmaf(qv[r], kv.w, s[r][3]) : s[r][3] + qv[r] * kv.w;
+                }
             }
         }
         #pragma unroll
@@ -374,7 +381,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         }
         __syncthreads();
         #pragma unroll 2
-        for (int j = 0; j < BK; j++) {
+        for (int j = 0; j < tile_keys; j++) {
             float p[RPT];
             load_rows<RPT>(sp + j * QP + ty * RPT, p);
             #pragma unroll
@@ -400,7 +407,7 @@ __global__ void __launch_bounds__(THREADS) forward(
         }
         // Keep the maximum and normalization separate: at finfo.min,
         // adding log(l) loses it, and exp(score - lse) would return 1.
-        if (tx == 0) {
+        if (SAVE_NORMALIZER && tx == 0) {
             const size_t index = ((size_t)bh * lq + row) * 2;
             normalizer[index] = m[r];
             normalizer[index + 1] = inv;
@@ -707,7 +714,7 @@ def _mask_args(layout, heads, index):
 
 
 def _smem_register_forward(d, rpt):
-    bq, bk = 16 * rpt, 64
+    bq, bk = 16 * rpt, _FORWARD_KEY_TILE
     return (d * (bq + 4) + max(d * (bk + 4), bk * d) + bk * (bq + 4)) * 4
 
 
@@ -841,21 +848,29 @@ def _forward_view(query, key, value, scale, causal, mask):
     for index, (_, strides, offset) in enumerate(layouts):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
+    # Keep a sequence-major query's layout so a transpose followed by head
+    # concatenation can consume the result without copying it.
+    q_strides = layouts[0][1]
+    seq_major = q_strides[2] > q_strides[1] > 0
+    # Keep the regular unrolled kernel for aligned or mostly full key tiles.
+    trim_keys = 0 < lk % _FORWARD_KEY_TILE <= _FORWARD_KEY_TILE // 2
     src = _launch(
         # Explicit FP32 FMA avoids two instructions and two roundings in the
         # head80 inference dot products even under strict compilation flags.
         # The default template preserves the training forward/backward pair.
-        f"mea_fwd::forward<{d}, {rpt}, {call.template()}, {str(d == 80).lower()}>",
+        f"mea_fwd::forward<{d}, {rpt}, {call.template()}, {str(d == 80).lower()}, "
+        f"{str(trim_keys).lower()}, false>",
         f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
         _smem_register_forward(d, rpt),
-        f"{', '.join(pointers)}, out0_p, out1_p, {lq}, {lk}, {scale!r}f, "
+        f"{', '.join(pointers)}, out0_p, nullptr, {lq}, {lk}, {scale!r}f, "
         f"{_mask_args(mask, str(h), 3 if mask[0] else 0)}, {', '.join(rows)}, "
-        f"mea::Dropout{{nullptr, 1.f}}, {_rows_args('out0', False, str(h), 1)}",
+        f"mea::Dropout{{nullptr, 1.f}}, {_rows_args('out0', seq_major, str(h), 1)}",
         threads="mea_fwd::THREADS")
-    return jt.code(
-        [query.shape, (b, h, lq, 2)], ["float32", "float32"],
+    output = jt.code(
+        (b, lq, h, d) if seq_major else query.shape, "float32",
         [layout[0] for layout in layouts] + call.extras(),
-        cuda_header=_KERNELS, cuda_src=src)[0]
+        cuda_header=_KERNELS, cuda_src=src)
+    return output.transpose(0, 2, 1, 3) if seq_major else output
 
 
 @lru_cache(maxsize=1)
