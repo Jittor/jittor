@@ -3,7 +3,6 @@ from importlib import import_module
 from collections.abc import Sequence
 import warnings
 import contextlib
-import sys
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
 from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
@@ -174,8 +173,7 @@ def _set_data_owner(view, slices, value):
 
 
 def _try_captured_indexed_store(self, slices, value):
-    capture = sys.modules.get('jittor._runtime.step_capture')
-    if capture is None or not capture.active() or not isinstance(value, _NativeVar):
+    if not _owner.jt.core._state_capture_active() or not isinstance(value, _NativeVar):
         return False
     if getattr(self, '_torch_data_owner', None) is not None:
         return False
