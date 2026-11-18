@@ -446,6 +446,24 @@ class TestTritonBackend(unittest.TestCase):
         store_result[(1,)](output, launch_pdl=False)
         self.assertEqual(output.item(), 7)
 
+    def test_callable_grid_receives_and_can_replace_bound_operands(self):
+        @triton.jit
+        def copy_operand(source, output):
+            tl.store(output + tl.program_id(0), tl.load(source + tl.program_id(0)))
+
+        source = jt.zeros(3, dtype="int32")
+        replacement = jt.array(np.array([4, 5, 6], dtype=np.int32))
+        output = jt.zeros(3, dtype="int32")
+
+        def grid(meta):
+            self.assertIs(meta["source"], source)
+            meta["source"] = replacement
+            return (meta["output"].numel(),)
+
+        copy_operand[grid](source, output)
+        np.testing.assert_array_equal(output.numpy(), [4, 5, 6])
+        np.testing.assert_array_equal(source.numpy(), [0, 0, 0])
+
     def test_exceeding_device_shared_memory_raises_triton_resource_error(self):
         from jittor.compat.triton.backend import _Driver
         from triton.runtime.autotuner import OutOfResources
@@ -586,6 +604,9 @@ class TestOptionalPointerPacking(unittest.TestCase):
             arch = 89
 
             def ensure_ctx(self):
+                pass
+
+            def check_shared_memory(self, shared):
                 pass
 
             def ensure_dynamic_shared(self, function, shared):
