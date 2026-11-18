@@ -186,15 +186,22 @@ def _fp32_residual_supported(x, residual, gamma, epsilon=1e-6, weight_offset=0.0
 @optional_kernel("nn.add_rms_norm.fp32_residual.inference", "cuda",
                  supports=_fp32_residual_supported)
 def _fused_add_rms_norm_fp32_residual_cuda(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
+    # Dispatch has already applied the tensor and precision contract. Only
+    # derive the launch geometry here so the direct path does not read every
+    # tensor's dtype and shape twice.
+    hidden_size = int(x.shape[-1])
+    threads = min(256, max(32, 1 << (hidden_size - 1).bit_length()))
     return _fused_add_rms_norm_cuda_code(
-        x, residual, gamma, epsilon, round_before_weight=False, fp32_residual=True, weight_offset=weight_offset)
+        x, residual, gamma, epsilon, round_before_weight=False, fp32_residual=True, weight_offset=weight_offset,
+        contract=(hidden_size, threads, threads // 32, float(epsilon)))
 
 
 def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, round_before_weight,
-                                  fp32_residual=False, weight_offset=0.0):
-    contract = _rms_norm_contract(x, gamma, epsilon, residual=residual)
+                                  fp32_residual=False, weight_offset=0.0, contract=None):
     if contract is None:
-        return None
+        contract = _rms_norm_contract(x, gamma, epsilon, residual=residual)
+        if contract is None:
+            return None
     hidden_size, threads, warps, epsilon_value = contract
     if fp32_residual:
         threads = min(threads, 256)
