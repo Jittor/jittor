@@ -324,6 +324,30 @@ class _OpsDispatcher:
                 _set_item(namespaces, namespace, _OpNamespace(namespace))
             return namespaces[namespace].get_or_create(name)
 
+    def load_library(self, path, *args, **kwargs):
+        """Report a missing compiled extension the way torch does: ImportError.
+
+        `torch.ops.load_library` loads a libtorch C++ extension, an ABI this
+        compat layer does not implement. It used to fall through `__getattr__`
+        to an empty `_OpNamespace`, so calling it raised `TypeError: object is
+        not callable`; libraries that treat a compiled extension as optional
+        only recover from ImportError/OSError. torchvision's `extension.py`
+        is the case that matters: its `try` block catches those two and falls
+        back to the pure-Python implementation instead of failing the whole
+        import.
+        """
+        base = object.__getattribute__(self, "_base")
+        if base is not None:
+            loader = getattr(base, "load_library", None)
+            if loader is not None:
+                return loader(path, *args, **kwargs)
+        raise ImportError(
+            "torch.ops.load_library(%r): jittor-compat has no libtorch C++ "
+            "extension ABI, so a compiled PyTorch extension cannot be loaded. "
+            "Libraries that keep a pure-Python fallback treat this as an "
+            "optional extension and continue without their compiled ops."
+            % (path,))
+
     def __getattr__(self, name):
         namespaces = object.__getattribute__(self, "_namespaces")
         if name in namespaces:
