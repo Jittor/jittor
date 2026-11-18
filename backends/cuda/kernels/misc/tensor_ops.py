@@ -3,10 +3,14 @@
 import jittor as jt
 import numpy as np
 
+from .topk_cuda import supports_wide_topk, wide_topk_cuda
+
 from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
 
+
+register_kernel("tensor.topk", "cuda", wide_topk_cuda, supports=supports_wide_topk)
 
 _CUDA_CODE_BACKENDS = ("cuda", "rocm_legacy", "corex_legacy")
 

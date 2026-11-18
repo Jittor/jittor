@@ -10,6 +10,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import Dict, List, Optional, Tuple
 import zipfile
 
@@ -1917,18 +1918,21 @@ _CPU_PROBE = (
 def _cpu_gate_env(session):
     """The environment both CPU tiers run in, and what it refuses to inherit."""
     _root, env = _session_env(session, "cpu")
-    # safe.directory is multi-valued: adding this checkout through the
-    # environment does not replace an inherited global/system wildcard. Reset
-    # that list first, then trust only this checkout for CPU-gate subprocesses.
-    env.update(
-        {
-            "GIT_CONFIG_COUNT": "2",
-            "GIT_CONFIG_KEY_0": "safe.directory",
-            "GIT_CONFIG_VALUE_0": "",
-            "GIT_CONFIG_KEY_1": "safe.directory",
-            "GIT_CONFIG_VALUE_1": str(REPO_ROOT),
-        }
-    )
+    # Older Git builds only trust safe.directory from a global or system
+    # file. Write one private global file, including no inherited wildcards.
+    home = Path(env["HOME"])
+    gate_config = home / "cpu-gate.gitconfig"
+    with tempfile.TemporaryDirectory(dir=str(home)) as temporary:
+        fresh = Path(temporary) / "config"
+        subprocess.run(["git", "config", "--file", str(fresh),
+                        "safe.directory", str(REPO_ROOT)], check=True)
+        fresh.replace(gate_config)
+    env.update({
+        "GIT_CONFIG_GLOBAL": str(gate_config),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_COUNT": "0",
+        "GIT_CONFIG_PARAMETERS": None,
+    })
     # Nox overlays this mapping on the parent environment, so removing the key
     # would still leak a caller-provided real Torch into ordinary Jittor tests.
     env["REAL_TORCH_SITE"] = ""

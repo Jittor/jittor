@@ -20,12 +20,14 @@ Run:  python -m pytest compat/tests/triton/test_triton_backend.py
 
 from _helpers import capability as _test_capability
 import ctypes
+import gc
 import importlib.util
 import importlib.machinery
 import os
 import sys
 import types
 import unittest
+import weakref
 from contextlib import ExitStack
 from unittest import mock
 import numpy as np
@@ -246,6 +248,33 @@ def setUpModule():
 
 @unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
 class TestTritonBackend(unittest.TestCase):
+    def test_compiled_kernel_identity_survives_callable_collection(self):
+        """An ID-keyed entry must not become another kernel's cache hit."""
+        def plus_one(X, O, N: tl.constexpr):
+            i = tl.arange(0, N)
+            tl.store(O + i, tl.load(X + i) + 1)
+
+        def plus_two(X, O, N: tl.constexpr):
+            i = tl.arange(0, N)
+            tl.store(O + i, tl.load(X + i) + 2)
+
+        x = jt.array(np.arange(32, dtype=np.float32))
+        references = []
+        with mock.patch.object(_shim.backend, "_COMPILE_CACHE", {}):
+            for index in range(16):
+                kernel = triton.jit(plus_one if index % 2 == 0 else plus_two)
+                out = jt.empty((32,), dtype="float32")
+                kernel[(1,)](x, out, N=32)
+                np.testing.assert_array_equal(
+                    out.numpy(), np.arange(32, dtype=np.float32) + 1 + index % 2)
+                references.append(weakref.ref(kernel))
+                del kernel
+                gc.collect()
+            # Deterministic even if this allocator run did not recycle an ID.
+            # A real CUDA reproducer returned x+1 for plus_two when it did.
+            self.assertTrue(all(reference() is not None for reference in references),
+                            "a cached kernel identity can be recycled by Python")
+
     @classmethod
     def setUpClass(cls):
         from _helpers.runtime_policy import fixture_stack
