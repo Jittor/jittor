@@ -325,6 +325,12 @@ class _OpsDispatcher:
             return namespaces[namespace].get_or_create(name)
 
     def __getattr__(self, name):
+        if name == "load_library":
+            # Libraries probe compiled extensions with try/except ImportError;
+            # answer with ImportError instead of a non-callable namespace.
+            raise ImportError(
+                "torch.ops.load_library is not supported by the Jittor compatibility "
+                "layer; compiled Torch extensions cannot be loaded")
         namespaces = object.__getattribute__(self, "_namespaces")
         if name in namespaces:
             return namespaces[name]
@@ -411,6 +417,34 @@ class Library:
         return None
 
 
+class _CustomOpDef:
+    """Callable result of torch.library.custom_op with torch's registration hooks."""
+
+    def __init__(self, name, implementation):
+        self._name = name
+        self._implementation = implementation
+        self._fake = None
+        self._autograd = None
+
+    def __call__(self, *args, **kwargs):
+        return self._implementation(*args, **kwargs)
+
+    def register_fake(self, fn=None):
+        if fn is None:
+            return lambda function: self.register_fake(function)
+        self._fake = fn
+        return fn
+
+    def register_autograd(self, fn=None):
+        if fn is None:
+            return lambda function: self.register_autograd(function)
+        self._autograd = fn
+        return fn
+
+    def __repr__(self):
+        return "<custom_op %s>" % self._name
+
+
 def custom_op(name=None, fn=None, *args, **kwargs):
     """torch.library.custom_op -- a generic registration API.
 
@@ -434,6 +468,10 @@ def custom_op(name=None, fn=None, *args, **kwargs):
                 "CompositeExplicitAutograd", override or implementation,
                 allow_override=True
             )
+            # torch returns a CustomOpDef that stays callable and exposes
+            # register_fake / register_autograd; libraries such as comfy_kitchen
+            # decorate the returned object further.
+            return _CustomOpDef(name, implementation)
         return implementation
 
     return decorator(fn) if fn is not None else decorator

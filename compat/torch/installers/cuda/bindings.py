@@ -343,8 +343,26 @@ def _install_cuda(g, registry=None):
         # tune -- but the call has to exist, because the caller makes it before
         # asking whether it could have had any effect.
         c_mod._accelerator_setAllocatorSettings = _api_c_mod__accelerator_setAllocatorSettings
+        types_mod = _modules.get("torch.types")
+        if types_mod is None:
+            types_mod = _types.ModuleType("torch.types")
+            _modules["torch.types"] = types_mod
+        types_mod._device = getattr(types_mod, "_device", str)
+        types_mod._dtype = getattr(types_mod, "_dtype", object)
+        types_mod._size = getattr(types_mod, "_size", tuple)
+        g.types = types_mod
+        c_mod.DisableTorchFunctionSubclass = _DisableTorchFunctionMode
+        c_mod.DisableTorchFunction = _DisableTorchFunctionMode
+        c_mod.DispatchKey = _DispatchKey
+        c_mod.DispatchKeySet = _DispatchKeySet
+        c_mod._ExcludeDispatchKeyGuard = _ExcludeDispatchKeyGuard
+        c_mod._dispatch_tls_set_dispatch_key_excluded = lambda keys, enabled: None
+        c_mod._dispatch_tls_is_dispatch_key_excluded = lambda key: False
         c_mod._cuda_setAllocatorSettings = getattr(
             c_mod, "_cuda_setAllocatorSettings", _api_c_mod__cuda_setAllocatorSettings)
+        custom_ops = _types.ModuleType("torch._custom_ops")
+        custom_ops.get_ctx = _api_custom_ops_get_ctx
+        _modules["torch._custom_ops"] = custom_ops
         _modules["torch._C"] = c_mod
         _modules["torch._C._nn"] = nn_c
         _modules["torch._C._functorch"] = functorch_c
@@ -508,6 +526,61 @@ def _install_accelerator(g, registry=None):
     g.accelerator = accelerator
     if registry is not None:
         registry.publish("torch.accelerator", accelerator)
+
+
+class _DispatchKeyRegistry:
+    _names = ("CPU", "CUDA", "Meta", "XPU", "MPS", "AutocastCPU", "AutocastCUDA",
+              "AutocastXPU", "Autograd", "CompositeImplicitAutograd",
+              "CompositeExplicitAutograd", "BackendSelect", "Undefined")
+
+
+_DispatchKey = _DispatchKeyRegistry()
+for _key_name in _DispatchKeyRegistry._names:
+    setattr(_DispatchKey, _key_name, _key_name)
+
+
+class _DispatchKeySet:
+    def __init__(self, key=None):
+        self._keys = set()
+        if key is not None:
+            for item in key if isinstance(key, (tuple, list, set)) else (key,):
+                self._keys.add(item)
+
+    def __or__(self, other):
+        result = _DispatchKeySet()
+        result._keys = set(self._keys) | set(other._keys)
+        return result
+
+    def __contains__(self, item):
+        return item in self._keys
+
+    def __iter__(self):
+        return iter(self._keys)
+
+
+class _ExcludeDispatchKeyGuard:
+    def __init__(self, keys):
+        self.keys = keys
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _api_custom_ops_get_ctx():
+    raise NotImplementedError(
+        "torch._custom_ops.get_ctx is only meaningful inside a Torch fake kernel; "
+        "Jittor executes eagerly and has no FakeTensor context")
+
+
+class _DisableTorchFunctionMode:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
 def install(ctx):

@@ -959,9 +959,74 @@ def install_parity(ctx):
     if not hasattr(testing, "assert_close"):
 
         testing.assert_close = assert_close
+    if not hasattr(testing, "__path__"):
+        testing.__path__ = []
+    if not hasattr(testing, "_comparison"):
+        comparison = module("torch.testing._comparison")
+
+        class _PairBase:
+            def __init__(self, actual, expected, *, rtol=None, atol=None, equal_nan=True, msg=None, **kwargs):
+                self.actual = actual
+                self.expected = expected
+                self.rtol = rtol
+                self.atol = atol
+                self.equal_nan = equal_nan
+                self.msg = msg
+
+            def compare(self):
+                import jittor as _jt
+                rtol = 1.3e-6 if self.rtol is None else self.rtol
+                atol = 1e-5 if self.atol is None else self.atol
+                try:
+                    return bool(_jt.allclose(self.actual, self.expected, rtol=rtol, atol=atol,
+                                             equal_nan=self.equal_nan))
+                except Exception:
+                    return self.actual == self.expected
+
+        class TensorLikePair(_PairBase):
+            pass
+
+        class NumberPair(_PairBase):
+            pass
+
+        class BooleanPair(_PairBase):
+            pass
+
+        class NonePair(_PairBase):
+            pass
+
+        def not_close_error_metas(actual, expected, pair_types=None, rtol=None, atol=None,
+                                  equal_nan=True, msg=None):
+            candidates = pair_types or (NonePair, BooleanPair, NumberPair, TensorLikePair)
+            for pair_type in candidates:
+                try:
+                    pair = pair_type(actual, expected, rtol=rtol, atol=atol,
+                                     equal_nan=equal_nan, msg=msg)
+                except Exception:
+                    continue
+                try:
+                    if pair.compare():
+                        return []
+                except Exception:
+                    continue
+            return [msg or "values are not close: %r vs %r" % (actual, expected)]
+
+        comparison.TensorLikePair = TensorLikePair
+        comparison.NumberPair = NumberPair
+        comparison.BooleanPair = BooleanPair
+        comparison.NonePair = NonePair
+        comparison.not_close_error_metas = not_close_error_metas
+        testing._comparison = comparison
     g.testing = testing
 
     model_zoo = module("torch.utils.model_zoo")
+    if not hasattr(model_zoo, "tqdm"):
+        try:
+            from tqdm import tqdm as _model_zoo_tqdm
+        except ImportError:
+            _model_zoo_tqdm = None
+        if _model_zoo_tqdm is not None:
+            model_zoo.tqdm = _model_zoo_tqdm
     if not hasattr(model_zoo, "load_url"):
 
         model_zoo.load_url = load_url

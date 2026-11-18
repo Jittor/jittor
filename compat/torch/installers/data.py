@@ -54,6 +54,8 @@ def _install_torchdata_stateful_dataloader(g, registry=None):
 
 
 class _TorchDataset:
+    def __class_getitem__(cls, item):
+        return cls
     def __getitem__(self, i):
         raise NotImplementedError
     def __add__(self, other):
@@ -145,6 +147,8 @@ class _Subset(_TorchDataset):
 
 
 class _Sampler:
+    def __class_getitem__(cls, item):
+        return cls
     def __init__(self, data_source=None):
         self.data_source = data_source
     def __iter__(self):

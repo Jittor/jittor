@@ -412,6 +412,13 @@ def _manual_seed(s):
     # never calls the convenience API that also reseeds Python and NumPy.
     jt.core._set_seed64(value)
     ctx.state["core_misc"]["seed"] = value
+    # torch.manual_seed also resets the CPU draw sequence every torch.randn
+    # (without an explicit generator) comes from; see generator._TorchCPUStream.
+    try:
+        from .. import generator as _generator
+        _generator._reseed_global_cpu_stream(value)
+    except Exception:
+        pass
     return ctx.target_namespace.default_generator
 
 
@@ -419,6 +426,13 @@ def _manual_seed_cpu(s):
     value = _normalize_seed(s, integer=True)
     jt.core.rng_manual_seed("cpu", value)
     _misc_context().state["core_misc"]["seed"] = value
+    # Keep the torch-compatible CPU draw sequence (see generator._TorchCPUStream)
+    # in step with the seed torch.manual_seed installs.
+    try:
+        from .. import generator as _generator
+        _generator._reseed_global_cpu_stream(value)
+    except Exception:
+        pass
 
 
 def _torch_seed():
@@ -1143,8 +1157,17 @@ class _ForkRng:
             # raises "int() argument must be ... not 'device'". The accessors
             # below already take an index, a device or a string.
             self._targets = tuple(devices)
-            self._device_states = tuple(
-                cuda.get_rng_state(device) for device in self._targets)
+            try:
+                self._device_states = tuple(
+                    cuda.get_rng_state(device) for device in self._targets)
+            except NotImplementedError:
+                # A build without cuRAND offset tracking has no position to
+                # save or restore (see cuda_rng_state_is_supported). Fork the
+                # host generator and leave the device generator alone instead
+                # of failing the request: the block still runs, and the only
+                # consequence is that the device sequence is not rewound.
+                self._targets = ()
+                self._device_states = ()
         return self
 
     def __exit__(self, exc_type, exc, traceback):

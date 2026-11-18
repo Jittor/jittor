@@ -36,8 +36,11 @@ def _bytes_to_np(raw, st_dtype, shape):
     npd, _itemsize = _ST[st_dtype]
     shape = tuple(shape)
     if _jittor_dtype_name(st_dtype) == "BF16":
-        u16 = np.frombuffer(raw, dtype=np.uint16).astype(np.uint32)
-        return (u16 << 16).view(np.float32).reshape(shape)
+        # Keep the bf16 bits as uint16. Expanding to float32 here cost an
+        # astype over every element plus a shift (91 s of one 5 GiB shard in a
+        # profile) and doubled peak host memory; _to_tensor reinterprets the
+        # same bits with jittor's reinterpret_view instead.
+        return np.frombuffer(raw, dtype=np.uint16).reshape(shape)
     return np.frombuffer(raw, dtype=npd).reshape(shape)
 
 
@@ -46,8 +49,11 @@ def _to_tensor(array, st_dtype, device):
     array = np.asarray(array)
     if not array.flags.c_contiguous:
         array = np.ascontiguousarray(array)
-    dtype = "bfloat16" if _jittor_dtype_name(st_dtype) == "BF16" else array.dtype.name
-    tensor = g.tensor(array, dtype=dtype, device="cpu", requires_grad=False)
+    if _jittor_dtype_name(st_dtype) == "BF16":
+        bits = g.tensor(array, dtype="uint16", device="cpu", requires_grad=False)
+        tensor = jt.reinterpret_view(bits, list(array.shape), jt.bfloat16)
+    else:
+        tensor = g.tensor(array, dtype=array.dtype.name, device="cpu", requires_grad=False)
     target_device = "cpu" if device is None else device
     if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
         target_device = "cuda:%d" % int(target_device)

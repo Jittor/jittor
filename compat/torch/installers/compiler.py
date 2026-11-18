@@ -1,5 +1,6 @@
 """Stable compiler/transform facades and explicit installation bindings."""
 
+import types as _types_c
 import sys as _sys
 
 import jittor as jt
@@ -744,6 +745,10 @@ def install(ctx):
         "torch.jit.trace", trace, Fidelity.APPROXIMATE,
         "Jittor returns the eager callable instead of a traced artifact.")
     _jit.script_if_tracing = _api_jit_script_if_tracing
+    _jit._script_if_tracing = _api_jit_script_if_tracing
+    _jit._overload = lambda function: function
+    _jit._overload_method = lambda function: function
+    _jit._overload_function = lambda function: function
     _jit.ignore = _api_jit_ignore
     _jit.unused = _api_jit_unused
     _jit.export = _api_jit_export
@@ -879,6 +884,33 @@ def install_parity(ctx):
 
     onnx = module("torch.onnx")
     onnx.is_in_onnx_export = _api_onnx_is_in_onnx_export
+    if not hasattr(onnx, "register_custom_op_symbolic"):
+        onnx.register_custom_op_symbolic = lambda *args, **kwargs: None
+    if not hasattr(onnx, "symbolic_helper"):
+        _sh = module("torch.onnx.symbolic_helper")
+
+        def _parse_args(*arg_types):
+            def decorator(function):
+                return function
+            return decorator
+
+        _sh.parse_args = _parse_args
+        _sh._parse_arg = lambda *args, **kwargs: (lambda function: function)
+        onnx.symbolic_helper = _sh
+    if not hasattr(onnx, "symbolic_opset11"):
+        class _SymbolicOpset(_types_c.ModuleType):
+            def __getattr__(self, name):
+                if name.startswith("__") and name.endswith("__"):
+                    raise AttributeError(name)
+
+                def _unsupported(*args, **kwargs):
+                    raise NotImplementedError(
+                        "ONNX symbolic export is not supported by the Jittor compatibility layer")
+                return _unsupported
+
+        _opset = module("torch.onnx.symbolic_opset11")
+        _opset.__class__ = _SymbolicOpset
+        onnx.symbolic_opset11 = _opset
 
 
     onnx.export = onnx_export

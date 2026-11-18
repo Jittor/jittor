@@ -192,6 +192,42 @@ def _install_nn_extras(nn, registry=None):
         _u = getattr(nn, "utils", None) or _t.ModuleType("torch.nn.utils")
 
         _u.clip_grad_norm_ = clip_grad_norm_
+        # --- nn.utils.fusion (timm and torchvision import it at module scope) ---
+        import sys as _sys
+        if not hasattr(_u, "fusion"):
+            import types as _tf
+
+            def fuse_conv_bn_weights(conv_w, conv_b, bn_rm, bn_rv, bn_eps, bn_w, bn_b):
+                if conv_b is None:
+                    conv_b = _t.zeros_like(bn_rm) if False else conv_w.new_zeros(conv_w.shape[0])
+                if bn_w is None:
+                    bn_w = bn_rm.new_ones(bn_rm.shape)
+                if bn_b is None:
+                    bn_b = bn_rm.new_zeros(bn_rm.shape)
+                scale = bn_w * (bn_rv + bn_eps).rsqrt()
+                shape = [1] * conv_w.dim()
+                shape[0] = conv_w.shape[0]
+                conv_w = conv_w * scale.reshape(shape)
+                conv_b = (conv_b - bn_rm) * scale + bn_b
+                return conv_w, conv_b
+
+            def fuse_conv_bn_eval(conv, bn, transpose=False):
+                import copy
+                fused = copy.deepcopy(conv)
+                weight, bias = fuse_conv_bn_weights(
+                    conv.weight, conv.bias, bn.running_mean, bn.running_var,
+                    bn.eps, bn.weight, bn.bias)
+                fused.weight.assign(weight)
+                if fused.bias is not None:
+                    fused.bias.assign(bias)
+                return fused
+
+            _f = _tf.ModuleType("torch.nn.utils.fusion")
+            _f.fuse_conv_bn_weights = fuse_conv_bn_weights
+            _f.fuse_conv_bn_eval = fuse_conv_bn_eval
+            _u.fusion = _f
+            _modules["torch.nn.utils.fusion"] = _f
+
         _u.clip_grad_value_ = clip_grad_value_
 
         # --- weight_norm / spectral_norm (reparametrizations) ---

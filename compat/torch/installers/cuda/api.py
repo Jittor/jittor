@@ -1177,7 +1177,14 @@ def _api_cuda_manual_seed(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
-    _curand().curand_restore_state(_rng_device_index(None), seed, 0)
+    backend = _curand(required=False)
+    if backend is None:
+        # Without cuRAND offset tracking there is no position to restore, but a
+        # seed still starts a reproducible sequence: seed jittor's generator
+        # rather than refusing a call torch always accepts.
+        jt.set_seed(seed)
+        return
+    backend.curand_restore_state(_rng_device_index(None), seed, 0)
 
 
 def _api_cuda_manual_seed_all(s):
@@ -1188,7 +1195,10 @@ def _api_cuda_manual_seed_all(s):
     from ..core import _normalize_seed
     seed = _normalize_seed(seed)
     jt.sync_all(True)
-    backend = _curand()
+    backend = _curand(required=False)
+    if backend is None:
+        jt.set_seed(seed)
+        return
     for index in range(count):
         backend.curand_restore_state(index, seed, 0)
 
@@ -1360,7 +1370,13 @@ def _api_cuda_get_rng_state(device=None, *a, **k):
     # position the device has not reached: the saved state would then be ahead
     # of the data the checkpoint was taken with.
     jt.sync_all(True)
-    backend = _curand()
+    try:
+        backend = _curand()
+    except NotImplementedError:
+        # No cuRAND offset on this accelerator; the shim seeds the host stream,
+        # so save that state instead of refusing to snapshot at all.
+        from ..core import _get_rng_state
+        return _get_rng_state()
     index = _rng_device_index(device)
     return _rng_state_pack(backend.curand_generator_seed(index),
                            backend.curand_generator_offset(index))
@@ -1371,17 +1387,33 @@ def _api_cuda_get_rng_state_all(*a, **k):
     if not count:
         return []
     jt.sync_all(True)
-    backend = _curand()
+    try:
+        backend = _curand()
+    except NotImplementedError:
+        from ..core import _get_rng_state
+        return [_get_rng_state() for _ in range(count)]
     return [_rng_state_pack(backend.curand_generator_seed(i), backend.curand_generator_offset(i))
             for i in range(count)]
 
 
 def _api_cuda_set_rng_state(state, device=None, *a, **k):
-    seed, offset = _rng_state_unpack(state)
+    try:
+        seed, offset = _rng_state_unpack(state)
+    except ValueError:
+        from ..core import _set_rng_state
+        jt.sync_all(True)
+        _set_rng_state(state)
+        return
     # Parsed before anything is touched, so a malformed state leaves the
     # generator where it was rather than half-restored.
     jt.sync_all(True)
-    _curand().curand_restore_state(_rng_device_index(device), seed, offset)
+    try:
+        backend = _curand()
+    except NotImplementedError:
+        from ..core import _set_rng_state
+        _set_rng_state(state)
+        return
+    backend.curand_restore_state(_rng_device_index(device), seed, offset)
 
 
 def _api_cuda_set_rng_state_all(states, *a, **k):
@@ -1389,7 +1421,12 @@ def _api_cuda_set_rng_state_all(states, *a, **k):
     if not parsed:
         return
     jt.sync_all(True)
-    backend = _curand()
+    try:
+        backend = _curand()
+    except NotImplementedError:
+        from ..core import _set_rng_state
+        _set_rng_state(states[0])
+        return
     for index, (seed, offset) in enumerate(parsed):
         backend.curand_restore_state(index, seed, offset)
 

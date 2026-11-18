@@ -112,6 +112,9 @@ def install_parity(ctx):
             getattr(nn, "InstanceNorm3d", None),
         ),
     )
+    for _norm_name in ("InstanceNorm1d", "InstanceNorm2d", "InstanceNorm3d"):
+        if hasattr(nn, _norm_name) and not hasattr(instancenorm, _norm_name):
+            setattr(instancenorm, _norm_name, getattr(nn, _norm_name))
     modules.instancenorm = instancenorm
 
     stateless = registry.ensure("torch.nn.utils.stateless")

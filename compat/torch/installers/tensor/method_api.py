@@ -173,6 +173,7 @@ def _torch_setitem(self, slices, value):
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_setitem = _native['_orig_setitem']
+    slices = _drop_trailing_full_slices(slices)
     slices = _align_advanced_index(self, slices)
     # PyTorch promotes a no-grad destination to a differentiable non-leaf when
     # an indexed assignment consumes a grad-enabled source. Jittor otherwise
@@ -257,6 +258,12 @@ def _torch_setitem(self, slices, value):
 
 #: Depth of `_optimizer_write_scope`: readers resolved for a whole group.
 _OPTIMIZER_WRITES = [0]
+import os as _os
+_SYNC_TRACE = _os.environ.get("MM_SYNC_TRACE") == "1"
+_WRITE_COUNT = [0]
+_WRITE_TRACE_ON = [False]
+_TRACE_N = [0]
+_GLOBAL_SYNCS = [0]
 
 
 @contextlib.contextmanager
@@ -296,7 +303,29 @@ def _copy_detached_storage(self, value):
         # storage at its boundary. Executing a store here would run part of
         # the step before that transaction can accept or refuse the graph.
         return False
+    from jittor._runtime import graph_replay as _graph_replay
+    if getattr(_graph_replay._capture_state, "stack", ()):
+        # A replay capture traces this call to record it, not to run it.  The
+        # host sync below executes the partially recorded graph, and every
+        # in-place update re-executes everything traced so far: a second
+        # MiniMax-H3 request spent minutes inside the BigVGAN capture on
+        # ``xs += resblock(...)``.  The storage write an alias depends on
+        # cannot be replayed either, so keep the graph write and have the
+        # capture refused.
+        _graph_replay.graph_replay_barrier("in-place storage write")
+        return False
     if self.numel():
+        _WRITE_COUNT[0] += 1
+        if (_os.environ.get("MM_WRITE_TRACE") == "1" and _WRITE_TRACE_ON[0]
+                and _TRACE_N[0] < 60):
+            _TRACE_N[0] += 1
+            import traceback as _tb
+            _frames = [f for f in _tb.extract_stack(limit=8)
+                       if "/compat/torch/installers/tensor/method_api.py" not in f.filename]
+            _caller = _frames[-2] if len(_frames) >= 2 else (_frames[0] if _frames else None)
+            if _caller is not None:
+                print(f"WRITE_TRACE {_caller.filename}:{_caller.lineno} "
+                      f"{_caller.name} shape={tuple(self.shape)}", flush=True)
         # Establish the destination before a storage-preserving write. A
         # pending view may already alias a materialized base; graph rebinding
         # would lose that storage, its overlap guards and its gradient history.
@@ -313,7 +342,18 @@ def _copy_detached_storage(self, value):
         # whose graph contains this tensor's readers.
         if _OPTIMIZER_WRITES[0]:
             value.sync()
+        elif _SYNC_TRACE:
+            import time as _time
+            import traceback as _tb
+            _t0 = _time.time()
+            _owner.jt.sync_all()
+            _dt = _time.time() - _t0
+            if _dt > 0.25:
+                _frame = _tb.extract_stack(limit=4)[0]
+                print(f"SYNC_TRACE {_dt:.2f}s keep_graph={_owner.jt.flags.keep_graph} "
+                      f"at {_frame.filename}:{_frame.lineno}", flush=True)
         else:
+            _GLOBAL_SYNCS[0] += 1
             _owner.jt.sync_all()
         if not self._mem_ptr_now or not value._mem_ptr_now:
             # Still unbuilt after the sync: a call being captured for replay,
@@ -672,6 +712,27 @@ def _is_basic_index(index):
     return isinstance(index, _owner.numbers.Integral) and not isinstance(index, (bool, _owner.np.bool_))
 
 
+
+_DROP_FULL_SLICES = __import__("os").environ.get("MM_DROP_FULL_SLICES") != "0"
+
+
+def _drop_trailing_full_slices(index):
+    if not _DROP_FULL_SLICES:
+        return index
+    """``x[idx, :, :]`` is ``x[idx]``: trailing full slices index nothing.
+
+    The ACL getitem lowers a Var index followed by explicit slices into its
+    slice path, which rejects Var indices ("does not support Var slice
+    indices"). Dropping the full slices keeps the advanced-index path.
+    """
+    if isinstance(index, tuple) and len(index) > 1:
+        rest = index[1:]
+        if all(isinstance(item, slice) and item.start is None
+               and item.stop is None and item.step is None for item in rest):
+            return index[0]
+    return index
+
+
 def _align_advanced_index(data, index):
     """Move tensor indices beside the indexed tensor before native dispatch."""
     if isinstance(index, _NativeVar):
@@ -700,6 +761,7 @@ def _torch_getitem(self, slices):
         return index
 
     slices = normalize(slices)
+    slices = _drop_trailing_full_slices(slices)
     slices = _align_advanced_index(self, slices)
     # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
     fast = _owner.jt.core._fast_getitem(self, slices)
@@ -1127,6 +1189,25 @@ def _pin_memory(self, device=None):
     out = _var_cpu(self)
     if out is self:
         out = _var_cpu(self.clone())
+    import os as _os
+    if _os.environ.get("MM_TRUE_PIN") == "1":
+        # The ACL backend has a real page-locked allocator (aclrtMallocHost)
+        # selected by jt.core.Flags().use_cuda_host_allocator. Materialize the
+        # host copy under it instead of the plain host allocator: DMA out of
+        # registered memory is what makes non_blocking H2D actually overlap.
+        try:
+            import jittor as _jt
+            _flags = _jt.core.Flags()
+            _prev = _flags.use_cuda_host_allocator
+            _flags.use_cuda_host_allocator = 1
+            try:
+                _out = out.clone()
+                _out.sync()
+            finally:
+                _flags.use_cuda_host_allocator = _prev
+            out = _out
+        except Exception:
+            pass
     try:
         setattr(out, _PINNED_ATTRIBUTE, True)
     except (AttributeError, TypeError) as exc:

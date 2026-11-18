@@ -17,7 +17,7 @@ from ..api_delegates import bind_delegates
 import jittor as jt
 import numpy as np
 
-from ..types import _dtype_to_str
+from ..types import _dtype_to_str, _make_cpu_resident
 from ..nested import _torch_register_leaf
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
@@ -166,11 +166,86 @@ def randint(*args, **kwargs):
     return _invoke_factory("randint", args, kwargs)
 
 
+def _torch_stream_randn(name, args, kwargs):
+    """CPU float draws from torch's MT19937 stream, with or without a generator.
+
+    Returns ``None`` when the draw is not a CPU float randn, so the caller
+    falls through to the native sampler.
+    """
+    if name not in ("randn", "randn_like"):
+        return None
+    if __import__("os").environ.get("MM_RANDN_NATIVE") == "1":
+        return None
+    placement = jt.core._current_tensor_placement()
+    requested = kwargs.get("device")
+    if requested is not None:
+        # An explicit device decides, as in torch.
+        is_cpu = str(requested).split(":")[0] in ("cpu", "")
+    else:
+        # torch's default device is the host unless set_default_device moved
+        # it. The shim's placement context is its own idea of "current" and
+        # does not move torch's default, so a no-device draw is a host draw.
+        is_cpu = True
+    _dbg = __import__("os").environ.get("MM_RANDN_DEBUG") == "1"
+    if not is_cpu:
+        if _dbg:
+            print("RANDN_DEBUG skip: not cpu", requested, placement, flush=True)
+        return None
+    if kwargs.get("out") is not None:
+        return None
+    src = None
+    if name == "randn_like":
+        src = args[0] if args else kwargs.get("input")
+        if src is None:
+            return None
+        shape = tuple(int(s) for s in src.shape)
+        dtype = kwargs.get("dtype") or src.dtype
+    else:
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            shape = tuple(int(a) for a in args[0])
+        elif args and all(isinstance(a, int) and not isinstance(a, bool) for a in args):
+            shape = tuple(int(a) for a in args)
+        elif "size" in kwargs:
+            shape = tuple(int(a) for a in kwargs["size"])
+        else:
+            return None
+        dtype = kwargs.get("dtype")
+    cast_to = _dtype_to_str(dtype) if dtype is not None else None
+    if cast_to is None:
+        from ..context import get_install_context as _ctx
+        cast_to = _dtype_to_str(_ctx(jt).target_namespace.get_default_dtype())
+    if cast_to not in ("float32", "float64"):
+        return None
+    generator = kwargs.get("generator")
+    stream = None
+    if generator is not None:
+        stream = getattr(generator, "_torch_stream", None)
+    else:
+        from .. import generator as _generator
+        stream = _generator._global_cpu_stream()
+    if stream is None:
+        return None
+    count = 1
+    for dim in shape:
+        count *= int(dim)
+    numpy_dtype = np.float32 if cast_to == "float32" else np.float64
+    array = np.asarray(stream.fill_normal(count), dtype=np.float64).astype(numpy_dtype).reshape(shape)
+    if _dbg:
+        print("RANDN_DEBUG used: shape", shape, "first", round(float(array.ravel()[0]), 7), flush=True)
+    return _make_cpu_resident(jt.array(array))
+
+
 def randn(*args, **kwargs):
+    fixed = _torch_stream_randn("randn", args, kwargs)
+    if fixed is not None:
+        return fixed
     return _invoke_factory("randn", args, kwargs)
 
 
 def randn_like(*args, **kwargs):
+    fixed = _torch_stream_randn("randn_like", args, kwargs)
+    if fixed is not None:
+        return fixed
     return _invoke_factory("randn_like", args, kwargs)
 
 
@@ -611,6 +686,22 @@ def _draw_from_generator(name, generator, args, kwargs):
         cast_to = _INTEGER_DRAWS[name]
     else:
         cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
+    if (name in ("randn", "randn_like") and cast_to in ("float32", "float64")):
+        stream = getattr(generator, "_torch_stream", None)
+        placement = jt.core._current_tensor_placement()
+        backend = placement[0] if placement is not None else 0
+        if stream is not None and backend == 0:
+            # Torch draws its CPU normals from std::mt19937 through the cached
+            # Box-Muller of ATen's normal_distribution; the shim's native
+            # engine is a different stream, so a request that seeds a
+            # torch.Generator and expects torch's values only gets them here.
+            count = 1
+            for dim in shape:
+                count *= int(dim)
+            values = stream.fill_normal(count)
+            numpy_dtype = np.float32 if cast_to == "float32" else np.float64
+            array = np.asarray(values, dtype=np.float64).astype(numpy_dtype).reshape(shape)
+            return jt.array(array)
     if name in ("randn", "randn_like", "rand", "rand_like"):
         if cast_to in _COMPLEX_COMPONENTS:
             t = _complex_random(name, shape, cast_to, generator=native)

@@ -1199,6 +1199,31 @@ def install_methods(ctx):
         Var.remainder = _shape_remainder
     if not hasattr(Var, "softplus"):    Var.softplus = _shape_softplus
 
+    def _tensor_lerp(input, end, weight):
+        """Tensor.lerp: linear interpolation, matching torch.lerp."""
+        return input + weight * (end - input)
+
+
+    if not hasattr(Var, "lerp"):
+        Var.lerp = _tensor_lerp
+
+
+    def _tensor_format(v, format_spec):
+        """Tensor.__format__: single-element tensors format their value; tensors print.
+
+        torch.Tensor.__format__ calls item() only for 0-dim tensors and otherwise
+        falls back to object.__format__, so f"{tensor}" prints the tensor. Jittor's
+        Var.__format__ called item() unconditionally and raised on multi-element
+        values, which broke any failure message that interpolated a tensor.
+        """
+        if v.numel() == 1:
+            return v.item().__format__(format_spec)
+        return object.__format__(v, format_spec)
+
+
+    Var.__format__ = _tensor_format
+
+
     ctx.state["tensor_shape_api"] = MappingProxyType({
         "reductions": MappingProxyType(_native_reductions),
         '_Size': locals().get('_Size'),
