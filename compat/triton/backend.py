@@ -46,6 +46,7 @@ import threading
 import time
 from ..diagnostics import EXPECTED, swallowed
 from .argument_binding import bind_arguments
+from .batch import current_batch
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
 
@@ -1247,6 +1248,11 @@ def run(jitfn, args, kwargs, grid):
     """
     from jittor._runtime.graph_replay import graph_replay_barrier
     graph_replay_barrier("Triton launch is not recorded in the native graph")
+    batch = current_batch()
+    if batch is not None:
+        if batch.enqueue(jitfn, args, kwargs, grid):
+            return None
+        batch.flush()
     rt = _ambient_runtime()
     before = _current_device(rt)
     try:

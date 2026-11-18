@@ -91,7 +91,14 @@ import types
 from . import language
 from ..diagnostics import EXPECTED, swallowed
 
+def batch_launches(kernels):
+    """Group explicitly selected eager Triton launches."""
+    from .batch import batch_launches as launch_batch
+    return launch_batch(kernels)
+
+
 __all__ = [
+    "batch_launches",
     "jit", "JITFunction", "KernelInterface",
     "cdiv", "next_power_of_2", "Config", "autotune", "heuristics",
     "language", "runtime", "OutOfResources", "TritonError",
