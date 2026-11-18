@@ -148,3 +148,27 @@ print('INCREMENTAL_RESULT=' + json.dumps({{
     restored = execute(8)
     assert "jitincremental_op.jit.cc" not in restored["source"]
     assert restored["kernels"] != fourth["kernels"]
+
+
+
+def test_native_module_with_only_free_function_bindings(tmp_path):
+    header = tmp_path / "binding_only.h"
+    source = tmp_path / "binding_only.cc"
+    header.write_text("""
+#pragma once
+namespace jittor {
+// @pyjt(increment)
+int increment(int value);
+}
+""")
+    source.write_text("""
+#include "binding_only.h"
+namespace jittor {
+int increment(int value) { return value + 1; }
+}
+""")
+    module = jt.compile_custom_ops(
+        [str(header), str(source)], extra_flags=f' -I"{tmp_path}" ',
+        gen_name_="test_binding_only", return_module=True)
+    assert module.increment(41) == 42
+    assert not hasattr(module.ops, "increment")
