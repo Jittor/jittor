@@ -115,6 +115,18 @@ def _grad_tolerance(prob, cot_np, grad_ref, log, sum_error):
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestSoftmaxCudaGrad(unittest.TestCase):
+    def test_wide_fp32_log_softmax_cuda_reduction_order(self):
+        # Independent Torch 2.13 CUDA results, including unaligned row starts.
+        references = {65537: [3239038572, 3239038579, 3239038665],
+                      151936: [3239920325, 3239920350, 3239920552]}
+        with jt.flag_scope(use_cuda=1, cuda_kernel_math="strict"):
+            for width, expected in references.items():
+                raw = ((np.arange(3 * width) % 37).astype(np.float32)
+                       .reshape(3, width) * .25)
+                y = softmax_v1(jt.array(raw), log=True).numpy()
+                peaks = y[np.arange(3), raw.argmax(axis=1)]
+                np.testing.assert_array_equal(peaks.view(np.uint32), expected)
+
     def _cuda(self, x_np, cot_np, log):
         with jt.flag_scope(use_cuda=1):
             x = jt.array(x_np)
