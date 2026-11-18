@@ -22,7 +22,8 @@ def test_cache_retains_callable_identity_and_releases_it_when_cleared():
         def __init__(self, name):
             self.__name__ = name
 
-    def compile_kernel(kernel, **kwargs):
+    def compile_kernel(source, **kwargs):
+        kernel, _ = source
         return types.SimpleNamespace(
             metadata=types.SimpleNamespace(name=kernel.__name__, num_warps=4),
             asm={"cubin": kernel.__name__.encode(), "ptx": ""})
@@ -31,7 +32,7 @@ def test_cache_retains_callable_identity_and_releases_it_when_cleared():
         "real_triton": lambda: types.SimpleNamespace(compile=compile_kernel),
         "_Driver": types.SimpleNamespace(get=lambda device: types.SimpleNamespace(arch=89)),
         "_COMPILE_CACHE": {}, "_compile_lock": threading.Lock(),
-        "_make_ast_source": lambda cls, kernel, signature, constants: kernel,
+        "_make_ast_source": lambda cls, kernel, signature, constants, aligned: (kernel, aligned),
         "_ptx_param_count": lambda *args: 0, "JittorTritonError": RuntimeError,
     }
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), namespace)
@@ -45,6 +46,8 @@ def test_cache_retains_callable_identity_and_releases_it_when_cleared():
         assert reference() is not None, "the cache has lost the object behind its ID key"
         second = Kernel("second")
         assert namespace["_compile"](second, {"x": "*fp32"}, {})["name"] == "second"
+        assert namespace["_compile"](second, {"x": "*fp32"}, {}, aligned=(0,))["name"] == "second"
+        assert len(namespace["_COMPILE_CACHE"]) == 3
         namespace["_COMPILE_CACHE"].clear()
         gc.collect()
         assert reference() is None, "clearing the cache must release its callable owners"
