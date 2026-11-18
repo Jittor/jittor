@@ -8,12 +8,14 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <algorithm>
+#include <limits>
 #include "core/var.h"
 #include "cub_argsort_op.h"
 #include <vector>
 #include "core/executor.h"
 #include "ops/composite/argsort_op.h"
 #ifdef JIT_cuda
+#include <cub/device/device_radix_sort.cuh>
 #include <cub/device/device_segmented_radix_sort.cuh>
 #endif
 
@@ -21,10 +23,24 @@ namespace jittor {
 
 #ifndef JIT
 CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, NanoString dtype)
-    : x(x), indexes(indexes), offsets(offsets), descending(descending) {
+    : CubArgsortOp(x, indexes, offsets, descending, dtype, false) {}
+
+CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, NanoString dtype,
+                         bool uniform_rows)
+    : x(x), indexes(indexes), offsets(offsets), descending(descending), rowwise(false) {
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     USER_CHECK(offsets->dtype()==ns_int32);
+    if (uniform_rows && construction_target_backend(x) == BackendId::Cuda
+            && x->dtype() == ns_float32 && x->shape.size() > 0
+            && x->num > 0 && x->num <= std::numeric_limits<int>::max()) {
+        const int64 width = x->shape[x->shape.size() - 1];
+        const int64 rows = width > 0 ? x->num / width : 0;
+        // Segmented radix sort gives a wide segment to one CTA per pass.
+        // A device-wide radix sort per row uses the GPU for these shapes.
+        rowwise = rows > 0 && rows <= 8
+            && width >= std::max<int64>(65536, rows * 16384);
+    }
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
     set_flag(OpFlags::_manual_set_vnbb);
@@ -55,6 +71,7 @@ void CubArgsortOp::jit_prepare(JK& jk) {
     jk << "«Tindexes:" << indexes->dtype();
     jk << "«Toffsets:" << offsets->dtype();
     jk << "«Ty:" << y->dtype();
+    jk << "«ROWWISE=" << JK::hex(rowwise);
     jk << "«FUNC:";
     if (descending)
         jk << "SortPairsDescending";
@@ -67,6 +84,25 @@ void CubArgsortOp::jit_prepare(JK& jk) {
 void CubArgsortOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ indexesp = indexes->ptr<Tindexes>();
+#if ROWWISE
+    auto* __restrict__ values = y_key->ptr<Tx>();
+    auto* __restrict__ indices = y->ptr<Ty>();
+    const int width = x->shape[x->shape.size() - 1];
+    const int rows = x->num / width;
+    size_t scratch_bytes = 0;
+    CHECK(cub::DeviceRadixSort::@FUNC@@(nullptr, scratch_bytes,
+        xp, values, indexesp, indices, width) == cudaSuccess);
+    size_t allocation;
+    auto* scratch = runtime_executor().temp_allocator->alloc(scratch_bytes, allocation);
+    auto error = cudaSuccess;
+    for (int row = 0; row < rows && error == cudaSuccess; ++row) {
+        const int start = row * width;
+        error = cub::DeviceRadixSort::@FUNC@@(scratch, scratch_bytes,
+            xp + start, values + start, indexesp + start, indices + start, width);
+    }
+    runtime_executor().temp_allocator->free(scratch, scratch_bytes, allocation);
+    CHECK(error == cudaSuccess) << "CUDA radix sort failed:" << cudaGetErrorString(error);
+#else
     auto* __restrict__ offsetsp = offsets->ptr<Toffsets>();
 
     int num_items = 1, num_segments = 1;
@@ -93,6 +129,7 @@ void CubArgsortOp::jit_run() {
         xp, y_keyp, indexesp, yp,
         num_items, num_segments, offsetsp, offsetsp + 1);
     runtime_executor().temp_allocator->free(d_temp_storage, temp_storage_bytes, allocation);
+#endif
 }
 #endif // JIT_cuda
 #endif // JIT

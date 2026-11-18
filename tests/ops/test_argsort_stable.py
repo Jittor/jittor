@@ -77,6 +77,24 @@ def test_stable_argsort_nonlast_axis(device, index_dtype, descending):
     )
 
 
+@pytest.mark.parametrize("descending", [False, True])
+@pytest.mark.parametrize("index_dtype", ["int32", "int64"])
+def test_cuda_stable_argsort_few_wide_rows(descending, index_dtype):
+    capability.require_accelerator("cuda")
+    rng = np.random.default_rng(928)
+    data = rng.integers(-2048, 2048, size=(4, 131072)).astype("float32") / 128
+    data[:, :4] = [np.inf, -np.inf, 0.0, -0.0]
+    expected = _stable_indices(data, -1, descending)
+    with jt.flag_scope(use_cuda=1, backend_fallback="error"):
+        indices, values = jt.argsort(jt.array(data), dim=-1, descending=descending,
+                                     stable=True, dtype=index_dtype)
+        assert str(indices.dtype) == index_dtype
+        _assert_resident("cuda", indices, values)
+        np.testing.assert_array_equal(indices.numpy(), expected)
+        np.testing.assert_array_equal(values.numpy().view(np.int32),
+                                      np.take_along_axis(data, expected, axis=-1).view(np.int32))
+
+
 @pytest.mark.parametrize("index_dtype", ["int32", "int64"])
 def test_stable_argsort_alternates_jit_modes(device, index_dtype):
     rng = np.random.default_rng(926)
