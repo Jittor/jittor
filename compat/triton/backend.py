@@ -248,6 +248,7 @@ class _Driver:
         c_i, c_u = ctypes.c_int, ctypes.c_uint
         self._sig(lib.cuInit, [c_u])
         self._sig(lib.cuDeviceGet, [ctypes.POINTER(c_i), c_i])
+        self._sig(lib.cuDeviceGetAttribute, [ctypes.POINTER(c_i), c_i, c_i])
         self._sig(lib.cuDeviceComputeCapability,
                   [ctypes.POINTER(c_i), ctypes.POINTER(c_i), c_i])
         self._sig(lib.cuDevicePrimaryCtxRetain, [c_vpp, c_i])
@@ -275,6 +276,11 @@ class _Driver:
         # surfaced as a sticky cudaErrorIllegalAddress.
         self.check(lib.cuDeviceGet(ctypes.byref(dev), self.ordinal), "cuDeviceGet")
         self.device = dev
+        max_shared = c_i()
+        # CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
+        self.check(lib.cuDeviceGetAttribute(ctypes.byref(max_shared), 97, dev),
+                   "cuDeviceGetAttribute(MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)")
+        self.max_shared_memory = max_shared.value
         ctx = ctypes.c_void_p()
         self.check(lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev),
                    "cuDevicePrimaryCtxRetain")
@@ -497,6 +503,9 @@ class _Driver:
         48 KB static cap; without this opt-in ``cuLaunchKernel`` returns
         ``CUDA_ERROR_INVALID_VALUE``. Idempotent per function handle.
         """
+        if nbytes > self.max_shared_memory:
+            from triton.runtime.autotuner import OutOfResources
+            raise OutOfResources(nbytes, self.max_shared_memory, "shared memory")
         if nbytes <= 49152:
             return
         key = (func.value, nbytes)
@@ -1256,6 +1265,8 @@ def _run(jitfn, args, kwargs, grid):
 
     # -- separate launch-meta kwargs (num_warps/...) from real kernel kwargs --
     kwargs = dict(kwargs)
+    if kwargs.get("launch_pdl", False):
+        raise JittorTritonError("CUDA programmatic dependent launch is not supported")
     options = {}
     for m in ("num_warps", "num_stages"):
         if m in kwargs:
@@ -1267,7 +1278,8 @@ def _run(jitfn, args, kwargs, grid):
               "num_buffers_warp_spec", "num_consumer_groups",
               "reg_dec_producer", "reg_inc_consumer",
               "launch_cooperative_grid", "launch_pdl", "profile_scratch"):
-        kwargs.pop(m, None)
+        if m not in python_signature.parameters:
+            kwargs.pop(m, None)
 
     # -- which params are constexpr? (use triton's own param metadata if present)
     constexpr_names = set()

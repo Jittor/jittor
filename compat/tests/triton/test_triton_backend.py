@@ -419,6 +419,26 @@ class TestTritonBackend(unittest.TestCase):
         mul2_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
         self.ac(out.float32().numpy(), xn * 2.0, atol=5e-2, msg="bf16 mul2")
 
+    def test_launch_option_named_constexpr_is_bound(self):
+        @triton.jit
+        def store_result(out, launch_pdl: tl.constexpr):
+            tl.store(out, 1 if launch_pdl else 7)
+
+        output = jt.zeros(1, dtype="int32")
+        store_result[(1,)](output, launch_pdl=False)
+        self.assertEqual(output.item(), 7)
+
+    def test_exceeding_device_shared_memory_raises_triton_resource_error(self):
+        from jittor.compat.triton.backend import _Driver
+        from triton.runtime.autotuner import OutOfResources
+
+        driver = _Driver.get(jt.current_device())
+        requested = driver.max_shared_memory + 1
+        with self.assertRaises(OutOfResources) as raised:
+            driver.ensure_dynamic_shared(None, requested)
+        self.assertEqual(raised.exception.required, requested)
+        self.assertEqual(raised.exception.limit, driver.max_shared_memory)
+
     def test_autotune(self):
         n = 4096
         rs = np.random.RandomState(23)
