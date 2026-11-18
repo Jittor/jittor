@@ -351,6 +351,14 @@ def _install_cuda(g, registry=None):
         types_mod._dtype = getattr(types_mod, "_dtype", object)
         types_mod._size = getattr(types_mod, "_size", tuple)
         g.types = types_mod
+        c_mod._len_torch_dispatch_stack = lambda: 0
+        c_mod._is_torch_function_mode_enabled = lambda: False
+        autograd_c = getattr(c_mod, "_autograd", None)
+        if autograd_c is None:
+            autograd_c = _types.SimpleNamespace()
+            c_mod._autograd = autograd_c
+        if not hasattr(autograd_c, "_profiler_enabled"):
+            autograd_c._profiler_enabled = lambda: False
         c_mod.DisableTorchFunctionSubclass = _DisableTorchFunctionMode
         c_mod.DisableTorchFunction = _DisableTorchFunctionMode
         c_mod.DispatchKey = _DispatchKey
