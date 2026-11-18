@@ -289,6 +289,62 @@ CHECK(0 == cudaGetLastError());
     return CodeSoftmax
 
 
+# Wide contiguous FP32 log-softmax follows the CUDA reduction order used by
+# ATen: float4 chunks, a scalar tail, then down-shuffles across lanes and warps.
+_WIDE_FP32_LOG = r"""
+__global__ void wide_log_softmax(const float* x, float* y, int width) {
+    __shared__ float partial[32];
+    __shared__ float maximum;
+    __shared__ float log_sum;
+    int tid = threadIdx.x;
+    int lane = tid % 32;
+    int warp = tid / 32;
+    x += int64_t(blockIdx.x) * width;
+    y += int64_t(blockIdx.x) * width;
+    float high = -INFINITY;
+    for (int j = tid; j < width; j += blockDim.x) high = fmaxf(high, x[j]);
+    for (int d = 16; d; d >>= 1)
+        high = fmaxf(high, __shfl_down_sync(0xffffffff, high, d));
+    if (lane == 0) partial[warp] = high;
+    __syncthreads();
+    if (warp == 0) {
+        high = partial[lane];
+        for (int d = 16; d; d >>= 1)
+            high = fmaxf(high, __shfl_down_sync(0xffffffff, high, d));
+        if (lane == 0) maximum = high;
+    }
+    __syncthreads();
+    const int shift = (uintptr_t(x) % 16) / sizeof(float);
+    const int prefix = shift ? blockDim.x - shift : 0;
+    float sum = 0.f;
+    if (shift && tid >= shift) sum = expf(x[tid - shift] - maximum);
+    int end = width - (width - prefix) % (4 * blockDim.x);
+    for (int j = prefix + 4 * tid; j < end; j += 4 * blockDim.x) {
+        float4 v = *reinterpret_cast<const float4*>(x + j);
+        sum += expf(v.x - maximum);
+        sum += expf(v.y - maximum);
+        sum += expf(v.z - maximum);
+        sum += expf(v.w - maximum);
+    }
+    for (int j = end + tid; j < width; j += blockDim.x) sum += expf(x[j] - maximum);
+    for (int d = 16; d; d >>= 1) sum += __shfl_down_sync(0xffffffff, sum, d);
+    if (lane == 0) partial[warp] = sum;
+    __syncthreads();
+    if (warp == 0) {
+        sum = partial[lane];
+        for (int d = 16; d; d >>= 1) sum += __shfl_down_sync(0xffffffff, sum, d);
+        if (lane == 0) log_sum = logf(sum);
+    }
+    __syncthreads();
+    for (int j = tid; j < width; j += blockDim.x) y[j] = (x[j] - maximum) - log_sum;
+}
+int width = in0->shape[in0->shape.size()-1];
+int rows = in0->num / width;
+if (rows) wide_log_softmax<<<rows, 1024>>>(in0_p, out0_p, width);
+CHECK(0 == cudaGetLastError());
+"""
+
+
 @lru_cache(maxsize=8)
 def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
     # Large vocabularies cannot keep a complete row in registers without
@@ -348,7 +404,8 @@ CHECK(0 == cudaGetLastError());
 #include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <type/fp16_compute.h>
 ''',
-                cuda_src=execute_source)
+                cuda_src=(_WIDE_FP32_LOG if log and str(x.dtype) in ("float32", "torch.float32")
+                          else execute_source))
             return self.save_vars
 
         def grad(self, grad_x):

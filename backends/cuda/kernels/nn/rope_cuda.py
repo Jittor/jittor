@@ -73,6 +73,13 @@ def _rotary_embedding_cuda(
             const in0_type* positions, const in1_type* q, const in2_type* k,
             const in3_type* cache, out0_type* out_q, out1_type* out_k,
             int64_t q_total, int64_t k_total) {
+        // Keep the real and imaginary products in the same FP32 arithmetic
+        // order as the standalone CUDA rotation, including its final fma.
+        auto rotate = [](float value, float other, float c, float s, bool first) {
+            if (%(float32)d)
+                return first ? fmaf(value, c, -(other * s)) : fmaf(other, s, value * c);
+            return value * c + (first ? -1.0f : 1.0f) * other * s;
+        };
         int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
         int64_t stride = (int64_t)blockDim.x * gridDim.x;
         int64_t total = q_total > k_total ? q_total : k_total;
@@ -88,13 +95,12 @@ def _rotary_embedding_cuda(
                     int other_dim = dim < half ? dim + half : dim - half;
                     int64_t other_index = index - dim + other_dim;
                     int frequency_dim = dim < half ? dim : dim - half;
-                    float sign = dim < half ? -1.0f : 1.0f;
                     float cos_value = static_cast<float>(
                         cache[position * %(cache_width)d + frequency_dim]);
                     float sin_value = static_cast<float>(
                         cache[position * %(cache_width)d + half + frequency_dim]);
-                    out_q[index] = out0_type(static_cast<float>(q[index]) * cos_value
-                        + sign * static_cast<float>(q[other_index]) * sin_value);
+                    out_q[index] = out0_type(rotate(static_cast<float>(q[index]),
+                        static_cast<float>(q[other_index]), cos_value, sin_value, dim < half));
                 }
             }
             if (index < k_total) {
@@ -108,13 +114,12 @@ def _rotary_embedding_cuda(
                     int other_dim = dim < half ? dim + half : dim - half;
                     int64_t other_index = index - dim + other_dim;
                     int frequency_dim = dim < half ? dim : dim - half;
-                    float sign = dim < half ? -1.0f : 1.0f;
                     float cos_value = static_cast<float>(
                         cache[position * %(cache_width)d + frequency_dim]);
                     float sin_value = static_cast<float>(
                         cache[position * %(cache_width)d + half + frequency_dim]);
-                    out_k[index] = out1_type(static_cast<float>(k[index]) * cos_value
-                        + sign * static_cast<float>(k[other_index]) * sin_value);
+                    out_k[index] = out1_type(rotate(static_cast<float>(k[index]),
+                        static_cast<float>(k[other_index]), cos_value, sin_value, dim < half));
                 }
             }
         }
@@ -129,6 +134,7 @@ def _rotary_embedding_cuda(
         in0_p, in1_p, in2_p, in3_p, out0_p, out1_p, q_total, k_total);
     CHECK(0 == cudaGetLastError());
     """, {
+        "float32": int(_jittor_dtype_name(q.dtype) == "float32"),
         "cache_width": cache_shape[1],
         "head_size": head_size,
         "k_token_stride": k_shape[1],

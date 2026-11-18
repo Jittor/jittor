@@ -12,14 +12,16 @@ def test_cpu_gate_trusts_only_its_checkout_with_isolated_home(monkeypatch, tmp_p
     env = module["_cpu_gate_env"](session)
 
     assert env["HOME"] != os.environ.get("HOME")
-    assert env["GIT_CONFIG_COUNT"] == "2"
-    assert env["GIT_CONFIG_KEY_0"] == "safe.directory"
-    assert env["GIT_CONFIG_VALUE_0"] == ""
-    assert env["GIT_CONFIG_KEY_1"] == "safe.directory"
-    assert env["GIT_CONFIG_VALUE_1"] == str(module["REPO_ROOT"])
-    # Nox uses None entries to remove inherited variables; make that
-    # overlay concrete before passing it to subprocess.run. A global wildcard
-    # must not survive the empty multi-value reset above.
+    assert env["GIT_CONFIG_COUNT"] == "0"
+    assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+    private_config = Path(env["GIT_CONFIG_GLOBAL"])
+    assert private_config.parent == Path(env["HOME"])
+    allowed = subprocess.check_output(
+        ["git", "config", "--file", str(private_config), "--get-all", "safe.directory"],
+        text=True,
+    )
+    assert allowed.splitlines() == [str(module["REPO_ROOT"])]
+    # A wildcard in the isolated home's default config must not be inherited.
     owner_probe = {key: value for key, value in env.items() if value is not None}
     owner_probe["GIT_TEST_ASSUME_DIFFERENT_OWNER"] = "1"
     global_config = Path(env["HOME"]) / ".gitconfig"

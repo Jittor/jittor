@@ -10,6 +10,43 @@ API_NAMES = ("torch.compile", "torch.jit.script", "torch.jit.trace")
 
 class TestTorchCompilerFidelity(unittest.TestCase):
 
+    def test_unbacked_annotation_import_and_eager_metadata(self):
+        decorators = importlib.import_module("torch._dynamo.decorators")
+        self.assertIs(decorators, torch._dynamo.decorators)
+        tensor = torch.zeros((2, 3), device="cpu")
+        self.assertIsNone(decorators.mark_unbacked(tensor, 0, hint_override=8))
+        decorators.mark_unbacked(tensor, 1)
+        self.assertEqual(tensor._dynamo_unbacked_indices, {0, 1})
+        self.assertEqual(tensor._dynamo_hint_overrides, {0: 8})
+        self.assertEqual(tensor._specialize_on, {1: []})
+        self.assertTrue(tensor._has_dynamo_dim_marking)
+        self.assertEqual(tuple(tensor.shape), (2, 3))
+        self.assertEqual(tensor.tolist(), [[0.0] * 3] * 2)
+        fidelity = importlib.import_module("jittor.compat.torch.fidelity")
+        record = fidelity.fidelity_of("torch._dynamo.decorators.mark_unbacked")
+        self.assertIs(record.implementation, decorators.mark_unbacked)
+        self.assertEqual(record.level, fidelity.Fidelity.APPROXIMATE)
+
+    def test_unbacked_sequence_annotations_and_invalid_index(self):
+        tensor = torch.zeros((2, 3), device="cpu")
+        mark = torch._dynamo.decorators.mark_unbacked
+        mark(tensor, [0, 1], hint_override=8)
+        mark(tensor, (0,))
+        self.assertEqual(tensor._dynamo_unbacked_indices, {0, 1})
+        self.assertEqual(tensor._dynamo_hint_overrides, {})
+        with self.assertRaisesRegex(AssertionError, "Expected index"):
+            mark(tensor, "0")
+
+    def test_unbacked_compiler_constraints_fail_before_annotation(self):
+        mark = torch._dynamo.decorators.mark_unbacked
+        for options in ({"strict": True}, {"specialize_on": []},
+                        {"shape_id": "batch"}, {"min": 2}, {"max": 8}):
+            with self.subTest(options=options):
+                tensor = torch.zeros((2, 3), device="cpu")
+                with self.assertRaisesRegex(NotImplementedError, "Dynamo"):
+                    mark(tensor, 0, **options)
+                self.assertFalse(hasattr(tensor, "_dynamo_unbacked_indices"))
+
     def test_compiler_callables_are_independently_importable(self):
         compiler = importlib.import_module(
             "jittor.compat.torch.installers.compiler")

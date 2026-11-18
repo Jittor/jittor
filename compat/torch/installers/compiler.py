@@ -525,6 +525,35 @@ def _api_dynamo_mark_dynamic(*a, **k):
     return None
 
 
+def _api_dynamo_mark_unbacked(t, index, hint_override=None, strict=False,
+                             specialize_on=None, shape_id=None, min=None, max=None):
+    """Retain eager dimension annotations without promising Dynamo constraints."""
+    if (strict or specialize_on is not None or shape_id is not None
+            or min is not None or max is not None):
+        raise NotImplementedError(
+            "Jittor cannot enforce Dynamo unbacked dimension constraints")
+    if isinstance(index, (list, tuple)):
+        for dimension in index:
+            # Native Torch's sequence form forwards the dimensions, but not
+            # hint_override, to its scalar annotation path.
+            _api_dynamo_mark_unbacked(t, dimension)
+        return
+    if not isinstance(index, int):
+        raise AssertionError(
+            "Expected index to be int, list, or tuple, got %s" % type(index))
+    if not hasattr(t, "_dynamo_unbacked_indices"):
+        t._dynamo_unbacked_indices = set()
+    if not hasattr(t, "_dynamo_hint_overrides"):
+        t._dynamo_hint_overrides = {}
+    if hint_override:
+        t._dynamo_hint_overrides[index] = hint_override
+    # This is the metadata produced by the supported eager annotation form.
+    # Jittor's compiler does not consume Dynamo specialization annotations.
+    t._specialize_on = {index: []}
+    t._dynamo_unbacked_indices.add(index)
+    t._has_dynamo_dim_marking = True
+
+
 def _api_dynamo_graph_break(*a, **k):
     return None
 
@@ -930,6 +959,10 @@ def install(ctx):
     _dynamo.reset = _api_dynamo_reset
     _modules["torch._dynamo"] = _dynamo
     setattr(g, "_dynamo", _dynamo)
+    _dynamo_decorators = _types2.ModuleType("torch._dynamo.decorators")
+    _dynamo_decorators.mark_unbacked = _api_dynamo_mark_unbacked
+    _dynamo.decorators = _dynamo_decorators
+    _modules["torch._dynamo.decorators"] = _dynamo_decorators
     _eval_frame = _types2.ModuleType("torch._dynamo.eval_frame")
     _eval_frame.OptimizedModule = ctx.state.get("nn_class_adapter", _identity)(OptimizedModule)
     _eval_frame.is_dynamo_supported = _api_eval_frame_is_dynamo_supported
