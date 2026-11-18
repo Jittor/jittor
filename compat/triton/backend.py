@@ -1303,6 +1303,15 @@ def _run(jitfn, args, kwargs, grid):
         raise JittorTritonError(
             "could not bind args for triton kernel %r: %s" % (kname, e))
 
+    if callable(grid):
+        # Match Triton's callable-grid contract. Buffer setup in the callback
+        # must also precede device submission and argument pointer collection.
+        meta = {"num_warps": options.get("num_warps", 4),
+                "num_stages": options.get("num_stages", 3)}
+        meta.update(bound_arguments)
+        grid = grid(meta)
+        bound_arguments = {name: meta[name] for name in bound_arguments}
+
     signature = {}        # every param name -> runtime type or "constexpr"
     constants = {}        # explicit constexpr or implicit None -> python value
     runtime_vals = []     # (name, sig, value) in param order, runtime only
@@ -1443,13 +1452,7 @@ def _run(jitfn, args, kwargs, grid):
 
     _stats_t0 = time.perf_counter() if _stats_on() else 0.0
     # -- resolve grid (tuple or callable(meta)) ----------------------------- #
-    if callable(grid):
-        meta = dict(constants)
-        meta["num_warps"] = info["num_warps"]
-        meta["num_stages"] = options.get("num_stages", 3)
-        g = grid(meta)
-    else:
-        g = grid
+    g = grid
     if isinstance(g, int):
         g = (g,)
     g = tuple(int(x) for x in g)
