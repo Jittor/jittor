@@ -361,7 +361,7 @@ def test_parameter_data_slice_copies_cpu_checkpoint_weight_to_cuda():
         weight = before.to(torch.bfloat16)
         data = parameter.data
         data[1:3, ...] = weight[1:3, ...]
-        jt.sync([parameter], device_sync=True)
+        jt.sync([parameter, data, weight], device_sync=True)
 
         assert parameter.requires_grad and not data.requires_grad
         assert parameter.device.type == "cuda" and parameter.location() == "device"
