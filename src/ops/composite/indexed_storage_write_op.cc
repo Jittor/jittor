@@ -15,7 +15,8 @@ IndexedStorageWriteOp::IndexedStorageWriteOp(Var* storage_root, Var* x, Var* val
     : x(x), values(values), storage_root(storage_root), indices(indices), axes(axes) {
     USER_CHECK(construction_target_backend(x) == BackendId::Cuda) << "CUDA storage write required";
     USER_CHECK(no_grad) << "indexed storage writes require no_grad";
-    USER_CHECK(x->dtype() == ns_float32 && values->dtype() == ns_float32);
+    USER_CHECK((x->dtype() == ns_float32 || x->dtype() == ns_bfloat16)
+        && values->dtype() == x->dtype());
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda);
     set_flag(OpFlags::_manual_set_vnbb);
