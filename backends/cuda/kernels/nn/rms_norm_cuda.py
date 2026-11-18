@@ -164,13 +164,18 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     return _add_rms_norm_cuda_code(x, residual, gamma, epsilon, fp32_residual=False)
 
 
+def _fp32_residual_supported(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
+    return math.isfinite(weight_offset) and _add_rms_norm_supported(x, residual, gamma, epsilon)
+
+
 @optional_kernel("nn.add_rms_norm.fp32_residual.inference", "cuda",
-                 supports=_add_rms_norm_supported)
-def _fused_add_rms_norm_fp32_residual_cuda(x, residual, gamma, epsilon=1e-6):
-    return _add_rms_norm_cuda_code(x, residual, gamma, epsilon, fp32_residual=True)
+                 supports=_fp32_residual_supported)
+def _fused_add_rms_norm_fp32_residual_cuda(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
+    return _add_rms_norm_cuda_code(
+        x, residual, gamma, epsilon, fp32_residual=True, weight_offset=weight_offset)
 
 
-def _add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, fp32_residual):
+def _add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, fp32_residual, weight_offset=0.0):
     contract = _rms_norm_contract(x, gamma, epsilon, residual=residual)
     if contract is None:
         return None
@@ -218,7 +223,9 @@ def _add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, fp32_residual):
             residual_out[index] = out1_type(value);
             float normalized = value * inverse_rms;
             if (!%(fp32_residual)d) normalized = static_cast<float>(out0_type(normalized));
-            y[index] = out0_type(normalized * static_cast<float>(gamma[dim]));
+            float scale = static_cast<float>(gamma[dim]);
+            if (%(has_weight_offset)d) scale += %(weight_offset)sf;
+            y[index] = out0_type(normalized * scale);
         }
     }
     int rows = in0->num / %(hidden_size)d;
@@ -231,6 +238,8 @@ def _add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, fp32_residual):
         "threads": threads,
         "warps": warps,
         "fp32_residual": int(fp32_residual),
+        "has_weight_offset": bool(weight_offset),
+        "weight_offset": repr(float(weight_offset)),
     })
     return _stop_grad_outputs(jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
