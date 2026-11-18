@@ -144,6 +144,31 @@ class TestRmsNorm(unittest.TestCase):
         np.testing.assert_allclose(carried.numpy(), total, rtol=1e-5, atol=1e-5)
 
 
+    def _check_fp32_residual(self, use_cuda):
+        rng = np.random.default_rng(91)
+        with jt.flag_scope(use_cuda=use_cuda, backend_fallback="error"), jt.no_grad():
+            value = jt.array(rng.normal(size=(4, 256)).astype("float32")).bfloat16()
+            residual = jt.array(rng.normal(size=(4, 256)).astype("float32")).bfloat16()
+            weight = rng.uniform(0.5, 1.5, size=256).astype("float32")
+            actual, carried = jt.nn.fused_add_rms_norm(
+                value, residual, jt.array(weight), 1e-6, fp32_residual=True)
+            jt.sync([actual, carried], True)
+            self.assertEqual(actual.location(), "device" if use_cuda else "cpu")
+            self.assertEqual(carried.location(), actual.location())
+            total = value.float32().numpy() + residual.float32().numpy()
+            expected = total / np.sqrt((total**2).mean(-1, keepdims=True) + 1e-6) * weight
+            np.testing.assert_allclose(actual.float32().numpy(), expected, rtol=0.004, atol=0.001)
+            np.testing.assert_array_equal(
+                carried.float32().numpy(), jt.array(total).bfloat16().float32().numpy())
+
+    def test_fp32_residual_on_cpu(self):
+        self._check_fp32_residual(0)
+
+    @unittest.skipIf(not jt.compiler.has_cuda, "CUDA is required")
+    def test_fp32_residual_on_cuda(self):
+        self._check_fp32_residual(1)
+
+
 class TestRotaryEmbedding(unittest.TestCase):
     def _reference(self, packed, cache, head_size, rotary_dim, tokens, is_neox):
         heads = packed.shape[-1] // head_size
