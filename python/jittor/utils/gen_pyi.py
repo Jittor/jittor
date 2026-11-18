@@ -154,6 +154,17 @@ def gen_ops_stub(jittor_path):
             hint += f" ...\n"
         return hint
 
+    def generate_var_property_hint(return_type, docstring):
+        hint = "\t@property\n"
+        hint += f"\tdef {func_name}(self)"
+        hint += f"-> {return_type}" if return_type else ""
+        hint += ":"
+        if docstring:
+            hint += add_indent(f"\n'''{docstring}'''\n", 2) + "\t\t...\n"
+        else:
+            hint += " ...\n"
+        return hint
+
     for func_name, func in jittor.ops.__dict__.items():
         if func_name.startswith("__"):
             continue
@@ -210,6 +221,10 @@ def gen_ops_stub(jittor_path):
         docstring = func.__doc__[:func.__doc__.find("Declaration:")]
         docstring = docstring.replace("'''", '"""').strip()
         declarations = re.findall(r"Declaration:\n(.+)\n", func.__doc__)
+
+        if func_name == "shape":
+            var_hint += generate_var_property_hint("Tuple[int]", docstring)
+            continue
 
         for decl in declarations:
             decl = decl.replace("inline ", "")
