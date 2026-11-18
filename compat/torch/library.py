@@ -490,7 +490,22 @@ def register_fake(op, func=None, *, lib=None, **kwargs):
     return decorator(func) if func is not None else decorator
 
 
-def impl(qualname, dispatch_types, func=None, *, lib=None):
+def impl(qualname, dispatch_types=None, func=None, *, lib=None):
+    if isinstance(qualname, Library):
+        # torch also accepts impl(library, name, dispatch_key)
+        target = qualname
+        name = dispatch_types
+        key = func if isinstance(func, str) else "CompositeExplicitAutograd"
+        if func is not None and callable(func):
+            target.impl(name, func, dispatch_key=key)
+            return func
+
+        def bound_decorator(function):
+            target.impl(name, function, dispatch_key=key)
+            return function
+
+        return bound_decorator
+
     def decorator(function):
         if "::" not in qualname:
             raise ValueError("operator name must have the form namespace::name")
@@ -591,6 +606,88 @@ def install_torch_library(torch_module, modules):
     torch_module.library = library_module
     torch_module._ops = ops_module
     torch_module.ops = state["dispatcher"]
+    if not state.get("aten_core"):
+        import jittor as _jt
+
+        def _aten_linear(input, weight, bias=None):
+            out = input @ weight.transpose(-1, -2)
+            return out + bias if bias is not None else out
+
+        def _aten_layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
+            return _jt.nn.layer_norm(input, normalized_shape, weight, bias, eps)
+
+        def _aten_identity(self, *args, **kwargs):
+            return self
+
+        def _aten_like(factory):
+            def implementation(self, *args, **kwargs):
+                return getattr(self, factory)(tuple(self.shape))
+            return implementation
+
+        for _name, _impl in (
+            ("detach", _aten_identity),
+            ("clone", _aten_identity),
+            ("contiguous", _aten_identity),
+            ("_to_copy", lambda self, *args, **kwargs: self.to(kwargs["dtype"]) if kwargs.get("dtype") is not None else self),
+            ("to", lambda self, *args, **kwargs: self),
+            ("to.dtype_layout", lambda self, *args, **kwargs: self),
+            ("to.dtype", lambda self, *args, **kwargs: self),
+            ("to.device", lambda self, *args, **kwargs: self),
+            ("to.other", lambda self, *args, **kwargs: self),
+            ("is_contiguous", lambda self, *args, **kwargs: self.is_contiguous()),
+            ("is_floating_point", lambda self, *args, **kwargs: self.is_floating_point()),
+            ("numel", lambda self, *args, **kwargs: self.numel()),
+            ("dim", lambda self, *args, **kwargs: self.ndim),
+            ("size", lambda self, *args, **kwargs: self.shape),
+            ("stride", lambda self, *args, **kwargs: self.stride()),
+            ("copy_", lambda self, src, *args, **kwargs: self.assign(src)),
+            ("add_", lambda self, other, *args, **kwargs: self.assign(self + other)),
+            ("sub_", lambda self, other, *args, **kwargs: self.assign(self - other)),
+            ("mul_", lambda self, other, *args, **kwargs: self.assign(self * other)),
+            ("div_", lambda self, other, *args, **kwargs: self.assign(self / other)),
+            ("_has_compatible_shallow_copy_type", lambda *args, **kwargs: True),
+            ("view", lambda self, *size, **kwargs: self.reshape(size[0] if len(size) == 1 and isinstance(size[0], (tuple, list)) else size)),
+            ("_unsafe_view", lambda self, *size, **kwargs: self.reshape(size[0] if len(size) == 1 and isinstance(size[0], (tuple, list)) else size)),
+            ("reshape", lambda self, *size, **kwargs: self.reshape(size[0] if len(size) == 1 and isinstance(size[0], (tuple, list)) else size)),
+            ("zero_", lambda self, *args, **kwargs: self.assign(self * 0)),
+            ("fill_", lambda self, value, *args, **kwargs: self.assign(self * 0 + value)),
+            ("t", lambda self, *args, **kwargs: self.transpose(-1, -2) if self.ndim == 2 else self),
+            ("transpose", lambda self, dim0, dim1, *args, **kwargs: self.transpose(dim0, dim1)),
+            ("permute", lambda self, dims, *args, **kwargs: self.permute(*dims) if isinstance(dims, (tuple, list)) else self.permute(dims)),
+            ("detach_", lambda self, *args, **kwargs: self),
+            ("linear", _aten_linear),
+            ("layer_norm", _aten_layer_norm),
+            ("relu", lambda self, *args, **kwargs: _jt.nn.relu(self)),
+            ("gelu", lambda self, *args, **kwargs: _jt.nn.gelu(self)),
+            ("silu", lambda self, *args, **kwargs: self * (1 / (1 + (-self).exp()))),
+            ("softmax", lambda self, dim=-1, *args, **kwargs: _jt.nn.softmax(self, dim)),
+            ("mm", lambda a, b, *args, **kwargs: a @ b),
+            ("bmm", lambda a, b, *args, **kwargs: a @ b),
+            ("matmul", lambda a, b, *args, **kwargs: a @ b),
+            ("add", lambda a, b, *args, **kwargs: a + b),
+            ("sub", lambda a, b, *args, **kwargs: a - b),
+            ("mul", lambda a, b, *args, **kwargs: a * b),
+            ("div", lambda a, b, *args, **kwargs: a / b),
+            ("cat", lambda tensors, dim=0, *args, **kwargs: _jt.concat(list(tensors), dim)),
+            ("stack", lambda tensors, dim=0, *args, **kwargs: _jt.stack(list(tensors), dim)),
+            ("empty", lambda size, *args, **kwargs: _jt.zeros(tuple(size))),
+            ("zeros", lambda size, *args, **kwargs: _jt.zeros(tuple(size))),
+            ("ones", lambda size, *args, **kwargs: _jt.ones(tuple(size))),
+            ("full", lambda size, value, *args, **kwargs: _jt.ones(tuple(size)) * value),
+            ("arange", lambda *args, **kwargs: _jt.arange(*args)),
+            ("randn", lambda size, *args, **kwargs: _jt.randn(tuple(size))),
+            ("addmm", lambda bias, a, b, *args, **kwargs: bias + a @ b),
+            ("addbmm", lambda bias, a, b, *args, **kwargs: bias + a @ b),
+            ("baddbmm", lambda bias, a, b, *args, **kwargs: bias + a @ b),
+            ("empty_like", _aten_like("new_empty")),
+            ("zeros_like", _aten_like("new_zeros")),
+            ("ones_like", _aten_like("new_ones")),
+        ):
+            import contextlib
+            with contextlib.suppress(Exception):
+                operator = state["dispatcher"].get_or_create("aten", _name)
+                operator.register_impl("CompositeExplicitAutograd", _impl, allow_override=True)
+        state["aten_core"] = True
     torch_module.Tag = Tag
     torch_c = modules.get("torch._C")
     if torch_c is not None:

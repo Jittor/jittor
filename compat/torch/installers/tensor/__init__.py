@@ -975,6 +975,7 @@ def install(ctx):
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"
     g.channels_last = "channels_last"
+    g.channels_last_3d = "channels_last_3d"
     g.layout = layout
     g.memory_format = memory_format
 

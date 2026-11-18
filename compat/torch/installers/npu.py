@@ -158,6 +158,11 @@ def install(ctx):
         setattr(npu, name, globals()[name])
     for name in _REFUSED:
         setattr(npu, name, _unsupported)
+    # The ACL device also answers the memory queries the facade above refuses;
+    # reuse the cuda-side implementations, which read the same accelerator.
+    from .cuda.api import _api_cuda_memory_stats, _mem_get_info
+    npu.memory_stats = _api_cuda_memory_stats
+    npu.mem_get_info = _mem_get_info
     registry.publish("torch.npu", npu, replace=True)
     target.npu = npu
 

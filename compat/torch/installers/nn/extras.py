@@ -167,6 +167,35 @@ def _install_nn_extras(nn, registry=None):
     # torch.nn is the physical jittor.nn package, so keep its real attention
     # capability module intact and register the torch path as an alias.
     from jittor.nn import attention as attn_mod
+    if not hasattr(nn, "Hardtanh"):
+        class Hardtanh(nn.Module):
+            def __init__(self, min_val=-1.0, max_val=1.0, inplace=False):
+                super().__init__()
+                self.min_val = min_val
+                self.max_val = max_val
+                self.inplace = inplace
+
+            def execute(self, x):
+                return x.clamp(self.min_val, self.max_val)
+
+        nn.Hardtanh = Hardtanh
+    if not hasattr(attn_mod, "SDPBackend"):
+        class SDPBackend:
+            ERROR = 0
+            MATH = 1
+            FLASH_ATTENTION = 2
+            EFFICIENT_ATTENTION = 3
+            CUDNN_ATTENTION = 4
+
+        attn_mod.SDPBackend = SDPBackend
+    if not hasattr(attn_mod, "sdpa_kernel"):
+        import contextlib as _contextlib
+
+        @_contextlib.contextmanager
+        def sdpa_kernel(backends, set_priority=False):
+            yield
+
+        attn_mod.sdpa_kernel = sdpa_kernel
     _modules["torch.nn.attention"] = attn_mod
     flex_mod = _modules.get("torch.nn.attention.flex_attention")
     if flex_mod is None:

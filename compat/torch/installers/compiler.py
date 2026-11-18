@@ -647,6 +647,7 @@ def install(ctx):
     _inductor_config.custom_should_partition_ops = []
     _inductor_config._config = {}
     _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
+    _inductor_config.max_autotune_gemm_search_space = "DEFAULT"
     _inductor.config = _inductor_config
     # Upstream test harnesses import this helper even for eager-only cases.
     # The module is real and narrowly exported: using the unsupported cache

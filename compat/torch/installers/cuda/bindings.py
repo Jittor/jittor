@@ -351,6 +351,21 @@ def _install_cuda(g, registry=None):
         types_mod._dtype = getattr(types_mod, "_dtype", object)
         types_mod._size = getattr(types_mod, "_size", tuple)
         g.types = types_mod
+        sparse_mod = getattr(g, "sparse", None) or _modules.get("torch.sparse")
+        if not hasattr(sparse_mod, "_triton_ops_meta"):
+            triton_meta = _types.ModuleType("torch.sparse._triton_ops_meta")
+
+            def _unsupported_triton_meta(*args, **kwargs):
+                raise NotImplementedError(
+                    "torch.sparse._triton_ops_meta backs Triton BSR kernels, which the "
+                    "Jittor compatibility layer does not provide")
+
+            triton_meta.get_meta = _unsupported_triton_meta
+            triton_meta.minimize = _unsupported_triton_meta
+            triton_meta.update = _unsupported_triton_meta
+            _modules["torch.sparse._triton_ops_meta"] = triton_meta
+            if sparse_mod is not None:
+                sparse_mod._triton_ops_meta = triton_meta
         c_mod._len_torch_dispatch_stack = lambda: 0
         c_mod._is_torch_function_mode_enabled = lambda: False
         autograd_c = getattr(c_mod, "_autograd", None)

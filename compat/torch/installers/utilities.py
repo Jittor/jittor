@@ -1037,6 +1037,8 @@ def install_parity(ctx):
         python_dispatch, "TorchDispatchMode", TorchDispatchMode
     )
     python_dispatch._get_current_dispatch_mode = _api_python_dispatch__get_current_dispatch_mode
+    if not hasattr(python_dispatch, "return_and_correct_aliasing"):
+        python_dispatch.return_and_correct_aliasing = lambda func, args, kwargs, out: out
     g.utils._python_dispatch = python_dispatch
     _register_utility_fidelity(ctx)
 
