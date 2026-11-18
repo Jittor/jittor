@@ -152,6 +152,8 @@ def _make_dtypes(ns):
         # They are placeholders only; Jittor kernels do not implement them.
         ("uint1", False), ("uint2", False), ("uint3", False), ("uint4", False),
         ("uint5", False), ("uint6", False), ("uint7", False),
+        ("int1", False), ("int2", False), ("int3", False), ("int4", False),
+        ("int5", False), ("int6", False), ("int7", False),
     ]
     objs = {}
     for name, is_fp in specs:

@@ -1,4 +1,9 @@
 """Torch optimizer behavior layered over Jittor optimizers."""
+
+# `torch.optim.optimizer.required`: the "this argument is required"
+# sentinel third-party optimizers use as a default value (timm's SGDP
+# imports it at module scope).
+_OPTIMIZER_REQUIRED = object()
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Mapping
@@ -125,6 +130,7 @@ def _install_optimizers(g, registry=None):
             _modules["torch.optim.optimizer"] = _optim_sub
         _optim_sub.Optimizer = Base
         _optim_sub.ParamsT = object
+        _optim_sub.required = _OPTIMIZER_REQUIRED
         for _name in ("DeviceDict", "_default_to_fused_or_foreach",
                       "_disable_dynamo_if_unsupported",
                       "_get_capturable_supported_devices", "_get_value",
@@ -210,6 +216,7 @@ def _install_optimizers(g, registry=None):
         _modules["torch.optim.optimizer"] = _optim_sub
     _optim_sub.Optimizer = Base
     _optim_sub.ParamsT = object
+    _optim_sub.required = _OPTIMIZER_REQUIRED
     for _name in ("DeviceDict", "_default_to_fused_or_foreach",
                   "_disable_dynamo_if_unsupported",
                   "_get_capturable_supported_devices", "_get_value",

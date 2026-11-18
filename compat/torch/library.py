@@ -290,6 +290,39 @@ class _RegisteredOp:
         return "%s.%s" % (self.namespace, self.name)
 
 
+class _AtenOpProxy:
+    """An unregistered `torch.ops.aten.<name>` answered by `torch.<name>`.
+
+    Libraries reference aten overloads (`aten.empty_like.default`) while
+    defining wrapper subclasses, and only ever call them; the eager function
+    of the same name is the implementation. Overload attribute access returns
+    this proxy itself, so `.default`, `.Tensor` and `.out` all dispatch to the
+    same function. Method-style ops (`aten.new_zeros.default(t, size)`) have no
+    module-level counterpart and dispatch through the first tensor instead.
+    """
+
+    def __init__(self, name, function):
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_function", function)
+
+    def __call__(self, *args, **kwargs):
+        function = object.__getattribute__(self, "_function")
+        if function is not None:
+            return function(*args, **kwargs)
+        name = object.__getattribute__(self, "_name")
+        if not args or not hasattr(args[0], name):
+            raise AttributeError(
+                "torch.ops.aten.%s has no eager function and no method on its "
+                "first argument" % name)
+        return getattr(args[0], name)(*args[1:], **kwargs)
+
+    def __getattr__(self, overload):
+        return self
+
+    def __repr__(self):
+        return "torch.ops.aten.%s" % object.__getattribute__(self, "_name")
+
+
 class _OpNamespace:
     def __init__(self, namespace):
         object.__setattr__(self, "_namespace", namespace)
@@ -307,6 +340,10 @@ class _OpNamespace:
         ops = object.__getattribute__(self, "_ops")
         if name in ops:
             return ops[name]
+        if object.__getattribute__(self, "_namespace") == "aten":
+            torch_module = _library_state()["torch_module"]
+            function = getattr(torch_module, name, None)
+            return _AtenOpProxy(name, function if callable(function) else None)
         raise AttributeError(
             "torch.ops.%s has no op '%s'" % (object.__getattribute__(self, "_namespace"), name)
         )
@@ -477,11 +514,22 @@ def register_fake(op, func=None, *, lib=None, **kwargs):
 
 
 def impl(qualname, dispatch_types, func=None, *, lib=None):
+    if not isinstance(qualname, str):
+        # torch 2.6+ call form: `torch.library.impl(lib, name, dispatch_key)`,
+        # used as a decorator. The older form names the library inside the
+        # qualname; torchao registers Meta kernels with the newer one.
+        target_lib, qualname, dispatch_types, func = qualname, dispatch_types, func, None
+        lib = target_lib
+
     def decorator(function):
-        if "::" not in qualname:
+        if "::" in qualname:
+            namespace, name = qualname.split("::", 1)
+            target = lib or Library(namespace, "FRAGMENT")
+        elif lib is not None:
+            target = lib
+            name = qualname
+        else:
             raise ValueError("operator name must have the form namespace::name")
-        namespace, name = qualname.split("::", 1)
-        target = lib or Library(namespace, "FRAGMENT")
         keys = (dispatch_types,) if isinstance(dispatch_types, str) else tuple(dispatch_types)
         for key in keys:
             target.impl(name, function, dispatch_key=key)
@@ -667,9 +715,11 @@ def _schema_type(annotation, function, torch_module, error):
     args = _typing_args(annotation)
     if _is_union(origin):
         number_members = set((int, float, bool))
-        if set(args) == number_members:
-            return "Scalar"
         non_none = tuple(arg for arg in args if arg is not type(None))
+        if set(non_none) == number_members:
+            # `Union[int, float, bool, None]` is `Scalar?`, the optional form of
+            # the plain Scalar union. torchao annotates quant bounds this way.
+            return "Scalar" if len(non_none) == len(args) else "Scalar?"
         if len(non_none) == 1 and len(non_none) != len(args):
             return _schema_type(non_none[0], function, torch_module, error) + "?"
         error("Unsupported type annotation %s." % (annotation,))

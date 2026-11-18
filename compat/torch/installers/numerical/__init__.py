@@ -1360,6 +1360,69 @@ def install(ctx):
     g.sparse = sparse_namespace
     if not hasattr(sparse_namespace, "sum"):
         sparse_namespace.sum = _sparse_sum
+    # torch.sparse._triton_ops_meta: Triton BSR autotuning metadata. This layer
+    # runs no Triton BSR kernels, so the module exports the names torchao
+    # imports at module scope (`get_meta`, `minimize`, `update`) with no-tuning
+    # behaviour: there is never a tuned entry, storing one is a no-op, and
+    # asking to autotune says so. Without the module, `import torchao` fails
+    # and takes lm-eval, peft and transformers model loading with it.
+    import types as _types
+    _triton_ops_meta = _types.ModuleType("torch.sparse._triton_ops_meta")
+
+    def _triton_ops_meta_get_meta(opname, key, version=None, exact=False,
+                                  device_name=None):
+        return None
+
+    def _triton_ops_meta_update(opname, key, version, config, speedup=None,
+                                timing=None):
+        return None
+
+    def _triton_ops_meta_minimize(opname, key, version, configs, input, out,
+                                  index, dense, *, force=False, verbose=False):
+        raise NotImplementedError(
+            "torch.sparse._triton_ops_meta.minimize: Triton BSR kernel "
+            "autotuning is not part of jittor-compat")
+
+    _triton_ops_meta.get_meta = _triton_ops_meta_get_meta
+    _triton_ops_meta.update = _triton_ops_meta_update
+    _triton_ops_meta.minimize = _triton_ops_meta_minimize
+    _triton_ops_meta.__all__ = ("get_meta", "minimize", "update")
+    sparse_namespace._triton_ops_meta = _triton_ops_meta
+    # Published through the install registry, not sys.modules directly: the
+    # shim's ownership check compares sys.modules' torch.* entries with the
+    # recorded publication set, so an unrecorded entry fails re-activation.
+    _modules["torch.sparse._triton_ops_meta"] = _triton_ops_meta
+
+    # torch.sparse.SparseSemiStructuredTensor*: declared, not implemented.
+    # torchao names these classes in module-scope tables; the names have to
+    # exist for the import, and every construction raises, so nothing can
+    # silently treat a dense tensor as semi-structured.
+    class _SemiStructuredSparseTensorUnavailable:
+        def __init__(self, *args, **kwargs):
+            raise NotImplementedError(
+                "torch.sparse.SparseSemiStructuredTensor: semi-structured "
+                "sparse tensors are not implemented in jittor-compat")
+
+        @classmethod
+        def from_dense(cls, *args, **kwargs):
+            raise NotImplementedError(
+                "torch.sparse.SparseSemiStructuredTensor.from_dense: "
+                "semi-structured sparse tensors are not implemented in "
+                "jittor-compat")
+
+    sparse_namespace.SparseSemiStructuredTensor = _SemiStructuredSparseTensorUnavailable
+    sparse_namespace.SparseSemiStructuredTensorCUSPARSELT = _SemiStructuredSparseTensorUnavailable
+    sparse_namespace.SparseSemiStructuredTensorCUTLASS = _SemiStructuredSparseTensorUnavailable
+    # `from torch.sparse import ...` reads the module the import system has in
+    # sys.modules, which can be a different module object from the facade this
+    # installer builds. Mirror the names onto it when that is the case.
+    import sys as _sparse_sys
+    _published_sparse = _sparse_sys.modules.get("torch.sparse")
+    if _published_sparse is not None and _published_sparse is not sparse_namespace:
+        for _name in ("_triton_ops_meta", "SparseSemiStructuredTensor",
+                      "SparseSemiStructuredTensorCUSPARSELT",
+                      "SparseSemiStructuredTensorCUTLASS"):
+            setattr(_published_sparse, _name, getattr(sparse_namespace, _name))
 
     # det/inverse on (batched) square matrices (mmrotate GWD/KLD/KFIoU Gaussian losses)
     if not hasattr(Var, "det"):       Var.det = _vdet
