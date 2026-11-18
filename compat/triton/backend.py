@@ -45,6 +45,7 @@ import os
 import threading
 import time
 from ..diagnostics import EXPECTED, swallowed
+from .argument_binding import bind_arguments
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
 
@@ -950,7 +951,7 @@ def _copy_bounced_inputs_back():
     return True
 
 
-def _sync_after_launch_enabled():
+def _sync_after_launch_enabled(fast_sync=None):
     """Whether to wait for the device after a launch.
 
     Default: the conservative answer outside the shim, and no wait inside it.
@@ -968,15 +969,15 @@ def _sync_after_launch_enabled():
         return True
     if _falsey_env("JITTOR_TRITON_SYNC_AFTER_LAUNCH"):
         return False
-    return not _fast_sync_enabled()
+    return not (_fast_sync_enabled() if fast_sync is None else fast_sync)
 
 
-def _sync_before_launch_enabled():
+def _sync_before_launch_enabled(fast_sync=None):
     if _truthy_env("JITTOR_TRITON_SYNC_BEFORE_LAUNCH"):
         return True
     if _falsey_env("JITTOR_TRITON_SYNC_BEFORE_LAUNCH"):
         return False
-    return not _fast_sync_enabled()
+    return not (_fast_sync_enabled() if fast_sync is None else fast_sync)
 
 
 def _looks_like_output_arg(name):
@@ -1079,6 +1080,11 @@ def _compile(jitfn, signature, constants, options=None, device=0):
         name = md.name
         ptx = compiled.asm.get("ptx", "")
         info = {
+            # The key uses id(jitfn). Keep that identity alive while this entry
+            # is reusable: otherwise a collected JITFunction's address can be
+            # reused by a different kernel with the same argument signature,
+            # silently launching the first kernel's cubin for the second one.
+            "_kernel_owner": jitfn,
             "cubin": compiled.asm["cubin"],
             "name": name,
             "num_warps": int(md.num_warps),
@@ -1232,6 +1238,11 @@ def _run(jitfn, args, kwargs, grid):
 
     fn = getattr(jitfn, "fn", jitfn)
     kname = getattr(jitfn, "__name__", getattr(fn, "__name__", "triton_kernel"))
+    # Upstream JITCallable freezes this alongside params at construction. Its
+    # binder uses the same signature even if the Python function later changes.
+    python_signature = getattr(jitfn, "signature", None)
+    if not isinstance(python_signature, inspect.Signature):
+        python_signature = inspect.signature(fn)
 
     if os.environ.get("JT_TRITON_PTRTRACE"):
         import sys as _sys
@@ -1260,31 +1271,20 @@ def _run(jitfn, args, kwargs, grid):
 
     # -- which params are constexpr? (use triton's own param metadata if present)
     constexpr_names = set()
-    # `inspect.signature` builds a new Signature object (and walks the
-    # function's code) on every call; a serving loop launches the same
-    # kernels every step, so keep the one it produced.
-    bridge_signature = getattr(jitfn, "_jt_bridge_signature", None)
-    if bridge_signature is None:
-        bridge_signature = inspect.signature(fn)
-        try:
-            jitfn._jt_bridge_signature = bridge_signature
-        except AttributeError as exc:
-            swallowed("triton/backend.py run: JIT function does not allow signature caching", exc)
     params = getattr(jitfn, "params", None)
     if params:
         for p in params:
             if getattr(p, "is_constexpr", False):
                 constexpr_names.add(p.name)
     else:
-        for n, p in bridge_signature.parameters.items():
+        for n, p in python_signature.parameters.items():
             ann = p.annotation
             if "constexpr" in str(ann):
                 constexpr_names.add(n)
 
     # -- bind call args to parameter names ---------------------------------- #
     try:
-        bound = bridge_signature.bind(*args, **kwargs)
-        bound.apply_defaults()
+        bound_arguments = bind_arguments(jitfn, python_signature, args, kwargs)
     except TypeError as e:
         raise JittorTritonError(
             "could not bind args for triton kernel %r: %s" % (kname, e))
@@ -1299,7 +1299,7 @@ def _run(jitfn, args, kwargs, grid):
         val = getattr(v, "value", v)
         return val
 
-    for name, val in bound.arguments.items():
+    for name, val in bound_arguments.items():
         if name in constexpr_names or val is None:
             # Upstream specializes an unannotated Python None as constexpr
             # None. A null runtime pointer is different: `ptr is not None`
@@ -1379,16 +1379,18 @@ def _run(jitfn, args, kwargs, grid):
     # Device the launch must happen on: the operands'. The driver context, its
     # module/function handles and the guard buffers are all per-device.
     _launch_dev = None
-    for (_, _, _v) in runtime_vals:
-        if _is_tensor(_v):
-            _d = int(getattr(_v, "device_id", 0) or 0)
-            if _launch_dev is None:
-                _launch_dev = _d
-            elif _d != _launch_dev:
-                raise JittorTritonError(
-                    "triton kernel %r has operands on devices %d and %d; the "
-                    "jittor triton backend launches one kernel on one device"
-                    % (kname, _launch_dev, _d))
+    # These are the actual tensor operands, including any materialized CUDA
+    # copies above. Reuse that classification without caching tensor metadata
+    # or pointers across launches.
+    for _v in out_vars:
+        _d = int(getattr(_v, "device_id", 0) or 0)
+        if _launch_dev is None:
+            _launch_dev = _d
+        elif _d != _launch_dev:
+            raise JittorTritonError(
+                "triton kernel %r has operands on devices %d and %d; the "
+                "jittor triton backend launches one kernel on one device"
+                % (kname, _launch_dev, _d))
     if _launch_dev is None:
         _launch_dev = 0
     # Operands' device current before anything else touches a device: the
@@ -1396,7 +1398,7 @@ def _run(jitfn, args, kwargs, grid):
     # with another device (or context) current.
     _Driver.get(_launch_dev).ensure_ctx()
 
-    if not any(_is_tensor(v) for (_, _, v) in runtime_vals):
+    if not out_vars:
         raise JittorTritonError(
             "triton kernel %r launched with no tensor arguments; the jittor "
             "triton backend needs at least one device tensor (jittor Var or a "
@@ -1470,14 +1472,15 @@ def _run(jitfn, args, kwargs, grid):
     # (1.50 s, 15% of the decode) to sweep holders this kernel never touches.
     # `jt.sync` takes the operand list instead, and `_is_var` already says which
     # operands are jittor Vars -- under the shim, all of them.
-    operand_vars = [v for (_, _, v) in runtime_vals if _is_var(v)]
+    operand_vars = [v for v in out_vars if _is_var(v)]
+    fast_sync = _fast_sync_enabled()
     if operand_vars:
-        jt.sync(operand_vars, not _fast_sync_enabled())
-    elif any(_is_tensor(v) for (_, _, v) in runtime_vals):
+        jt.sync(operand_vars, not fast_sync)
+    elif out_vars:
         # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
         # cannot be named to `jt.sync`; keep the broad sweep for that case.
-        jt.sync_all(not _fast_sync_enabled())
-    if _sync_before_launch_enabled():
+        jt.sync_all(not fast_sync)
+    if _sync_before_launch_enabled(fast_sync):
         jt.sync_all(True)
     _stats_t1 = time.perf_counter() if _stats_on() else 0.0
     if _ptrtrace:
@@ -1637,7 +1640,7 @@ def _run(jitfn, args, kwargs, grid):
     # A bounce buffer does NOT: its copy-back is on the launch stream, and the
     # only other access to a pooled buffer is `guard_acquire`'s memset of the
     # *tail*, which is disjoint from the payload that copy-back reads.
-    need_sync_after_launch = _sync_after_launch_enabled() or bool(scratch_bases)
+    need_sync_after_launch = _sync_after_launch_enabled(fast_sync) or bool(scratch_bases)
     if need_sync_after_launch:
         drv.synchronize()
     if _ptrtrace:
@@ -1651,7 +1654,7 @@ def _run(jitfn, args, kwargs, grid):
     # buffer out from under a *subsequent* back-to-back bridge launch (observed as
     # a racy cudaErrorIllegalAddress only when launches are tightly packed, e.g.
     # an autotuner sweep). A second jittor barrier closes that window.
-    if not _fast_sync_enabled():
+    if not fast_sync:
         jt.sync_all(True)
 
     if bounced:
