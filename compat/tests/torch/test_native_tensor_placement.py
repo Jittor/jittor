@@ -348,3 +348,26 @@ def test_unique_counts_inherit_explicit_input_placement(source, ambient, by_row)
         np.testing.assert_array_equal(values.numpy(), want[0])
         np.testing.assert_array_equal(inverse.numpy().reshape(want[1].shape), want[1])
         np.testing.assert_array_equal(counts.numpy(), want[2])
+
+
+
+def test_parameter_data_slice_copies_cpu_checkpoint_weight_to_cuda():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime(), jt.flag_scope(backend_fallback="error"):
+        parameter = torch.nn.Parameter(torch.zeros((4, 3), dtype=torch.bfloat16, device="cuda"))
+        before = torch.arange(12, dtype=torch.float32, device="cpu").reshape(4, 3)
+        weight = before.to(torch.bfloat16)
+        data = parameter.data
+        data[1:3, ...] = weight[1:3, ...]
+        jt.sync([parameter], device_sync=True)
+
+        assert parameter.requires_grad and not data.requires_grad
+        assert parameter.device.type == "cuda" and parameter.location() == "device"
+        assert data.device == parameter.device and data.location() == "device"
+        _cpu(weight)
+        expected = [[0., 0., 0.], [3., 4., 5.], [6., 7., 8.], [0., 0., 0.]]
+        np.testing.assert_array_equal(parameter.cpu().float().numpy(), expected)
+        np.testing.assert_array_equal(data.cpu().float().numpy(), expected)
+        np.testing.assert_array_equal(weight.float().numpy(), before.numpy())
