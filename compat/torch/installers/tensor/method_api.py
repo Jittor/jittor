@@ -135,6 +135,10 @@ def _assign_data_owner(view, value, extra_path=()):
         target = _orig_getitem(target, index)
 
     updated = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
+    # A basic .data slice write follows the parameter's placement. Weight
+    # loaders often supply CPU checkpoint tensors to accelerator parameters.
+    if _var_is_cpu_resident(updated) and _data_owner_uses_device(owner):
+        updated = _make_cuda_resident(updated, device=owner.device)
     if updated.numel() == 1 and target.numel() != 1:
         updated = updated.broadcast(target.shape)
     for base, index in reversed(bases):
