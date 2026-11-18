@@ -262,8 +262,10 @@ class TestTritonBackend(unittest.TestCase):
                 kernel[(1,)](base[offset:], dest, stride, BLOCK=32)
                 np.testing.assert_array_equal(
                     dest.numpy(), np.arange(32, dtype=np.float32) * stride + offset)
-                expected = tuple(i for i, valid in ((0, offset == 0), (2, stride % 16 == 0))
-                                 if valid)
+                expected = ()
+                if hasattr(kernel, "_pack_args"):
+                    expected = tuple(i for i, valid in ((0, offset == 0), (2, stride % 16 == 0))
+                                     if valid)
                 self.assertEqual(compile.call_args.kwargs["aligned"], expected)
 
     def test_compiled_kernel_identity_survives_callable_collection(self):
