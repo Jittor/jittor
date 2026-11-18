@@ -435,7 +435,7 @@ class TestTritonBackend(unittest.TestCase):
         driver = _Driver.get(jt.current_device())
         requested = driver.max_shared_memory + 1
         with self.assertRaises(OutOfResources) as raised:
-            driver.ensure_dynamic_shared(None, requested)
+            driver.check_shared_memory(requested)
         self.assertEqual(raised.exception.required, requested)
         self.assertEqual(raised.exception.limit, driver.max_shared_memory)
 

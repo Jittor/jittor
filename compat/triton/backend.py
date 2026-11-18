@@ -496,6 +496,11 @@ class _Driver:
     #: kernels (by func handle value) already opted in to large dynamic smem
     _optedin = set()
 
+    def check_shared_memory(self, nbytes):
+        if nbytes > self.max_shared_memory:
+            from triton.runtime.autotuner import OutOfResources
+            raise OutOfResources(nbytes, self.max_shared_memory, "shared memory")
+
     def ensure_dynamic_shared(self, func, nbytes):
         """Opt a kernel in to >48 KB dynamic shared memory (required on sm_70+).
 
@@ -503,9 +508,6 @@ class _Driver:
         48 KB static cap; without this opt-in ``cuLaunchKernel`` returns
         ``CUDA_ERROR_INVALID_VALUE``. Idempotent per function handle.
         """
-        if nbytes > self.max_shared_memory:
-            from triton.runtime.autotuner import OutOfResources
-            raise OutOfResources(nbytes, self.max_shared_memory, "shared memory")
         if nbytes <= 49152:
             return
         key = (func.value, nbytes)
@@ -1418,6 +1420,7 @@ def _run(jitfn, args, kwargs, grid):
 
     # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
     info = _compile(jitfn, signature, constants, options, device=_launch_dev)
+    drv.check_shared_memory(info["shared"])
 
     if os.environ.get("JT_TRITON_DEBUG"):
         import sys as _sys
