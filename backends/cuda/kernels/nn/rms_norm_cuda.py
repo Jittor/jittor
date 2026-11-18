@@ -97,12 +97,10 @@ _RMS_NORM_SOURCE = r"""
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            // As ATen and HF's RMSNorm: the normalized value is rounded to the
-            // output type before the weight multiplies it -- one bf16/fp16
-            // quantum of difference otherwise.
-            out0_type normalized = out0_type(static_cast<float>(x[index]) * inverse_rms);
-            y[index] = out0_type(static_cast<float>(normalized)
-                                 * static_cast<float>(gamma[dim]));
+            float normalized = static_cast<float>(x[index]) * inverse_rms;
+            if (%(round_before_weight)d)
+                normalized = static_cast<float>(out0_type(normalized));
+            y[index] = out0_type(normalized * static_cast<float>(gamma[dim]));
         }
     }
     int rows = in0->num / %(hidden_size)d;
@@ -112,23 +110,25 @@ _RMS_NORM_SOURCE = r"""
 
 
 @lru_cache(maxsize=256)
-def _format_rms_norm_source(template, hidden_size, threads, warps, epsilon_value):
+def _format_rms_norm_source(template, hidden_size, threads, warps, epsilon_value,
+                            round_before_weight):
     return template % {
         "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
+        "round_before_weight": int(round_before_weight),
     }
 
 
-def _rms_norm_source(hidden_size, threads, warps, epsilon_value):
+def _rms_norm_source(hidden_size, threads, warps, epsilon_value, round_before_weight=True):
     """The CUDA source of the kernel below for one contract.
 
     Also what the native module call (`src/bindings/pyjt/py_module_call.cc`)
     builds the same operator from, so the two cannot drift apart.
     """
     return _format_rms_norm_source(
-        _RMS_NORM_SOURCE, hidden_size, threads, warps, epsilon_value)
+        _RMS_NORM_SOURCE, hidden_size, threads, warps, epsilon_value, round_before_weight)
 
 
 @native_rule("rms_norm_inference")
@@ -144,11 +144,20 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
         result = jt.core._try_rms_norm_cuda(x, gamma, epsilon, _rms_norm_source)
         if result is not None:
             return result
+    return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=True)
+
+
+@optional_kernel("nn.rms_norm.single_round.inference", "cuda", supports=_rms_norm_supported)
+def _rms_norm_single_round_cuda(x, gamma, epsilon=1e-6):
+    return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=False)
+
+
+def _rms_norm_cuda_code(x, gamma, epsilon, *, round_before_weight):
     contract = _rms_norm_contract(x, gamma, epsilon)
     if contract is None:
         return None
     hidden_size, threads, warps, epsilon_value = contract
-    cuda_src = _rms_norm_source(hidden_size, threads, warps, epsilon_value)
+    cuda_src = _rms_norm_source(hidden_size, threads, warps, epsilon_value, round_before_weight)
     return _stop_grad_outputs(
         jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
 
@@ -161,6 +170,16 @@ def _add_rms_norm_supported(x, residual, gamma, epsilon=1e-6):
                  supports=_add_rms_norm_supported)
 def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
     """Inference-only fused residual add and CUDA RMSNorm."""
+    return _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, round_before_weight=True)
+
+
+@optional_kernel("nn.add_rms_norm.single_round.inference", "cuda",
+                 supports=_add_rms_norm_supported)
+def _fused_add_rms_norm_single_round_cuda(x, residual, gamma, epsilon=1e-6):
+    return _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, round_before_weight=False)
+
+
+def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, round_before_weight):
     contract = _rms_norm_contract(x, gamma, epsilon, residual=residual)
     if contract is None:
         return None
@@ -203,9 +222,10 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
             float value = static_cast<float>(out1_type(static_cast<float>(x[index])
                                                        + static_cast<float>(residual[index])));
             residual_out[index] = out1_type(value);
-            out0_type normalized = out0_type(value * inverse_rms);
-            y[index] = out0_type(static_cast<float>(normalized)
-                                 * static_cast<float>(gamma[dim]));
+            float normalized = value * inverse_rms;
+            if (%(round_before_weight)d)
+                normalized = static_cast<float>(out0_type(normalized));
+            y[index] = out0_type(normalized * static_cast<float>(gamma[dim]));
         }
     }
     int rows = in0->num / %(hidden_size)d;
@@ -217,6 +237,7 @@ def _fused_add_rms_norm_cuda(x, residual, gamma, epsilon=1e-6):
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
+        "round_before_weight": int(round_before_weight),
     })
     return _stop_grad_outputs(jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],

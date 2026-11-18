@@ -8,14 +8,16 @@ import jittor as jt
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA storage writes are required')
 @pytest.mark.parametrize('layout', ['contiguous', 'transposed'])
 @pytest.mark.parametrize('index_dtype', [torch.int32, torch.int64])
+@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16], ids=['fp32', 'bfloat16'])
 @torch.no_grad()
-def test_captured_stores_copy_all_rows_and_preserve_pending_snapshots(layout, index_dtype):
+def test_captured_stores_copy_all_rows_and_preserve_pending_snapshots(layout, index_dtype, dtype):
     rng = np.random.default_rng(119)
-    expected = rng.normal(size=(4, 2, 16, 16)).astype('float32')
+    expected = rng.integers(-128, 128, size=(4, 2, 16, 16)).astype('float32') / 64
     if layout == 'contiguous':
-        target = torch.tensor(expected.copy(), device='cuda')
+        target = torch.tensor(expected.copy(), dtype=dtype, device='cuda')
     else:
-        target = torch.tensor(expected.transpose(0, 2, 1, 3).copy(), device='cuda').transpose(1, 2)
+        target = torch.tensor(expected.transpose(0, 2, 1, 3).copy(),
+                              dtype=dtype, device='cuda').transpose(1, 2)
     jt.sync([target])
     accepted = []
 
@@ -33,14 +35,14 @@ def test_captured_stores_copy_all_rows_and_preserve_pending_snapshots(layout, in
             snapshots.append((target.clone(), expected.copy()))
             blocks = np.array([0, -2, 3], dtype=np.int64)
             offsets = np.array([index % 16, (3 * index) % 16, -1], dtype=np.int64)
-            values = rng.normal(size=(3, 2, 16)).astype('float32')
-            step(torch.tensor(values, device='cuda'),
+            values = rng.integers(-128, 128, size=(3, 2, 16)).astype('float32') / 64
+            step(torch.tensor(values, dtype=dtype, device='cuda'),
                  torch.tensor(blocks, dtype=index_dtype, device='cuda'),
                  torch.tensor(offsets, dtype=index_dtype, device='cuda'))
             expected[blocks, :, offsets, :] = values
-            np.testing.assert_array_equal(target.detach().clone().cpu().numpy(), expected)
+            np.testing.assert_array_equal(target.detach().clone().float().cpu().numpy(), expected)
         for snapshot, previous in snapshots:
-            np.testing.assert_array_equal(snapshot.cpu().numpy(), previous)
+            np.testing.assert_array_equal(snapshot.float().cpu().numpy(), previous)
         assert any(accepted), 'the CUDA storage primitive was not exercised'
         assert step.refused is None
         assert step.stats['graph'] >= 2

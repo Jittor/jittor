@@ -13,6 +13,7 @@
 
 | 你看到的 | 看哪一条 |
 | --- | --- |
+| BF16 RMSNorm 在乘权重前后舍入，末位不同 | [RMSNorm 的舍入顺序](#rmsnorm-rounding-order) |
 | `1/0` 得到 `nan`、被完全 mask 的 attention 行没有变成 `nan` | {ref}`IEEE 特殊值算术 <numerics-ieee>` |
 | 极小的正数在 CUDA 上变成 0、`log` 给 `-inf`、`count_nonzero` 少数一个 | {ref}`CUDA 的次正规数 <numerics-subnormal>` |
 | `x.max()` 看不见张量里的 NaN；`maximum(-0.0, 0.0)` 的符号 | {ref}`maximum/minimum 与 max/min <numerics-minmax>` |
@@ -352,3 +353,10 @@ dim 0：改前改后同为 2.47e-3。这不是退化——**NumPy 在同一形�
 - 上次复查：2026-09-11
 - 基线：`2d716db31`
 - 复查触发：本页任何一条对应的测试文件变红、或其断言被放宽时
+<a id="rmsnorm-rounding-order"></a>
+
+## RMSNorm 的舍入顺序
+
+`jt.nn.rms_norm` 和 `jt.nn.fused_add_rms_norm` 默认先把归一化值舍入到输入类型，再乘权重。若要复现以累加精度完成乘权重的实现，传入 `round_before_weight=False`。此时乘权重后把输出转换到输入类型。带残差接口仍先按输入类型完成并保存残差和，两种模式都用这份和计算归一化。
+
+回归见 `tests/nn/test_serving_ops.py`。

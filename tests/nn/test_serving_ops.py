@@ -143,6 +143,38 @@ class TestRmsNorm(unittest.TestCase):
         np.testing.assert_allclose(normed.numpy(), expected, rtol=1e-4, atol=1e-4)
         np.testing.assert_allclose(carried.numpy(), total, rtol=1e-5, atol=1e-5)
 
+    def test_rms_norm_can_round_after_weight_in_bfloat16(self):
+        def bf16(values):
+            rounded = np.asarray(values, dtype=np.float32).copy()
+            bits = rounded.view(np.uint32)
+            bits[:] = (bits + 0x7fff + ((bits >> 16) & 1)) & 0xffff0000
+            return rounded
+
+        rng = np.random.default_rng(804)
+        raw = bf16(rng.normal(size=(4, 128)))
+        residual = bf16(rng.normal(size=raw.shape))
+        weight = bf16(rng.normal(size=(raw.shape[-1],)))
+        total = bf16(raw + residual)
+
+        def normalize(values):
+            return values / np.sqrt(np.mean(values * values, axis=-1, keepdims=True) + 1e-6)
+
+        expect = bf16(normalize(raw) * weight)
+        expect_fused = bf16(normalize(total) * weight)
+        self.assertTrue(np.any(expect != bf16(bf16(normalize(raw)) * weight)))
+        for use_cuda in (0, 1) if jt.has_cuda else (0,):
+            with self.subTest(cuda=use_cuda), jt.flag_scope(use_cuda=use_cuda), jt.no_grad():
+                x, r, w = (jt.array(array).bfloat16() for array in (raw, residual, weight))
+                actual = jt.nn.rms_norm(x, w, round_before_weight=False)
+                fused, carried = jt.nn.fused_add_rms_norm(x, r, w, round_before_weight=False)
+                jt.sync([actual, fused, carried], True, False)
+                if use_cuda:
+                    self.assertTrue(all(var.location() == "device"
+                                        for var in (actual, fused, carried)))
+                for value, reference in ((actual, expect), (fused, expect_fused), (carried, total)):
+                    self.assertEqual(str(value.dtype).split(".")[-1], "bfloat16")
+                    np.testing.assert_array_equal(value.float32().numpy(), reference)
+
 
 class TestRotaryEmbedding(unittest.TestCase):
     def _reference(self, packed, cache, head_size, rotary_dim, tokens, is_neox):

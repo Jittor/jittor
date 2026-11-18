@@ -101,7 +101,7 @@ refresh its views. Restoring those views as independent state would write throug
 the root again; later replays could overwrite fresh data with an old view snapshot.
 Logical views and views without a valid root record retain their own state records.
 
-During a no-grad captured step, indexed CUDA FP32 stores can update materialized
+During a no-grad captured step, indexed CUDA FP32 and BF16 stores can update materialized
 root storage directly. This path accepts equally sized paired 1-D int32/int64
 indices including axis 0, with full slices on the remaining axes. The RHS must
 match the selection shape and dtype; destination strides must be positive and

@@ -1983,8 +1983,10 @@ bool VarHolder::try_indexed_storage_write(VarHolder* values,
     auto* source = values->var;
     const int rank = target->shape.size();
     const int count = indices.size();
+    const auto dtype = target->dtype();
     if (rank <= 0 || rank > 16 || count <= 0 || count > rank || count != axes.size()
-            || axes[0] != 0 || target->dtype() != ns_float32 || source->dtype() != ns_float32
+            || axes[0] != 0 || (dtype != ns_float32 && dtype != ns_bfloat16)
+            || source->dtype() != dtype
             || !source->is_contiguous() || source->shape.size() != rank - count + 1
             || construction_target_backend(target) != BackendId::Cuda
             || construction_target_backend(source) != BackendId::Cuda) return false;
