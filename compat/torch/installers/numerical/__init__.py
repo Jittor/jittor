@@ -1354,6 +1354,37 @@ def install(ctx):
     g.randint_like = randint_like
 
     _bind_missing(g, "sparse_coo_tensor", sparse_coo_tensor)
+
+    # torch._has_compatible_shallow_copy_type: autograd and wrapper-subclass
+    # code asks whether two tensors can be copied without changing meaning.
+    def _has_compatible_shallow_copy_type(a, b):
+        try:
+            return (a.dtype == b.dtype
+                    and a.device == b.device
+                    and getattr(a, "layout", None) == getattr(b, "layout", None))
+        except Exception:
+            return False
+
+    _bind_missing(g, "_has_compatible_shallow_copy_type",
+                  _has_compatible_shallow_copy_type)
+
+    # torch._higher_order_ops.out_dtype(dtype, op, *args): eager semantics are
+    # "run the op, deliver the result in dtype". torchao names it at module
+    # scope.
+    def _out_dtype(dtype, op, *args, **kwargs):
+        result = op(*args, **kwargs)
+        try:
+            return result.to(dtype)
+        except AttributeError:
+            return result
+
+    _hops = ctx.registry.ensure("torch._higher_order_ops")
+    # `from torch._higher_order_ops.out_dtype import out_dtype` names the
+    # submodule; the function lives inside it, as it does upstream.
+    _out_dtype_module = ctx.registry.ensure("torch._higher_order_ops.out_dtype")
+    _out_dtype_module.out_dtype = _out_dtype
+    _hops.out_dtype = _out_dtype_module
+
     import jittor.sparse as _jt_sparse
     from ...namespace import native_module_facade
     sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")

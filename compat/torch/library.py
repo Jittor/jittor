@@ -344,6 +344,15 @@ class _OpNamespace:
             torch_module = _library_state()["torch_module"]
             function = getattr(torch_module, name, None)
             return _AtenOpProxy(name, function if callable(function) else None)
+        if object.__getattribute__(self, "_namespace") in ("_c10d_functional", "c10d", "c10d_functional"):
+            # The functional collectives' operator namespace. A single process
+            # is the identity for every member, so an unregistered name answers
+            # by returning its tensor argument (torchao names
+            # `all_gather_into_tensor` at module scope).
+            def _c10d_collective_identity(*args, **kwargs):
+                return args[0] if args else None
+
+            return _AtenOpProxy(name, _c10d_collective_identity)
         raise AttributeError(
             "torch.ops.%s has no op '%s'" % (object.__getattribute__(self, "_namespace"), name)
         )
@@ -485,6 +494,7 @@ def custom_op(name=None, fn=None, *args, **kwargs):
     recorded on the operator as ``_overridden_by_integration``.
     """
     def decorator(implementation):
+        namespace = op_name = None
         if isinstance(name, str) and "::" in name:
             namespace, op_name = name.split("::", 1)
             override = _integration_custom_op_overrides().get(name)
@@ -495,9 +505,61 @@ def custom_op(name=None, fn=None, *args, **kwargs):
                 "CompositeExplicitAutograd", override or implementation,
                 allow_override=True
             )
-        return implementation
+        # torch 2.6+ returns a definition object whose methods register the
+        # fake/kernel/autograd parts (`@op.register_fake`). Callers still call
+        # the definition as the eager implementation.
+        return _CustomOpDef(implementation, namespace, op_name)
 
     return decorator(fn) if fn is not None else decorator
+
+
+class _CustomOpDef:
+    """The object `torch.library.custom_op` returns from torch 2.6 on."""
+
+    def __init__(self, implementation, namespace=None, name=None):
+        object.__setattr__(self, "_implementation", implementation)
+        object.__setattr__(self, "_namespace", namespace)
+        object.__setattr__(self, "_name", name)
+
+    def __call__(self, *args, **kwargs):
+        return object.__getattribute__(self, "_implementation")(*args, **kwargs)
+
+    def __getattr__(self, attribute):
+        return getattr(object.__getattribute__(self, "_implementation"), attribute)
+
+    def _qualname(self):
+        namespace = object.__getattribute__(self, "_namespace")
+        name = object.__getattribute__(self, "_name")
+        return "%s::%s" % (namespace, name) if namespace and name else None
+
+    def register_fake(self, fn):
+        qualname = self._qualname()
+        if qualname is not None:
+            register_fake(qualname, fn)
+        return fn
+
+    def register_kernel(self, *args, **kwargs):
+        # register_kernel(dispatch_key) -> decorator, or (dispatch_key, fn).
+        fn = args[-1] if args and callable(args[-1]) else None
+        if fn is not None and len(args) >= 2:
+            qualname = self._qualname()
+            if qualname is not None:
+                impl(qualname, args[0], fn)
+            return fn
+
+        def decorator(function):
+            qualname = self._qualname()
+            if qualname is not None:
+                impl(qualname, args[0], function)
+            return function
+
+        return decorator
+
+    def register_autograd(self, fn):
+        qualname = self._qualname()
+        if qualname is not None:
+            register_autograd(qualname, fn)
+        return fn
 
 
 def register_fake(op, func=None, *, lib=None, **kwargs):
@@ -596,6 +658,15 @@ def infer_schema(prototype_function, *, mutates_args, op_name=None):
 register_kernel = impl
 
 
+def wrap_triton(tensor):
+    """torch.library.wrap_triton returns its argument in eager execution.
+
+    The wrapper exists so the compiler can see a triton kernel's tensor
+    arguments; there is no tracing here, so the value is already the answer.
+    """
+    return tensor
+
+
 def install_torch_library(torch_module, modules):
     """Publish stable API objects and the installation-owned dispatcher."""
     from .context import get_install_context
@@ -613,7 +684,8 @@ def install_torch_library(torch_module, modules):
     library_module = ctx.registry.ensure("torch.library")
     for name in ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
                  "register_kernel", "impl", "register_autograd",
-                 "register_torch_dispatch", "register_vmap", "opcheck", "get_ctx"):
+                 "register_torch_dispatch", "register_vmap", "opcheck", "get_ctx",
+                 "wrap_triton"):
         setattr(library_module, name, globals()[name])
     ops_module = ctx.registry.ensure("torch._ops")
     ops_module.OpOverload = _RegisteredOp

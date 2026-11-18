@@ -230,6 +230,23 @@ def install_with_registry(dist, torch_module=None, registry=None):
             return "AsyncCollectiveTensor(%r)" % (
                 object.__getattribute__(self, "_tensor"),)
 
+    # torch.ops._c10d_functional: the operator namespace behind the functional
+    # collectives. Single-process calls are the identity as well; torchao
+    # names these operators in module-scope tables.
+    _ops_dispatcher = getattr(torch_module, "ops", None)
+    _ops_get_or_create = getattr(_ops_dispatcher, "get_or_create", None)
+    if _ops_get_or_create is not None:
+        # Create through the dispatcher API: attribute access on the ops
+        # namespace probes the native module first and escapes as an install
+        # error while the shim is in its strict bootstrap.
+        _ops_get_or_create("_c10d_functional", "all_gather_into_tensor").register_impl(
+            "CompositeExplicitAutograd",
+            lambda input, group_size, group_name="": input, allow_override=True)
+        _ops_get_or_create("_c10d_functional", "reduce_scatter_tensor").register_impl(
+            "CompositeExplicitAutograd",
+            lambda input, reduceOp="sum", group_size=1, group_name="": input,
+            allow_override=True)
+
     functional_collectives_mod.all_reduce = _fc_all_reduce
     functional_collectives_mod.wait_tensor = _fc_wait_tensor
     functional_collectives_mod.all_gather_into_tensor = _fc_all_gather_into_tensor
