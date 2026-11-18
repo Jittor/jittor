@@ -58,6 +58,12 @@ def test_empty_fast_path_defaults_to_a_frozen_leaf(device):
         target.zero_()
         assert not target.requires_grad
         on_device(target, device)
+    for dtype in (torch.bfloat16, torch.int64):
+        target = torch.empty((2, 3), dtype=dtype, device=device, requires_grad=False)
+        assert target.dtype is dtype and not target.requires_grad and target.is_leaf
+        target.fill_(2)
+        on_device(target, device)
+        assert target.sum().item() == 12
     target = torch.empty(2, requires_grad=True)
     assert target.requires_grad and target.is_leaf
 
