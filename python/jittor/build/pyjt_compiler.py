@@ -699,7 +699,8 @@ def compile_src(src, h, basename):
             defs.append(def_info)
         LOG.vvv(lambda: json.dumps(def_info, indent=4))
     # deal with defs
-    if len(defs) == 0: return
+    if not defs and submodule_info is None:
+        return
     # include_name = h[4:] # remove "src/" prefix
     include_name = h
     code = []
