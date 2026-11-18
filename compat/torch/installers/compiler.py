@@ -31,6 +31,35 @@ def _wants_replay(mode, options):
     return bool(options and options.get("triton.cudagraphs"))
 
 
+class _FullGraphFunction:
+    """`torch.compile(fullgraph=True)`: every op must stay inside Jittor.
+
+    TorchDynamo's fullgraph asserts the callable becomes one graph with no
+    breaks. Jittor already JIT-compiles every operator and has no graph-break
+    concept, so the equivalent, checkable assertion is that the whole callable
+    runs as Jittor operators with zero backend fallbacks: the call is executed
+    under `forbid_backend_fallbacks()` and the native fallback counter must not
+    move. A callable that leaves the backend raises instead of being accepted.
+    """
+
+    def __init__(self, function):
+        self._function = function
+
+    def __call__(self, *args, **kwargs):
+        import jittor as _jt
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+        before = _jt.core.backend_fallback_count()
+        with forbid_backend_fallbacks():
+            result = self._function(*args, **kwargs)
+        after = _jt.core.backend_fallback_count()
+        if after != before:
+            raise RuntimeError(
+                "torch.compile(fullgraph=True): the callable used %d backend "
+                "fallback(s); a single-graph compilation cannot contain them"
+                % (after - before))
+        return result
+
+
 def compile(model=None, *args, **kwargs):
     """`torch.compile`: graph replay for the CUDA-graph modes, else identity.
 
@@ -45,12 +74,7 @@ def compile(model=None, *args, **kwargs):
     the call, with no differentiable caller inputs. Any other mode runs as written.
     """
     from ...stub_policy import unimplemented
-    if kwargs.get("fullgraph"):
-        unimplemented(
-            "torch.compile(fullgraph=True)",
-            "accept an unchecked single-graph assertion",
-            "Drop fullgraph=True because Jittor runs each op through its own JIT.",
-        )
+    fullgraph = bool(kwargs.get("fullgraph"))
     backend = kwargs.get("backend")
     if backend not in _COMPILE_DEFAULT_BACKENDS:
         name = getattr(backend, "__name__", None) or repr(backend)
@@ -61,6 +85,10 @@ def compile(model=None, *args, **kwargs):
         )
     if model is None:
         return lambda value: compile(value, *args, **kwargs)
+    if fullgraph:
+        if not callable(model):
+            return model
+        return _FullGraphFunction(model)
     if not _wants_replay(kwargs.get("mode"), kwargs.get("options")):
         return model
     from jittor._runtime.graph_replay import release_auto_replay
@@ -811,6 +839,9 @@ def install(ctx):
     _dynamo.__path__ = []
     _dynamo.disable = _api_dynamo_disable
     _dynamo.allow_in_graph = _api_dynamo_allow_in_graph
+    if not hasattr(_dynamo, "nonstrict_trace"):
+        _dynamo.nonstrict_trace = lambda function=None, **kwargs: (
+            function if function is not None else _identity)
     _dynamo.disallow_in_graph = _api_dynamo_disallow_in_graph
     _dynamo.assume_constant_result = _api_dynamo_assume_constant_result
     _dynamo.is_compiling = _api_dynamo_is_compiling

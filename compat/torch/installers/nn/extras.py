@@ -178,6 +178,13 @@ def _install_nn_extras(nn, registry=None):
 
         functional_module.ScalingType = ScalingType
 
+        class SwizzleType:
+            NO_SWIZZLE = 0
+            SWIZZLE_32_4_4 = 1
+            SWIZZLE_128B = 2
+
+        functional_module.SwizzleType = SwizzleType
+
         def scaled_grouped_mm(*args, **kwargs):
             raise NotImplementedError(
                 "torch.nn.functional.scaled_grouped_mm has no Jittor implementation")

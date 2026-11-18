@@ -913,6 +913,7 @@ def install(ctx):
         _fake_tensor.unset_fake_temporarily = (
             _api_fake_tensor_unset_fake_temporarily
         )
+        _fake_tensor.is_fake = lambda tensor=None: False
         _functional_tensor.FunctionalTensor = FunctionalTensor
         _subclasses.fake_tensor = _fake_tensor
         _subclasses.functional_tensor = _functional_tensor

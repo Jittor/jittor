@@ -172,6 +172,14 @@ def install_with_registry(dist, torch_module=None, registry=None):
     comp_fsdp_mod.fully_shard = comp_fsdp_fully_mod
     comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
     dist._functional_collectives = functional_collectives_mod
+    tensor_experimental = module("torch.distributed.tensor.experimental")
+    if not hasattr(tensor_experimental, "register_sharding"):
+        tensor_experimental.register_sharding = lambda *args, **kwargs: (lambda function: function)
+    if not hasattr(tensor_experimental, "local_map"):
+        tensor_experimental.local_map = lambda *args, **kwargs: (lambda function: function)
+    if hasattr(tensor_mod, "__path__") is False:
+        tensor_mod.__path__ = []
+    tensor_mod.experimental = tensor_experimental
     if not hasattr(functional_collectives_mod, "all_reduce"):
         def all_reduce(tensor, op=None, group=None, tag=None, async_op=False):
             if dist.is_available() and dist.is_initialized():

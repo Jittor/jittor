@@ -232,7 +232,11 @@ def _torch_stream_randn(name, args, kwargs):
     array = np.asarray(stream.fill_normal(count), dtype=np.float64).astype(numpy_dtype).reshape(shape)
     if _dbg:
         print("RANDN_DEBUG used: shape", shape, "first", round(float(array.ravel()[0]), 7), flush=True)
-    return _make_cpu_resident(jt.array(array))
+    from ..context import get_install_context as _install_context
+    from ..frontend import tensor_frontend as _tensor_frontend
+    _context = _install_context(jt)
+    with _tensor_frontend(_context.target_namespace.Var, device="cpu"):
+        return _make_cpu_resident(jt.array(array))
 
 
 def randn(*args, **kwargs):
