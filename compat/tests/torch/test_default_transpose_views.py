@@ -220,17 +220,18 @@ def test_clone_preserves_only_nonoverlapping_dense_format(device, kind, contiguo
 
 
 @pytest.mark.parametrize('device', ['cpu', 'cuda'])
-def test_empty_like_preserves_the_dense_permutation_of_a_transposed_tensor(device):
+@pytest.mark.parametrize('narrow', [False, True])
+def test_empty_like_preserves_the_axis_order_of_a_transposed_tensor(device, narrow):
     x = source(device)
-    y = x.t()
+    y = x[:, :2].t() if narrow else x.t()
     out = torch.empty_like(y, dtype=torch.bfloat16, requires_grad=True)
-    assert out.shape == y.shape and out.stride() == y.stride()
+    assert out.shape == y.shape and out.stride() == (1, int(y.shape[0]))
     assert out.device == y.device and out.dtype is torch.bfloat16
     assert out.is_leaf and out.requires_grad and not out._is_view()
     assert out.data_ptr() != y.data_ptr()
     with torch.no_grad():
         out.fill_(4)
-    np.testing.assert_array_equal(_array(physical(out.float())), np.full((3, 2), 4))
+    np.testing.assert_array_equal(_array(physical(out.float())), np.full(tuple(y.shape), 4))
     assert torch.empty_like(y, memory_format=torch.contiguous_format).stride() == (2, 1)
     assert torch.empty_like(x[:, ::2]).stride() == (2, 1)
 
