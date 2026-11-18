@@ -2275,6 +2275,31 @@ ItemData VarHolder::item() {
 // from fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
 
+void poll_fetches() {
+    {
+        // The executor can retire a fetch while it waits for a prior batch.
+        // Keep its root alive once we release the graph lock.
+        vector<VarPtr> pending;
+        {
+            ExecutorEntryScope entry;
+            pending.reserve(fetcher.size());
+            for (const auto& v : fetcher)
+                pending.emplace_back(v.ptr);
+        }
+        if (!pending.empty()) {
+            vector<Var*> vars;
+            vars.reserve(pending.size());
+            for (const auto& v : pending)
+                vars.push_back(v.ptr);
+            runtime_executor().run_sync(move(vars), false, false);
+        }
+    }
+#ifdef HAS_ACCELERATOR
+    ExecutorEntryScope entry;
+    event_queue.flush();
+#endif
+}
+
 void sync_all(bool device_sync) {
     vector<Var*> vars;
     vars.reserve(runtime_holder_state().holders().size());
