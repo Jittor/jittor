@@ -85,3 +85,24 @@ def sparse_coo_tensor(indices, values, size=None, dtype=None, device=None,
     if nnz > 0:
         flat.index_add_(0, jt.array(linear), values.reshape([nnz] + tail_shape))
     return _SparseCOO(flat.reshape(sparse_shape + tail_shape))
+
+
+class SparseSemiStructuredTensor:
+    """Placeholder for torch's semi-structured sparse tensor subclasses.
+
+    torchao references the classes at import time; the Jittor backend has no
+    semi-structured sparse kernels, so constructing or using one is unsupported.
+    """
+
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "semi-structured sparse tensors are not supported by the Jittor "
+            "compatibility layer")
+
+
+class SparseSemiStructuredTensorCUSPARSELT(SparseSemiStructuredTensor):
+    pass
+
+
+class SparseSemiStructuredTensorCUTLASS(SparseSemiStructuredTensor):
+    pass

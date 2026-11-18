@@ -1342,6 +1342,11 @@ def install(ctx):
 
     _bind_missing(g, "sparse_coo_tensor", sparse_coo_tensor)
     import jittor.sparse as _jt_sparse
+    for _sparse_cls in ("SparseSemiStructuredTensor",
+                        "SparseSemiStructuredTensorCUSPARSELT",
+                        "SparseSemiStructuredTensorCUTLASS"):
+        if not hasattr(_jt_sparse, _sparse_cls):
+            setattr(_jt_sparse, _sparse_cls, type(_sparse_cls, (object,), {}))
     from ...namespace import native_module_facade
     sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
     g.sparse = sparse_namespace
@@ -1379,7 +1384,6 @@ def install_parity(ctx):
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
 
-    sparse = g.sparse
     registry.publish("torch.sparse", sparse)
     g.sparse = sparse
 

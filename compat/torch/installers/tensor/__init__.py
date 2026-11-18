@@ -976,6 +976,23 @@ def install(ctx):
     g.preserve_format = "preserve_format"
     g.channels_last = "channels_last"
     g.channels_last_3d = "channels_last_3d"
+    if not hasattr(g, "_has_compatible_shallow_copy_type"):
+        g._has_compatible_shallow_copy_type = lambda a, b: True
+    if "torch._prims_common" not in _modules:
+        import types as _prims_types
+        _prims_common = _prims_types.ModuleType("torch._prims_common")
+        _prims_common.suggest_memory_format = lambda tensor=None: g.contiguous_format
+
+        def _make_contiguous_strides_for(shape, memory_format=None):
+            strides = []
+            accumulator = 1
+            for size in reversed(tuple(shape)):
+                strides.append(accumulator)
+                accumulator *= max(int(size), 1)
+            return tuple(reversed(strides))
+
+        _prims_common.make_contiguous_strides_for = _make_contiguous_strides_for
+        _modules["torch._prims_common"] = _prims_common
     g.layout = layout
     g.memory_format = memory_format
 

@@ -366,6 +366,11 @@ def _install_cuda(g, registry=None):
             _modules["torch.sparse._triton_ops_meta"] = triton_meta
             if sparse_mod is not None:
                 sparse_mod._triton_ops_meta = triton_meta
+        for _sparse_cls in ("SparseSemiStructuredTensor",
+                            "SparseSemiStructuredTensorCUSPARSELT",
+                            "SparseSemiStructuredTensorCUTLASS"):
+            if not hasattr(sparse_mod, _sparse_cls):
+                setattr(sparse_mod, _sparse_cls, type(_sparse_cls, (object,), {}))
         c_mod._len_torch_dispatch_stack = lambda: 0
         c_mod._is_torch_function_mode_enabled = lambda: False
         autograd_c = getattr(c_mod, "_autograd", None)

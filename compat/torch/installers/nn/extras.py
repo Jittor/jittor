@@ -167,6 +167,22 @@ def _install_nn_extras(nn, registry=None):
     # torch.nn is the physical jittor.nn package, so keep its real attention
     # capability module intact and register the torch path as an alias.
     from jittor.nn import attention as attn_mod
+    functional_module = getattr(nn, "functional", None)
+    if functional_module is not None and not hasattr(functional_module, "ScalingType"):
+        class ScalingType:
+            TensorWise = 0
+            RowWise = 1
+            BlockWise1x16 = 2
+            BlockWise1x32 = 3
+            BlockWise1x128 = 4
+
+        functional_module.ScalingType = ScalingType
+
+        def scaled_grouped_mm(*args, **kwargs):
+            raise NotImplementedError(
+                "torch.nn.functional.scaled_grouped_mm has no Jittor implementation")
+
+        functional_module.scaled_grouped_mm = scaled_grouped_mm
     if not hasattr(nn, "Hardtanh"):
         class Hardtanh(nn.Module):
             def __init__(self, min_val=-1.0, max_val=1.0, inplace=False):

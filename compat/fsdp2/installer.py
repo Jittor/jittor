@@ -172,6 +172,30 @@ def install_with_registry(dist, torch_module=None, registry=None):
     comp_fsdp_mod.fully_shard = comp_fsdp_fully_mod
     comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
     dist._functional_collectives = functional_collectives_mod
+    if not hasattr(functional_collectives_mod, "all_reduce"):
+        def all_reduce(tensor, op=None, group=None, tag=None, async_op=False):
+            if dist.is_available() and dist.is_initialized():
+                dist.all_reduce(tensor, op=op if op is not None else dist.ReduceOp.SUM, group=group)
+            return tensor
+
+        def reduce(tensor, dst, op=None, group=None, tag=None, async_op=False):
+            if dist.is_available() and dist.is_initialized():
+                dist.reduce(tensor, dst, op=op if op is not None else dist.ReduceOp.SUM, group=group)
+            return tensor
+
+        def _unsupported_collective(name):
+            def implementation(*args, **kwargs):
+                raise NotImplementedError(
+                    "torch.distributed._functional_collectives.%s is not implemented "
+                    "by the Jittor compatibility layer" % name)
+            return implementation
+
+        functional_collectives_mod.all_reduce = all_reduce
+        functional_collectives_mod.reduce = reduce
+        for _name in ("all_gather", "all_gather_into_tensor", "reduce_scatter",
+                      "reduce_scatter_tensor", "broadcast"):
+            if not hasattr(functional_collectives_mod, _name):
+                setattr(functional_collectives_mod, _name, _unsupported_collective(_name))
 
     exports = {}
     for owner, names in (

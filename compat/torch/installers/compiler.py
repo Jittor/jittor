@@ -655,6 +655,11 @@ def install(ctx):
     _inductor_utils = _types2.ModuleType("torch._inductor.utils")
     _inductor_utils.fresh_cache = _api_inductor_fresh_cache
     _inductor.utils = _inductor_utils
+    if not hasattr(_inductor, "decomposition"):
+        _inductor_decomposition = _types2.ModuleType("torch._inductor.decomposition")
+        _inductor_decomposition.register_decomposition = lambda op=None, **kwargs: (lambda function: function)
+        _inductor.decomposition = _inductor_decomposition
+        _modules["torch._inductor.decomposition"] = _inductor_decomposition
     _modules["torch._inductor.utils"] = _inductor_utils
     _modules["torch._inductor"] = _inductor
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass

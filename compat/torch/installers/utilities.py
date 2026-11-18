@@ -1019,6 +1019,9 @@ def install_parity(ctx):
         testing._comparison = comparison
     g.testing = testing
 
+    _pytree_module = getattr(getattr(g, "utils", None), "_pytree", None)
+    if _pytree_module is not None and not hasattr(_pytree_module, "register_constant"):
+        _pytree_module.register_constant = lambda cls, *args, **kwargs: cls
     model_zoo = module("torch.utils.model_zoo")
     if not hasattr(model_zoo, "tqdm"):
         try:

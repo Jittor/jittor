@@ -271,6 +271,9 @@ class _RegisteredOp:
             full = "%s.%s" % (object.__getattribute__(self, "name"), name)
             if full in ops:
                 return ops[full]
+            if (object.__getattribute__(self, "namespace") in ("aten", "_c10d_functional", "c10d", "c10d_functional")
+                    and not name.startswith("__")):
+                return getattr(namespace, full)
         raise AttributeError(
             "torch.ops.%s.%s has no overload '%s'"
             % (object.__getattribute__(self, "namespace"),
@@ -307,6 +310,33 @@ class _OpNamespace:
         ops = object.__getattribute__(self, "_ops")
         if name in ops:
             return ops[name]
+        namespace = object.__getattribute__(self, "_namespace")
+        if namespace in ("aten", "_c10d_functional", "c10d", "c10d_functional") and not name.startswith("__"):
+            base = name.split(".", 1)[0]
+
+            def _aten_dispatch(*args, **kwargs):
+                if args:
+                    method = getattr(args[0], base, None)
+                    if callable(method):
+                        return method(*args[1:], **kwargs)
+                if namespace == "aten":
+                    import jittor as _jt
+                    function = getattr(_jt, base, None)
+                    if callable(function):
+                        return function(*args, **kwargs)
+                else:
+                    from torch.distributed import _functional_collectives as _fc
+                    function = getattr(_fc, base, None)
+                    if callable(function):
+                        return function(*args, **kwargs)
+                raise NotImplementedError(
+                    "torch.ops.%s.%s has no Jittor dispatch" % (namespace, base))
+
+            operator = _RegisteredOp(namespace, name, self)
+            operator.register_impl("CompositeExplicitAutograd", _aten_dispatch, allow_override=True)
+            with InstallTransaction._lock:
+                _set_item(ops, name, operator)
+            return operator
         raise AttributeError(
             "torch.ops.%s has no op '%s'" % (object.__getattribute__(self, "_namespace"), name)
         )
@@ -602,6 +632,17 @@ def install_torch_library(torch_module, modules):
     ops_module.HigherOrderOperator = HigherOrderOperator
     ops_module.__all__ = ["OpOverload", "OpOverloadPacket", "HigherOrderOperator"]
     modules["torch.library"] = library_module
+    if "torch._library.infer_schema" not in modules:
+        import types as _types_lib
+        _lib_pkg = modules.get("torch._library")
+        if _lib_pkg is None:
+            _lib_pkg = _types_lib.ModuleType("torch._library")
+            _lib_pkg.__path__ = []
+            modules["torch._library"] = _lib_pkg
+        _infer = _types_lib.ModuleType("torch._library.infer_schema")
+        _infer.infer_schema = lambda fn, mutates_args=None, **kwargs: "(*args) -> Tensor"
+        modules["torch._library.infer_schema"] = _infer
+        _lib_pkg.infer_schema = _infer
     modules["torch._ops"] = ops_module
     torch_module.library = library_module
     torch_module._ops = ops_module
@@ -615,6 +656,16 @@ def install_torch_library(torch_module, modules):
 
         def _aten_layer_norm(input, normalized_shape, weight=None, bias=None, eps=1e-5):
             return _jt.nn.layer_norm(input, normalized_shape, weight, bias, eps)
+
+        def _aten_slice(self, dim=0, start=0, end=None, step=1):
+            index = [slice(None)] * self.ndim
+            index[dim] = slice(start, end, step)
+            return self[tuple(index)]
+
+        def _aten_select(self, dim, index):
+            selection = [slice(None)] * self.ndim
+            selection[dim] = index
+            return self[tuple(selection)]
 
         def _aten_identity(self, *args, **kwargs):
             return self
@@ -679,6 +730,16 @@ def install_torch_library(torch_module, modules):
             ("addmm", lambda bias, a, b, *args, **kwargs: bias + a @ b),
             ("addbmm", lambda bias, a, b, *args, **kwargs: bias + a @ b),
             ("baddbmm", lambda bias, a, b, *args, **kwargs: bias + a @ b),
+            ("new_zeros", lambda self, size, *args, **kwargs: self.new_zeros(tuple(size))),
+            ("new_ones", lambda self, size, *args, **kwargs: self.new_ones(tuple(size))),
+            ("new_empty", lambda self, size, *args, **kwargs: self.new_empty(tuple(size))),
+            ("new_full", lambda self, size, value, *args, **kwargs: self.new_ones(tuple(size)) * value),
+            ("slice", _aten_slice),
+            ("slice.Tensor", _aten_slice),
+            ("select.int", _aten_select),
+            ("select.Tensor", _aten_select),
+            ("select", _aten_select),
+            ("narrow", lambda self, dim, start, length, *a, **k: _aten_slice(self, dim, start, start + length, 1)),
             ("empty_like", _aten_like("new_empty")),
             ("zeros_like", _aten_like("new_zeros")),
             ("ones_like", _aten_like("new_ones")),
