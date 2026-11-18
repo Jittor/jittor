@@ -130,13 +130,26 @@ def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
     )
 
 
-def fused_add_rms_norm(x, residual, weight, eps=1e-6, *, round_before_weight=True):
+def fused_add_rms_norm(x, residual, weight, eps=1e-6, *,
+                       round_before_weight=True, fp32_residual=False):
     """Add the residual, then normalise -- returning ``(normalised, residual)``.
 
     The updated residual is the sum, which the next layer adds onto in turn;
     returning both is what lets the two steps share one pass over the data.
     ``round_before_weight`` has the same meaning as in ``rms_norm``.
+    With ``fp32_residual=True``, normalize and scale the unrounded sum in
+    float32 for narrower inputs. Return both outputs in the input dtype.
     """
+    if fp32_residual:
+        fused = try_dispatch("nn.add_rms_norm.fp32_residual.inference",
+                             x, residual, weight, eps)
+        if fused is not None:
+            return fused
+        dtype = x.dtype
+        accumulation = "float64" if _jittor_dtype_name(dtype) == "float64" else "float32"
+        total = x.cast(accumulation) + residual.cast(accumulation)
+        scale = jt.rsqrt((total * total).mean(-1, keepdims=True) + eps)
+        return (total * scale * weight.cast(accumulation)).cast(dtype), total.cast(dtype)
     acl_backend = _backend_hooks.acl_grouped_add_rms_norm
     if round_before_weight and acl_backend is not None:
         fused = acl_backend(x, residual, weight, eps)
