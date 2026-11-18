@@ -858,6 +858,8 @@ def _drop_trailing_full_slices(data, index):
     if not isinstance(index, tuple) or len(index) < 2:
         return index
     first, rest = index[0], index[1:]
+    if isinstance(first, _NativeVar) and rest[-1] is Ellipsis:
+        rest = rest[:-1]
     if not all(isinstance(item, slice) and item.start is None
                and item.stop is None and item.step is None for item in rest):
         return index

@@ -371,3 +371,21 @@ def test_parameter_data_slice_copies_cpu_checkpoint_weight_to_cuda():
         np.testing.assert_array_equal(parameter.cpu().float().numpy(), expected)
         np.testing.assert_array_equal(data.cpu().float().numpy(), expected)
         np.testing.assert_array_equal(weight.float().numpy(), before.numpy())
+
+
+
+def test_cuda_boolean_index_with_trailing_ellipsis_matches_mask_assignment():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime(), jt.flag_scope(backend_fallback="error"):
+        value = torch.arange(12, dtype=torch.float32, device="cuda").reshape(3, 2, 2)
+        mask = torch.tensor([True, False, True], dtype=torch.bool, device="cuda")
+        value[mask, ...] = 0
+        jt.sync([value], device_sync=True)
+
+        assert value.location() == "device"
+        np.testing.assert_array_equal(value[mask, ...].cpu().numpy(), np.zeros((2, 2, 2)))
+        np.testing.assert_array_equal(value.cpu().numpy(), [
+            [[0, 0], [0, 0]], [[4, 5], [6, 7]], [[0, 0], [0, 0]],
+        ])
