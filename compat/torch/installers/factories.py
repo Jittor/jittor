@@ -57,8 +57,8 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves input shape, dtype, device and leaf-gradient options but "
-    "approximates or omits Torch layout, pin-memory and memory-format semantics"
+    "preserves shape, dtype, device, leaf-gradient options and dense storage order. "
+    "It honors contiguous_format. Other layouts and pin-memory options are approximate."
 )
 
 
@@ -237,8 +237,23 @@ def _factory_implementation(value):
     return value
 
 
-def _allocate_empty_like(input):
-    return jt.empty(input.shape, dtype=input.dtype)
+def _allocate_empty_like(input, dtype=None, preserve_layout=True):
+    shape = tuple(input.shape)
+    dtype = input.dtype if dtype is None else dtype
+    if preserve_layout and not input._storage_is_contiguous():
+        strides = input._storage_strides()
+        # Torch densifies a strided slice in its physical axis order. The
+        # dimension order matters even when the source has gaps between rows.
+        if all(size <= 1 or stride > 0 for size, stride in zip(shape, strides)):
+            order = sorted(range(len(shape)), key=lambda axis: (strides[axis], shape[axis]),
+                           reverse=True)
+            if order != list(range(len(shape))):
+                inverse = [0] * len(order)
+                for position, axis in enumerate(order):
+                    inverse[axis] = position
+                storage = jt.empty([shape[axis] for axis in order], dtype=dtype)
+                return storage._storage_permute(jt.NanoVector(inverse))
+    return jt.empty(shape, dtype=dtype)
 
 
 def _copy_like(input):
@@ -279,7 +294,10 @@ def _empty_like_implementation(input, **kwargs):
         # device the factory call requested.
         device = kwargs.pop("device", None)
         return _materialize_meta_like(input, device, **kwargs)
-    return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
+    factory = _allocate_empty_like
+    if kwargs.get("memory_format") not in (None, "preserve_format"):
+        factory = functools.partial(factory, preserve_layout=False)
+    return _constructor_adapter("empty_like", factory, True, input, **kwargs)
 
 
 def _install_empty_like(root):
