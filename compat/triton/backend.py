@@ -1486,7 +1486,12 @@ def _run(jitfn, args, kwargs, grid):
     operand_vars = [v for v in out_vars if _is_var(v)]
     fast_sync = _fast_sync_enabled()
     if operand_vars:
-        jt.sync(operand_vars, not fast_sync)
+        # A weak sync also submits older, unrelated pending holders. The
+        # foreign launch needs only these operands and their dependencies.
+        jt.sync(operand_vars, not fast_sync, False)
+        # Materialize views before walking their sharing rings. Any pointer
+        # parameter may be written, so retain its pending readers' old bytes.
+        jt.core._preserve_step_readers(operand_vars)
     elif out_vars:
         # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
         # cannot be named to `jt.sync`; keep the broad sweep for that case.
