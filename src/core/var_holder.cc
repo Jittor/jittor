@@ -665,6 +665,17 @@ void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
                      src->var->mem_ptr, source_device, var->size, true);
         return;
     }
+    if (destination_device.backend != BackendId::Cpu
+            && destination_device.backend == source_device.backend
+            && destination_device.index == source_device.index) {
+        vector<int64> shape, strides;
+        for (uint d = 0; d < var->shape.size(); ++d) {
+            shape.push_back(var->shape[d]);
+            strides.push_back(var->storage_stride(d));
+        }
+        if (backend_copy_strided_from_dense(var->mem_ptr, src->var->mem_ptr,
+                destination_device, shape, strides, var->dsize())) return;
+    }
     // Coalesce the innermost contiguous dimensions. Each run uses the same
     // backend/stream copy as the dense path, without rebinding either holder
     // or reading accelerator data on the host.

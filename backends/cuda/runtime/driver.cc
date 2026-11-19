@@ -17,6 +17,9 @@ namespace jittor {
 DECLARE_FLAG(int, cuda_device_allocator_managed_fallback);
 EXTERN_LIB bool no_device_error_when_free;
 void cuda_backend_check_nan(Var*, Op*);
+#if defined(IS_CUDA) && !defined(IS_COREX)
+bool cuda_copy_strided_from_dense(void*, const void*, const int64*, const int64*, int, size_t);
+#endif
 namespace {
 int accelerator_count() {
     auto& count = runtime_device_state().device_count;
@@ -580,11 +583,32 @@ private:
     std::atomic<bool>* release_ = nullptr;
 };
 
+#if defined(IS_CUDA) && !defined(IS_COREX)
+bool copy_strided_from_dense(void* dst, const void* src, Device device,
+                             const int64* shape, const int64* strides,
+                             int rank, size_t item_size) {
+    return on_device(device.index, [&] {
+        LaunchErrorScope error_scope(device, false,
+                                    reinterpret_cast<uintptr_t>(cudaStreamPerThread));
+        return cuda_copy_strided_from_dense(dst, src, shape, strides, rank, item_size);
+    });
+}
+#endif
+
 void copy(void* dst, Device target, const void* src, Device source, size_t size, bool ordered) {
     if (!size) return;
     int device = target.backend == BackendId::Cpu ? source.index : target.index;
     on_device_void(device, [&] {
         if (ordered && source.backend != BackendId::Cpu && target.backend != BackendId::Cpu) {
+            // Small same-device feeds need compute order, not a separate
+            // transfer engine. Two event joins cost more than copying these
+            // bytes and serialize every input of a replayed step. Keep large
+            // and peer transfers on the existing copy-stream path.
+            if (source.index == target.index && size <= (64u << 10)) {
+                copy_async(dst, target, src, source, size,
+                           backend_stream(target, BackendStreamKind::Compute));
+                return;
+            }
             if (source.index != device) accelerator_peer(source.index, device);
             auto stream = backend_stream(target, BackendStreamKind::Copy);
             backend_side_stream_wait_default(BackendStreamKind::Copy, device, source.index);
@@ -734,6 +758,9 @@ BackendOps make_cuda_backend() {
     ops.allocator = accelerator_allocator_for;
     ops.copy = copy;
     ops.copy_async = copy_async;
+#if defined(IS_CUDA) && !defined(IS_COREX)
+    ops.copy_strided_from_dense = copy_strided_from_dense;
+#endif
     ops.synchronize = accelerator_sync;
     ops.stream = accelerator_backend_stream;
     ops.enable_peer = accelerator_peer;

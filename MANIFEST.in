@@ -318,6 +318,7 @@ include backends/cuda/libraries/cutt/include/cutt_wrapper.h
 include backends/cuda/libraries/cutt/src/cutt_wrapper.cc
 include backends/cuda/runtime/driver.cc
 include backends/cuda/runtime/nan_checker.cc
+include backends/cuda/runtime/strided_copy.cu
 include backends/cuda/src/fp16_emu.cc
 include backends/cuda/src/helper_cuda.cc
 include backends/rocm/libraries/hipblas/gemm_layout.h
