@@ -17,6 +17,7 @@ Indexed by symptom:
 
 | What you see | Which entry |
 | --- | --- |
+| BF16 RMSNorm differs in the last bits when rounding moves across the weight multiply | [RMSNorm rounding order](#rmsnorm-rounding-order) |
 | `1/0` gives `nan`, and a fully masked attention row does not become `nan` | {ref}`IEEE special-value arithmetic <numerics-ieee-en>` |
 | A tiny positive number becomes 0 on CUDA, `log` gives `-inf`, `count_nonzero` is off by one | {ref}`CUDA subnormals <numerics-subnormal-en>` |
 | `x.max()` cannot see a NaN in the tensor; the sign of `maximum(-0.0, 0.0)` | {ref}`maximum/minimum vs max/min <numerics-minmax-en>` |
@@ -434,3 +435,10 @@ repository's
 - Baseline: `2d716db31`
 - Review trigger: when the test file behind any entry on this page goes red, or its
   assertion is loosened
+<a id="rmsnorm-rounding-order"></a>
+
+## RMSNorm rounding order
+
+`jt.nn.rms_norm` and `jt.nn.fused_add_rms_norm` round the normalized value to the input dtype before multiplying the weight by default. Pass `round_before_weight=False` to multiply the weight in the accumulation dtype and cast the completed result to the input dtype. The residual variant still adds and stores the residual in the input dtype, and computes normalization from that sum in both modes.
+
+The regression is in `tests/nn/test_serving_ops.py`.
