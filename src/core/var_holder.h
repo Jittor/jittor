@@ -931,6 +931,10 @@ public:
     // in-place update then writes into it rather than beside it.
     // @pyjt(_capture_owned)
     bool capture_owned() { return var->capture_owners != 0; }
+    // Read-only operand for a native kernel that honors the original strides.
+    // @pyjt(_physical_storage_window)
+    VarHolder* physical_storage_window();
+
     // @pyjt(_storage_offset)
     int64 storage_offset() { return var->storage_offset_bytes / var->dsize(); }
     // @pyjt(_storage_strides)

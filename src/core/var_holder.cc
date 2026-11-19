@@ -83,14 +83,19 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
-VarPtr ready_storage_alias(VarHolder* source) {
+static VarPtr ready_storage_alias_impl(VarHolder* source, bool physical_window) {
     Var* original = source->var;
     USER_CHECK(original->num >= 0 && !original->flag(VarFlags::_execution_failed)
             && original->allocator && (original->mem_ptr || !original->size))
         << "rematerialization needs successfully materialized output storage";
 
-    VarPtr ready(original->shape, original->dtype());
-    ready->storage_strides = original->storage_strides;
+    NanoVector shape = original->shape;
+    if (physical_window) {
+        shape = NanoVector();
+        shape.push_back(original->storage_span_bytes() / original->dsize());
+    }
+    VarPtr ready(shape, original->dtype());
+    if (!physical_window) ready->storage_strides = original->storage_strides;
     ready->device_id = original->device_id;
     ready->placement = original->placement;
     ready->set_flag(VarFlags::_host_resident, original->flag(VarFlags::_host_resident));
@@ -108,6 +113,22 @@ VarPtr ready_storage_alias(VarHolder* source) {
     // Complete only this new inputless leaf. Original nodes remain untouched.
     ready->finish_pending_liveness();
     return ready;
+}
+
+VarPtr ready_storage_alias(VarHolder* source) {
+    return ready_storage_alias_impl(source, false);
+}
+
+extern bool no_grad;
+
+VarHolder* VarHolder::physical_storage_window() {
+    USER_CHECK(no_grad && var->is_finished() && var->num > 0
+            && var->allocator && allocation_device(var->allocator).backend == BackendId::Cuda)
+        << "physical storage window requires a materialized CUDA tensor in no_grad mode";
+    for (int axis = 0; axis < var->shape.size(); ++axis)
+        USER_CHECK(var->storage_stride(axis) > 0)
+            << "physical storage window requires positive strides";
+    return new VarHolder(ready_storage_alias_impl(this, true));
 }
 
 // Holders rebound while a step is being captured, with the Var each held

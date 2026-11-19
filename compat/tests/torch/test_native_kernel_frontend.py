@@ -202,3 +202,17 @@ def test_step_replay_preserves_strided_indexed_state_storage():
         for i in range(6):
             expected[i, :2] = i + 6
         np.testing.assert_array_equal(backing.cpu().numpy(), expected)
+
+
+def test_prepared_kernel_can_read_strided_physical_storage_without_copy():
+    require_cuda()
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1):
+        backing = torch.arange(72, device="cuda", dtype=torch.float32).reshape(6, 3, 4)
+        view = backing[:, :2, :]
+        jt.sync([view], True, False)
+        window = view._physical_storage_window()
+        assert window.device == view.device
+        assert window._mem_ptr_now == view._mem_ptr_now
+        assert window.shape == (68,)
+        assert window.is_contiguous()
+        np.testing.assert_array_equal(window.cpu().numpy(), np.arange(68))
