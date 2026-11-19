@@ -179,11 +179,27 @@ def _fused_add_rms_norm_single_round_cuda(x, residual, gamma, epsilon=1e-6):
     return _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, round_before_weight=False)
 
 
-def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, round_before_weight):
+def _fp32_residual_supported(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
+    return math.isfinite(weight_offset) and _add_rms_norm_supported(x, residual, gamma, epsilon)
+
+
+@optional_kernel("nn.add_rms_norm.fp32_residual.inference", "cuda",
+                 supports=_fp32_residual_supported)
+def _fused_add_rms_norm_fp32_residual_cuda(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
+    return _fused_add_rms_norm_cuda_code(
+        x, residual, gamma, epsilon, round_before_weight=False,
+        fp32_residual=True, weight_offset=weight_offset)
+
+
+def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
+                                  round_before_weight, fp32_residual=False, weight_offset=0.0):
     contract = _rms_norm_contract(x, gamma, epsilon, residual=residual)
     if contract is None:
         return None
     hidden_size, threads, warps, epsilon_value = contract
+    if fp32_residual:
+        threads = min(threads, 256)
+        warps = threads // 32
     cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
         for (int offset = 16; offset > 0; offset >>= 1)
@@ -203,8 +219,8 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, round_before_w
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
             // The residual sum in the input's type, as `x + residual` is.
-            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
-                                                       + static_cast<float>(residual[index])));
+            float value = static_cast<float>(x[index]) + static_cast<float>(residual[index]);
+            if (!%(fp32_residual)d) value = static_cast<float>(out1_type(value));
             sum += value * value;
         }
         sum = warp_sum(sum);
@@ -219,13 +235,15 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, round_before_w
         __syncthreads();
         for (int dim = tid; dim < %(hidden_size)d; dim += blockDim.x) {
             int index = row * %(hidden_size)d + dim;
-            float value = static_cast<float>(out1_type(static_cast<float>(x[index])
-                                                       + static_cast<float>(residual[index])));
+            float value = static_cast<float>(x[index]) + static_cast<float>(residual[index]);
+            if (!%(fp32_residual)d) value = static_cast<float>(out1_type(value));
             residual_out[index] = out1_type(value);
             float normalized = value * inverse_rms;
             if (%(round_before_weight)d)
                 normalized = static_cast<float>(out0_type(normalized));
-            y[index] = out0_type(normalized * static_cast<float>(gamma[dim]));
+            float scale = static_cast<float>(gamma[dim]);
+            if (%(has_weight_offset)d) scale += %(weight_offset)sf;
+            y[index] = out0_type(normalized * scale);
         }
     }
     int rows = in0->num / %(hidden_size)d;
@@ -238,6 +256,9 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *, round_before_w
         "threads": threads,
         "warps": warps,
         "round_before_weight": int(round_before_weight),
+        "fp32_residual": int(fp32_residual),
+        "has_weight_offset": bool(weight_offset),
+        "weight_offset": repr(float(weight_offset)),
     })
     return _stop_grad_outputs(jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],

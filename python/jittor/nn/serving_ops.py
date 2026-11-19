@@ -130,13 +130,34 @@ def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
     )
 
 
-def fused_add_rms_norm(x, residual, weight, eps=1e-6, *, round_before_weight=True):
+def fused_add_rms_norm(x, residual, weight, eps=1e-6, *, round_before_weight=True,
+                       fp32_residual=False, weight_offset=0.0):
     """Add the residual, then normalise -- returning ``(normalised, residual)``.
 
     The updated residual is the sum, which the next layer adds onto in turn;
     returning both is what lets the two steps share one pass over the data.
     ``round_before_weight`` has the same meaning as in ``rms_norm``.
+    With ``fp32_residual=True``, normalize and scale the unrounded sum in
+    the accumulation dtype, regardless of ``round_before_weight``. Both
+    results are cast to the input dtype. ``weight_offset`` is added to the
+    scale before multiplication.
     """
+    offset = float(weight_offset)
+    if fp32_residual:
+        fused = try_dispatch("nn.add_rms_norm.fp32_residual.inference",
+                             x, residual, weight, eps, offset)
+        if fused is not None:
+            return fused
+        dtype = x.dtype
+        accumulation = "float64" if _jittor_dtype_name(dtype) == "float64" else "float32"
+        total = x.cast(accumulation) + residual.cast(accumulation)
+        scale = jt.rsqrt((total * total).mean(-1, keepdims=True) + eps)
+        weight = weight.cast(accumulation)
+        if offset:
+            weight = weight + offset
+        return (total * scale * weight).cast(dtype), total.cast(dtype)
+    if offset:
+        weight = weight + offset
     acl_backend = _backend_hooks.acl_grouped_add_rms_norm
     if round_before_weight and acl_backend is not None:
         fused = acl_backend(x, residual, weight, eps)
