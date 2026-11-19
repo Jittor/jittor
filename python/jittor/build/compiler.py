@@ -1062,6 +1062,8 @@ build_config = BuildConfig(
         BuildSource(os.path.join(backend_root(jittor_path, "cuda"), "runtime/nan_checker.cc"), flags=cuda_sdk_flags),
         BuildSource(os.path.join(backend_root(jittor_path, "cuda"), "kernels/debug/nan_checker.cu"),
                     language="cuda", flags=cuda_sdk_flags),
+        BuildSource(os.path.join(backend_root(jittor_path, "cuda"), "runtime/strided_copy.cu"),
+                    language="cuda", flags=cuda_sdk_flags),
     ) if has_cuda else (),
     backend_link_flags=cuda_link_flags,
     extension_compile_flags=cuda_sdk_flags,

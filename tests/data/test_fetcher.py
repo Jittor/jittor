@@ -7,6 +7,7 @@ from _helpers import capability as _test_capability
 # file 'LICENSE.txt', which is part of this source code package.
 # ***************************************************************
 import unittest
+import time
 import jittor as jt
 import numpy as np
 from jittor import compile_extern
@@ -22,6 +23,29 @@ class TestFetcher(unittest.TestCase):
         )
         jt.sync_all(True)
         assert len(v)==1 and (v[0]==[2,4,6]).all()
+
+    def test_poll_fetches_leaves_unrelated_work_pending(self):
+        with jt.flag_scope(auto_graph_replay=0, backend_fallback="error"):
+            source = jt.arange(32).cast("int32").sync()
+            requested = source * 3
+            unrelated = jt.ones((113,), dtype="float32") * 17
+            assert requested.location() == unrelated.location() == "none"
+            arrays = []
+            jt.fetch(requested, lambda array: arrays.append(np.array(array, copy=True)))
+            deadline = time.monotonic() + 5
+            try:
+                while not arrays and time.monotonic() < deadline:
+                    jt.poll_fetches()
+                    if not arrays:
+                        time.sleep(0.0001)
+                assert len(arrays) == 1
+                np.testing.assert_array_equal(arrays[0], np.arange(32, dtype=np.int32) * 3)
+                assert requested.location() == ("device" if jt.flags.use_cuda else "cpu")
+                assert unrelated.location() == "none"
+                jt.poll_fetches()
+                assert len(arrays) == 1
+            finally:
+                jt.sync_all(True)
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "Cuda not found")
 class TestFetcherCuda(TestFetcher):

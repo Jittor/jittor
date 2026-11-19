@@ -44,7 +44,7 @@ _NATIVE_CORE_EXPORTS = (
     "get_seed", "grad", "grad_optional", "graph_check", "hash",
     "jt_init_subprocess", "lock_acquire", "lock_is_held", "lock_release",
     "migrate_all_to_cpu", "number_of_hold_vars", "number_of_lived_ops",
-    "number_of_lived_vars", "op_compiler", "ops", "print_trace", "profiler",
+    "number_of_lived_vars", "op_compiler", "ops", "poll_fetches", "print_trace", "profiler",
     "reuse_np_array", "seed", "set_device", "set_lock_fd", "set_seed",
     "graph_capture_begin", "graph_capture_end", "graph_capture_supported",
     "graph_launch", "graph_release",
