@@ -754,7 +754,11 @@ class StepCapture:
         # Dense inside the graph, since every replay copies these as raw bytes
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]
-        records = [(holder, old, _dense(new)) for holder, old, new in records]
+        # An indexed write can legitimately share a strided persistent cache.
+        # Densifying it would turn that in-place write into a whole-cache copy
+        # on each replay.
+        records = [(holder, old, new if new._same_step_storage(old) else _dense(new))
+                   for holder, old, new in records]
         published = {}
         for parameter in cap.published_gradients:
             gradient = getattr(parameter, "_torch_grad", None)

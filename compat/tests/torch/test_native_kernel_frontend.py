@@ -156,3 +156,49 @@ def test_prepared_triton_initializes_its_own_writable_output():
         np.testing.assert_array_equal(source.cpu().numpy(), np.arange(32))
         for offset, value in enumerate(outputs):
             np.testing.assert_array_equal(value.cpu().numpy(), np.arange(32) + offset)
+
+
+def test_step_replay_preserves_strided_indexed_state_storage():
+    require_cuda()
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        backing = torch.zeros((6, 3, 4), device="cuda", dtype=torch.float32)
+        view = backing[:, :2, :]
+        jt.sync([view], True, False)
+        state = jt.core._ready_step_gradient(view)
+        assert state.stride() == (12, 4, 1)
+        address = state._mem_ptr_now
+        arguments = [
+            (torch.tensor([i % 6], device="cuda", dtype=torch.int32),
+             torch.full((1, 2, 4), i, device="cuda", dtype=torch.float32))
+            for i in range(12)
+        ]
+        jt.sync([value for pair in arguments for value in pair], True, False)
+        axes = jt.NanoVector([0])
+
+        def step(index, row):
+            if jt.core._state_capture_active():
+                row = row.contiguous()
+                jt.sync([index, row], False, False)
+                assert state._try_indexed_storage_write(row, [index], axes)
+            return state[index].contiguous()
+
+        replay = jt.capture_step(step)
+        before = jt.core.graph_launch_count()
+        outputs = []
+        try:
+            for index, row in arguments:
+                outputs.append(replay(index, row))
+            torch.cuda.synchronize()
+            assert jt.core.graph_launch_count() > before
+            assert len(replay._capture.state) == 1
+            assert replay._capture.state[0][3], "indexed writes should remain in place"
+            assert state._mem_ptr_now == address
+        finally:
+            replay.invalidate()
+        assert state.location() == "device"
+        for i, output in enumerate(outputs):
+            np.testing.assert_array_equal(output.cpu().numpy(), np.full((1, 2, 4), i))
+        expected = np.zeros((6, 3, 4), dtype=np.float32)
+        for i in range(6):
+            expected[i, :2] = i + 6
+        np.testing.assert_array_equal(backing.cpu().numpy(), expected)

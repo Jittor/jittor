@@ -911,6 +911,30 @@ static bool shares_physical_storage(Var* value, Var* base) {
     return false;
 }
 
+bool VarHolder::same_step_storage(VarHolder* other) {
+    Var* reference = other->var;
+    if (!reference->mem_ptr || !reference->allocator
+            || var->shape != reference->shape || var->dtype() != reference->dtype())
+        return false;
+    for (int axis = 0; axis < var->shape.size(); ++axis)
+        if (var->storage_stride(axis) != reference->storage_stride(axis)) return false;
+
+    Var* current = var;
+    Var* fast = current;
+    while (current) {
+        if (current->mem_ptr) {
+            return current->mem_ptr == reference->mem_ptr
+                && current->allocator == reference->allocator
+                && current->allocation == reference->allocation;
+        }
+        if (current->share_offset) return false;
+        current = current->share_src;
+        fast = fast && fast->share_src ? fast->share_src->share_src : nullptr;
+        if (current && current == fast) return false;
+    }
+    return false;
+}
+
 bool VarHolder::storage_view_is_physical() {
     if (!view || !view->physical_storage) return false;
     return !view->base || shares_physical_storage(var, view->base->var);

@@ -379,6 +379,10 @@ struct VarHolder {
         return (int64)var->mem_ptr;
     }
 
+    // Exact physical region and layout, including a pending zero-offset alias.
+    // @pyjt(_same_step_storage)
+    bool same_step_storage(VarHolder* other);
+
     // @pyjt(__get__flags)
     inline int32 flags() {
         return (int32)(var->flags.flags);
