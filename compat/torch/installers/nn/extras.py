@@ -208,7 +208,8 @@ def _install_nn_extras(nn, registry=None):
     if param_mod is not None:
         for _name, _value in (("UninitializedTensorMixin", UninitializedTensorMixin),
                               ("UninitializedParameter", UninitializedParameter),
-                              ("UninitializedBuffer", UninitializedBuffer)):
+                              ("UninitializedBuffer", UninitializedBuffer),
+                              ("is_lazy", _extra_api.is_lazy)):
             if not hasattr(param_mod, _name):
                 setattr(param_mod, _name, _value)
         _modules["torch.nn.parameter"] = param_mod

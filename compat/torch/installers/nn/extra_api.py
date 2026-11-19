@@ -63,12 +63,17 @@ class UninitializedTensorMixin:
     pass
 
 
-class UninitializedParameter:
+class UninitializedParameter(UninitializedTensorMixin):
     pass
 
 
-class UninitializedBuffer:
+class UninitializedBuffer(UninitializedTensorMixin):
     pass
+
+
+def is_lazy(param):
+    """Identify uninitialized parameters and buffers."""
+    return isinstance(param, UninitializedTensorMixin)
 
 
 class _DataParallel(nn.Module):

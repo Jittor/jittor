@@ -758,6 +758,31 @@ class TestOverridesAndDefaults(StubPolicyBase):
 
         self.assertTrue(overrides.has_torch_function((_Sub(),)))
 
+    def test_disable_torch_function_subclass_restores_dispatch(self):
+        from torch._C import DisableTorchFunctionSubclass
+        from torch import overrides
+
+        class _Sub:
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return "intercepted"
+
+        args = (_Sub(),)
+
+        def plain(*args):
+            return "plain"
+
+        self.assertTrue(overrides.has_torch_function(args))
+        with self.assertRaisesRegex(ValueError, "probe"):
+            with DisableTorchFunctionSubclass() as entered:
+                self.assertIsNone(entered)
+                self.assertFalse(overrides.has_torch_function(args))
+                with DisableTorchFunctionSubclass():
+                    self.assertEqual(overrides.handle_torch_function(plain, args, *args), "plain")
+                self.assertFalse(overrides.has_torch_function(args))
+                raise ValueError("probe")
+        self.assertEqual(overrides.handle_torch_function(plain, args, *args), "intercepted")
+
     def test_handle_torch_function_calls_the_override(self):
         import sys
         overrides = sys.modules["torch.overrides"]
@@ -1134,6 +1159,17 @@ class TestGeneratedUnimplementedList(StubPolicyBase):
         rendered = "\n".join(lines)
         print("\n" + rendered)
         self.assertIn("| API |", rendered)
+
+
+class TestLazyParameterQuery(unittest.TestCase):
+    def test_is_lazy_only_reports_uninitialized_tensors(self):
+        from torch.nn.parameter import Parameter, UninitializedBuffer, UninitializedParameter, is_lazy
+
+        tensor = torch.empty(0)
+        self.assertFalse(is_lazy(tensor))
+        self.assertFalse(is_lazy(Parameter(tensor)))
+        self.assertTrue(is_lazy(UninitializedParameter()))
+        self.assertTrue(is_lazy(UninitializedBuffer()))
 
 
 if __name__ == "__main__":
