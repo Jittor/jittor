@@ -248,6 +248,26 @@ def setUpModule():
 
 @unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
 class TestTritonBackend(unittest.TestCase):
+    def test_alignment_uses_launched_storage_and_runtime_arguments(self):
+        def read_strided(src, dst, stride, BLOCK: tl.constexpr):
+            i = tl.arange(0, BLOCK)
+            tl.store(dst + i, tl.load(src + i * stride))
+
+        kernel = triton.jit(read_strided, do_not_specialize_on_alignment=["dst"])
+        base = jt.array(np.arange(1024, dtype=np.float32)).cuda()
+        bridge = _shim.backend
+        with mock.patch.object(bridge, "_compile", wraps=bridge._compile) as compile:
+            for offset, stride in ((0, 16), (1, 16), (0, 17), (0, 16)):
+                dest = jt.empty((32,), dtype="float32")
+                kernel[(1,)](base[offset:], dest, stride, BLOCK=32)
+                np.testing.assert_array_equal(
+                    dest.numpy(), np.arange(32, dtype=np.float32) * stride + offset)
+                expected = ()
+                if hasattr(kernel, "_pack_args"):
+                    expected = tuple(i for i, valid in ((0, offset == 0), (2, stride % 16 == 0))
+                                     if valid)
+                self.assertEqual(compile.call_args.kwargs["aligned"], expected)
+
     def test_compiled_kernel_identity_survives_callable_collection(self):
         """An ID-keyed entry must not become another kernel's cache hit."""
         def plus_one(X, O, N: tl.constexpr):

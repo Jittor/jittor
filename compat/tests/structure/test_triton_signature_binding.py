@@ -25,12 +25,17 @@ def bind_launch():
     tree = ast.parse(path.read_text())
     definitions = [node for node in tree.body
                    if isinstance(node, (ast.FunctionDef, ast.ClassDef))
-                   and node.name in {"_run", "_scalar_sig", "JittorTritonError"}]
+                   and node.name in {"_run", "_scalar_sig", "_launch_alignment", "JittorTritonError"}]
     namespace = {
         "os": os,
         "_is_tensor": lambda value: isinstance(value, Operand),
         "_tensor_is_cuda": lambda value: True,
         "_ptr_sig": lambda value: "*fp32",
+        "_tensor_ptr": lambda value: 0x1000,
+        "_is_var": lambda value: False,
+        "_stats_on": lambda: False,
+        "_fast_sync_enabled": lambda: True,
+        "_sync_before_launch_enabled": lambda fast_sync: False,
         "_Driver": types.SimpleNamespace(get=lambda device: types.SimpleNamespace(ensure_ctx=lambda: None)),
     }
     spec = importlib.util.spec_from_file_location(
@@ -40,13 +45,15 @@ def bind_launch():
     namespace["bind_arguments"] = binding.bind_arguments
     exec(compile(ast.Module(body=definitions, type_ignores=[]), str(path), "exec"), namespace)
 
-    def compile_kernel(kernel, signature, constants, options, device):
+    def compile_kernel(kernel, signature, constants, options, device, aligned=()):
         raise CapturedCompile(signature, constants, options, device)
 
     namespace["_compile"] = compile_kernel
 
     def capture(kernel, args, kwargs):
-        with mock.patch.dict(sys.modules, {"jittor": types.ModuleType("jittor")}):
+        jittor = types.ModuleType("jittor")
+        jittor.sync_all = mock.Mock()
+        with mock.patch.dict(sys.modules, {"jittor": jittor}):
             with pytest.raises(CapturedCompile) as captured:
                 namespace["_run"](kernel, args, kwargs, (1,))
         return captured.value.args
