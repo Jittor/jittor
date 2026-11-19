@@ -36,7 +36,12 @@ def _cdist_impl(x1, x2, p=2.0, compute_mode=None, **kwargs):
 
         return BoundaryDistance.apply(diff)
     if p == 2:
-        return jt.sqrt((diff * diff).sum(-1))
+        squared = (diff * diff).sum(-1)
+        coincident = squared == 0
+        # sqrt has a singular derivative at zero. Move coincident pairs away
+        # from that point before masking their distance and gradient to zero.
+        safe_squared = jt.ternary(coincident, jt.ones_like(squared), squared)
+        return jt.ternary(coincident, jt.zeros_like(squared), jt.sqrt(safe_squared))
     if p == 1:
         return jt.abs(diff).sum(-1)
     return (jt.abs(diff) ** p).sum(-1) ** (1.0 / p)
