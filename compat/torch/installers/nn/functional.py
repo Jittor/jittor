@@ -114,7 +114,7 @@ def _poisson_nll(input, target, log_input=True, full=False, size_average=None,
 
 from ...context import get_install_context
 from types import MappingProxyType
-from .loss_modules import LOSS_CLASSES, PixelShuffle, PixelUnshuffle
+from .loss_modules import CrossEntropyLoss, LOSS_CLASSES, PixelShuffle, PixelUnshuffle
 from .extra_api import _adapt_extra
 
 def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
@@ -364,9 +364,11 @@ def _install_functional(ctx):
         ("margin_ranking_loss", _native_margin_ranking),
     ):
         setattr(F, _name, _fn)
-    # nn.*Loss class versions (criterion = nn.HuberLoss()): thin wrappers over the
-    # functional. KLDivLoss/BCELoss/BCEWithLogitsLoss/CrossEntropyLoss/MSELoss/L1Loss
-    # already exist on jittor.nn (verified correct); add the rest.
+    # CrossEntropyLoss needs Torch's constructor and functional arguments.
+    nn.CrossEntropyLoss = _adapt_extra(CrossEntropyLoss, ctx.registry)
+    nn.modules.loss.CrossEntropyLoss = nn.CrossEntropyLoss
+    ctx.registry.module_map["torch.nn.modules.loss"] = nn.modules.loss
+    # Publish other functional loss wrappers where the native tree lacks them.
     _loss_functions = {}
     for template in LOSS_CLASSES:
         _loss_functions[template.functional_name] = getattr(F, template.functional_name)
@@ -441,6 +443,6 @@ def _install_functional(ctx):
          "huber_loss", "kl_div", "margin_ranking_loss"), Fidelity.APPROXIMATE,
         "Reuses the canonical native loss implementation and supported argument subset")
     register_api_bindings(nn, "torch.nn",
-        tuple(template.__name__ for template in LOSS_CLASSES) + ("PixelShuffle", "PixelUnshuffle"),
+        tuple(template.__name__ for template in LOSS_CLASSES) + ("CrossEntropyLoss", "PixelShuffle", "PixelUnshuffle"),
         Fidelity.APPROXIMATE, "Module-owned layer implementations reuse native functionals; "
         "installation adapters preserve Tensor and parameter ownership")
