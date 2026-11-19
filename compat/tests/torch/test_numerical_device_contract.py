@@ -43,3 +43,15 @@ def test_cdist_zero_and_infinity_backward_on_device(p, device):
     np.testing.assert_array_equal(result.detach().cpu().numpy(), [[2. if p == 0 else 1.]])
     np.testing.assert_array_equal(left.grad.cpu().numpy(), expected)
     np.testing.assert_array_equal(right.grad.cpu().numpy(), -expected)
+
+
+@pytest.mark.parametrize("dim", [None, 0, (0,)])
+def test_clamped_l2_norm_has_finite_gradient_at_zero(dim, device):
+    value = torch.zeros((2, 3), device=device, dtype=torch.float32, requires_grad=True)
+    norm = value.norm(dim=dim)
+    (value / norm.clamp(min=1e-4)).sum().backward()
+
+    for tensor in (value, norm, value.grad):
+        require_residency(tensor, device)
+    np.testing.assert_array_equal(norm.detach().cpu().numpy(), np.zeros(tuple(norm.shape)))
+    np.testing.assert_array_equal(value.grad.cpu().numpy(), np.full((2, 3), 1e4))
