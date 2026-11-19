@@ -524,6 +524,11 @@ struct VarHolder {
     // @attrs(return_self)
     VarHolder* check_inplace_autograd();
     void record_inplace_write();
+    // Capture a supported indexed store as a mutation of its root storage.
+    // False asks the frontend to use its ordinary indexed assignment.
+    // @pyjt(_try_indexed_storage_write)
+    bool try_indexed_storage_write(VarHolder* values, vector<VarHolder*>&& indices,
+                                   NanoVector axes);
 private:
     // One logical user copy may update several retained physical view buffers.
     // The ledger is local to that transaction, never shared by reentrant calls.
@@ -1058,6 +1063,7 @@ public:
 int64 host_readback_count();
 // An implicit dynamic-shape read can make a trace ineligible before the
 // optimizer runs, just as an explicit value read does.
+// @pyjt(_state_capture_active)
 bool state_capture_active();
 void note_shape_readback();
 
