@@ -531,8 +531,8 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     // Treating these states as nested traversals logged and restored every
     // node even when no outer traversal existed.
     unique_ptr<TraversalQueueMarks> marks;
-    auto index_pending = [&]() {
-        if (!marks && pending.size() >= 256) {
+    auto index_pending = [&](bool shared_ring = false) {
+        if (!marks && (shared_ring || pending.size() >= 256)) {
             marks.reset(new TraversalQueueMarks("saved_storage_readers"));
             for (Var* value : pending) marks->mark_queued(value);
         }
@@ -550,6 +550,15 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     for (size_t i=0; i<pending.size(); ++i) {
         Var* value = pending[i];
         index_pending();
+        if (value->share_next && !marks) {
+            // Expanding each member of a medium-sized ring repeatedly never
+            // trips the 256-entry queue threshold, despite the large search.
+            // Index the ring early and keep the small unshared path cheap.
+            Var* member = value->share_next;
+            for (int count = 1; member != value && count < 16; ++count)
+                member = member->share_next;
+            if (member != value) index_pending(true);
+        }
         if (value->share_next && (!marks || !marks->expanded(value))) {
             for (Var* member=value->share_next; member!=value; member=member->share_next)
                 visit(member, true);

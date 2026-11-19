@@ -112,6 +112,17 @@ class TestStepCapture(unittest.TestCase):
                 finally:
                     captured.invalidate()
 
+    def test_pending_snapshot_survives_write_through_wide_alias_ring(self):
+        with jt.no_grad(), jt.flag_scope(lazy_execution=1):
+            state = jt.full((8,), 2.0)
+            jt.sync([state])
+            aliases = [jt.core._ready_step_gradient(state) for _ in range(64)]
+            snapshot = aliases[-1].copy().stop_grad()
+            self.assertFalse(snapshot.is_finished)
+            aliases[0]._copy_into(jt.full((8,), 5.0))
+            np.testing.assert_array_equal(snapshot.numpy(), np.full(8, 2.0))
+            np.testing.assert_array_equal(aliases[-1].numpy(), np.full(8, 5.0))
+
     def test_mixed_readouts_keep_only_the_differentiable_replay_boundary(self):
         parameter = jt.array([2., 3.])
 
