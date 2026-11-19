@@ -971,6 +971,7 @@
   "Hardshrink",
   "Hardsigmoid",
   "Hardswish",
+  "Hardtanh",
   "HuberLoss",
   "Identity",
   "InstanceNorm",

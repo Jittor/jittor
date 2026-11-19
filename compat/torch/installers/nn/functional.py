@@ -66,6 +66,29 @@ def _selu(input, inplace=False):
     return _activation_result(input, output, inplace)
 
 
+def _hardtanh(input, min_val=-1.0, max_val=1.0, inplace=False):
+    _check_activation_input(input, "hardtanh")
+    if min_val > max_val:
+        raise ValueError("min_val cannot be greater than max_val")
+    dtype = _dtype_to_str(input.dtype)
+    if dtype == "bool" or dtype.startswith("complex"):
+        raise NotImplementedError(f"hardtanh does not support {dtype} inputs")
+    if "int" in dtype:
+        info = jt.iinfo(dtype)
+        min_val, max_val = int(min_val), int(max_val)
+        if min_val > info.max or max_val < info.min:
+            raise RuntimeError(f"hardtanh bounds are outside the representable range of {dtype}")
+        output = jt.nn.hardtanh(input, max(min_val, info.min), min(max_val, info.max))
+    else:
+        # Hardtanh has zero gradient at either bound. Compare in opmath
+        # precision for half and bfloat16, whose clipping rounds the bounds.
+        compare = input.float32() if dtype in ("float16", "bfloat16") else input
+        saturated = (compare <= min_val) | (compare >= max_val)
+        clipped = jt.nn.hardtanh(input, min_val, max_val)
+        output = jt.ternary(saturated, clipped.detach(), input)
+    return _activation_result(input, output, inplace)
+
+
 def _check_activation_input(input, name):
     if not isinstance(input, jt.Var):
         raise TypeError("{}(): argument 'input' must be Tensor".format(name))
@@ -402,6 +425,7 @@ def _install_functional(ctx):
         F.celu = _api_F_celu
     if not hasattr(F, "selu"):
         F.selu = _selu
+    F.hardtanh = _hardtanh
     if not hasattr(F, "threshold"):
         F.threshold = _threshold
     if not hasattr(F, "triplet_margin_loss"):
@@ -434,7 +458,7 @@ def _install_functional(ctx):
     })
 
     register_api_bindings(F, 'torch.nn.functional',
-        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
+        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'hardtanh', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
         Fidelity.APPROXIMATE, 'Native neural-network mathematics with Torch argument adaptation; dtype, backend, and optional parameter restrictions apply')
     register_api_bindings(F, "torch.nn.functional",
         ("binary_cross_entropy", "cosine_embedding_loss", "gaussian_nll_loss",
