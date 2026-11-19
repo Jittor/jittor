@@ -667,6 +667,90 @@ def wrap_triton(tensor):
     return tensor
 
 
+def _install_dispatch_key_surface(torch_c):
+    """Give `torch._C` the dispatch-key names libraries import.
+
+    torchvision builds the autocast key set at import time and guards a
+    registration with it. Dispatch here is eager and per-operator, so the set
+    only has to support construction, union, iteration and membership, and the
+    guard is a no-op scope.
+    """
+    if hasattr(torch_c, "DispatchKeySet"):
+        return
+
+    class _DispatchKeyValue:
+        def __init__(self, name):
+            self.name = name
+
+        def __repr__(self):
+            return "DispatchKey.%s" % self.name
+
+        def __hash__(self):
+            return hash(("DispatchKey", self.name))
+
+        def __eq__(self, other):
+            return isinstance(other, _DispatchKeyValue) and other.name == self.name
+
+    class DispatchKey:
+        pass
+
+    for _name in ("CPU", "CUDA", "XPU", "HIP", "MPS", "Meta", "Autograd",
+                  "AutogradCPU", "AutogradCUDA", "AutogradXPU", "AutogradOther",
+                  "AutocastCPU", "AutocastCUDA", "AutocastXPU", "Autocast",
+                  "CompositeExplicitAutograd", "CompositeImplicitAutograd",
+                  "BackendSelect", "Python", "FuncTorchBatched", "SparseCPU",
+                  "SparseCUDA", "NestedTensorCPU", "NestedTensorCUDA"):
+        setattr(DispatchKey, _name, _DispatchKeyValue(_name))
+
+    class DispatchKeySet:
+        def __init__(self, *keys):
+            flat = []
+            for key in keys:
+                if isinstance(key, DispatchKeySet):
+                    flat.extend(key._keys)
+                elif key is not None:
+                    flat.append(key)
+            object.__setattr__(self, "_keys", tuple(flat))
+
+        def __or__(self, other):
+            return DispatchKeySet(*(self._keys + tuple(other._keys)))
+
+        def __ror__(self, other):
+            return DispatchKeySet(*(tuple(other._keys) + self._keys))
+
+        def __iter__(self):
+            return iter(self._keys)
+
+        def __contains__(self, key):
+            return key in self._keys
+
+        def __len__(self):
+            return len(self._keys)
+
+        def __bool__(self):
+            return bool(self._keys)
+
+        def __hash__(self):
+            return hash(self._keys)
+
+        def __repr__(self):
+            return "DispatchKeySet(%s)" % ", ".join(repr(k) for k in self._keys)
+
+    class _ExcludeDispatchKeyGuard:
+        def __init__(self, keys=None):
+            self.keys = keys
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    torch_c.DispatchKey = DispatchKey
+    torch_c.DispatchKeySet = DispatchKeySet
+    torch_c._ExcludeDispatchKeyGuard = _ExcludeDispatchKeyGuard
+
+
 def install_torch_library(torch_module, modules):
     """Publish stable API objects and the installation-owned dispatcher."""
     from .context import get_install_context
@@ -699,8 +783,61 @@ def install_torch_library(torch_module, modules):
     torch_module.ops = state["dispatcher"]
     torch_module.Tag = Tag
     torch_c = modules.get("torch._C")
-    if torch_c is not None:
-        torch_c.Tag = Tag
+    if torch_c is None:
+        torch_c = ctx.registry.ensure("torch._C")
+        torch_module._C = torch_c
+    torch_c.Tag = Tag
+    _install_dispatch_key_surface(torch_c)
+    # torch._custom_ops: torchvision's meta registrations call `get_ctx()` from
+    # this module. The names map to the library API above.
+    custom_ops_module = ctx.registry.ensure("torch._custom_ops")
+    for _name in ("get_ctx", "infer_schema", "custom_op", "register_fake", "impl"):
+        setattr(custom_ops_module, _name, globals()[_name])
+    torch_module._custom_ops = custom_ops_module
+    modules["torch._custom_ops"] = custom_ops_module
+    # torch.onnx surface torchvision touches at import time: the opset modules
+    # (only used while exporting) and `symbolic_helper.parse_args`, a decorator
+    # that is applied at module scope.
+    onnx_module = modules.get("torch.onnx") or ctx.registry.ensure("torch.onnx")
+    symbolic_helper = ctx.registry.ensure("torch.onnx.symbolic_helper")
+
+    def _onnx_parse_args(*arg_descriptors, **kwargs):
+        def decorator(fn):
+            return fn
+
+        return decorator
+
+    symbolic_helper.parse_args = _onnx_parse_args
+    symbolic_helper._parse_arg = lambda value, desc: value
+    symbolic_opset11 = ctx.registry.ensure("torch.onnx.symbolic_opset11")
+    symbolic_opset11.unsqueeze = None
+    symbolic_opset11.squeeze = None
+    symbolic_opset11.select = None
+    onnx_module.symbolic_helper = symbolic_helper
+    onnx_module.symbolic_opset11 = symbolic_opset11
+    if not hasattr(onnx_module, "register_custom_op_symbolic"):
+        _custom_symbolics = {}
+
+        def _register_custom_op_symbolic(symbolic_name, symbolic_fn,
+                                         opset_version):
+            _custom_symbolics[(symbolic_name, opset_version)] = symbolic_fn
+
+        onnx_module.register_custom_op_symbolic = _register_custom_op_symbolic
+        onnx_module._jittor_custom_symbolics = _custom_symbolics
+    onnx_module.__path__ = getattr(onnx_module, "__path__", [])
+    torch_module.onnx = onnx_module
+    if not hasattr(onnx_module, "TensorProtoDataType"):
+        class _TensorProtoDataType:
+            FLOAT = 1
+            UINT8 = 2
+            INT8 = 3
+            INT16 = 5
+            INT32 = 6
+            INT64 = 7
+            BOOL = 9
+            DOUBLE = 11
+
+        onnx_module.TensorProtoDataType = _TensorProtoDataType
     register_api_bindings(library_module, "torch.library",
                           ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
                            "register_kernel", "impl", "register_autograd"),

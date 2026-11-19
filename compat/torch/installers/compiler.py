@@ -798,6 +798,13 @@ def install(ctx):
         install_permissive_package(_internal, _sys.meta_path,
                                    transaction=transaction,
                                    allow=(_internal + ".*",))
+    # torch.onnx: torchvision's ONNX registration module imports
+    # `symbolic_opset11` (and friends) at module scope. There is no ONNX graph
+    # here; the names are answered so the import completes and registration is
+    # recorded as unsupported.
+    install_permissive_package("torch.onnx", _sys.meta_path,
+                               transaction=transaction,
+                               allow=("torch.onnx.*",))
     # `torch._library.infer_schema` would otherwise be answered by the
     # permissive finder above with a stub whose call returns a stub. torchao
     # calls it at module scope and concatenates the result onto a string, so
@@ -897,6 +904,11 @@ def install(ctx):
         "torch.jit.trace", trace, Fidelity.APPROXIMATE,
         "Jittor returns the eager callable instead of a traced artifact.")
     _jit.script_if_tracing = _api_jit_script_if_tracing
+    # The private spelling torchvision applies at module scope.
+    _jit._script_if_tracing = _api_jit_script_if_tracing
+    # Script overload decorators are registration-only in eager execution.
+    _jit._overload = lambda fn: fn
+    _jit._overload_method = lambda fn: fn
     _jit.ignore = _api_jit_ignore
     _jit.unused = _api_jit_unused
     _jit.export = _api_jit_export

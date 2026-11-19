@@ -55,6 +55,12 @@ def _install_torchdata_stateful_dataloader(g, registry=None):
 
 
 class _TorchDataset:
+    @classmethod
+    def __class_getitem__(cls, item):
+        # torch's Dataset takes a type parameter (`class VisionDataset(Dataset[T_co])`);
+        # the parameter is static typing only, so the answer is the class.
+        return cls
+
     def __getitem__(self, i):
         raise NotImplementedError
     def __add__(self, other):
