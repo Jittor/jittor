@@ -71,10 +71,10 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype, bool st
             auto one = make_array(&n, {}, ns_int32);
             auto offsets1 = make_index({m+1}, 0, ns_int32);
             auto offsets = make_binary(one, offsets1, ns_multiply);
-            auto segmented_sort = find_op_capability<std::vector<VarPtr>, Var*, Var*, Var*, bool, NanoString>(
-                backend, OpCapability::SegmentedArgsort, tranpose1, indexes, offsets, descending, dtype);
+            auto segmented_sort = find_op_capability<std::vector<VarPtr>, Var*, Var*, Var*, bool, NanoString, bool>(
+                backend, OpCapability::SegmentedArgsort, tranpose1, indexes, offsets, descending, dtype, true);
             if (segmented_sort) {
-                auto var = segmented_sort(tranpose1, indexes, offsets, descending, dtype);
+                auto var = segmented_sort(tranpose1, indexes, offsets, descending, dtype, true);
                 vector<int64> axes2;
                 axes2.reserve(dims);
                 for (int i = 0; i < dims; ++i) {

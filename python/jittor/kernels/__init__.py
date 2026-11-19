@@ -8,7 +8,7 @@ from numbers import Integral
 
 import jittor as jt
 
-__all__ = ["TensorSpec", "call", "triton_call", "tilelang_call"]
+__all__ = ["TensorSpec", "call", "triton_call", "tilelang_call", "batch_triton_launches"]
 
 
 @dataclass(frozen=True)
@@ -148,3 +148,15 @@ def tilelang_call(kernel, *args):
     inputs, outputs, bind = _arguments(args)
     return call(lambda context: tilelang_launch(executable, bind(context), context),
                 *inputs, outputs=outputs[0] if len(outputs) == 1 else outputs)
+
+
+def batch_triton_launches(kernels, *, allow_strided=False):
+    """Group ordinary launches of the selected Triton kernels in eager mode.
+
+    A scope submits its launches in order on exit. Flush it before reading
+    the affected values, creating dependent Jittor operations, or changing
+    devices. Set allow_strided only for kernels that use physical strides.
+    """
+    from jittor.compat.triton import batch_launches
+
+    return batch_launches(kernels, allow_strided=allow_strided)

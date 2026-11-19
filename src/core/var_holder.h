@@ -1099,6 +1099,13 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 void sync_all(bool device_sync=false);
 
 /**
+ * Submit pending asynchronous fetches and deliver completed callbacks.
+ * This does not wait for the device or submit unrelated pending operations.
+ */
+// @pyjt(poll_fetches)
+void poll_fetches();
+
+/**
  * Index of the first of `vars` already computed, or -1. A captured step checks
  * its roots with this before every replay: 1,400 of them for a UNet training
  * step, a Python attribute read each, 0.15 ms a replay.

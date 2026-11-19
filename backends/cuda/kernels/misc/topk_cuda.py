@@ -1,5 +1,9 @@
 """Small sorted top-k for wide CUDA inference rows."""
 
+# Promotion to FP32 is exact for both 16-bit formats. The low mantissa
+# bits after promotion cannot distinguish values of the same sign.
+_FIRST_RADIX_BIT = {"float32": 0, "float16": 13, "bfloat16": 16}
+
 
 def supports_wide_topk(x, k, dim=-1, largest=True, sorted=True):
     from jittor._core.dtypes import dtype_name
@@ -7,7 +11,8 @@ def supports_wide_topk(x, k, dim=-1, largest=True, sorted=True):
 
     return (len(x.shape) == 2 and dim in (-1, 1) and largest and sorted
             and type(k) is int and 1 <= k <= 32 and 0 < x.shape[0] <= 65535
-            and 20000 <= x.shape[1] <= 2147483647 and dtype_name(x.dtype) == "float32"
+            and 20000 <= x.shape[1] <= 2147483647
+            and dtype_name(x.dtype) in _FIRST_RADIX_BIT
             and not _output_requires_grad(x))
 
 
@@ -35,7 +40,7 @@ __global__ static void select_tile(@ARGS_DEF) {
         ids[j] = id;
         keys[j] = id < 0 ? 0 : order_key(@in0(row, id));
     }
-    Sort(storage).SortDescending(keys, ids);
+    Sort(storage).SortDescending(keys, ids, FIRST_RADIX_BIT, 32);
     #pragma unroll
     for (int j = 0; j < 8; ++j) {
         int rank = threadIdx.x * 8 + j;
@@ -86,18 +91,36 @@ __global__ static void order_winners(@ARGS_DEF) {
     }
     __syncthreads();
     if (lane < K) {
-        @out0(row,lane) = vals[lane];
-        @out1(row,lane) = ids[lane];
+        int id = ids[lane];
+        @out0(row,lane) = @in0(row,id);
+        @out1(row,lane) = id;
     }
 }
 order_winners<<<out0_shape0,32>>>(@ARGS);
 """
 
 
+_GATHER_STABLE = """
+__global__ static void gather_stable(@ARGS_DEF) {
+    @PRECALC
+    int row = blockIdx.x;
+    int lane = threadIdx.x;
+    if (lane < out0_shape1) {
+        int id = @in1(row,lane);
+        @out0(row,lane) = @in0(row,id);
+        @out1(row,lane) = id;
+    }
+}
+gather_stable<<<out0_shape0,32>>>(@ARGS);
+"""
+
+
 def wide_topk_cuda(x, k, dim=-1, largest=True, sorted=True):
     """Merge tile winners; stable radix selection preserves input order at the cutoff."""
     import jittor as jt
+    from jittor._core.dtypes import dtype_name
 
+    first_radix_bit = _FIRST_RADIX_BIT[dtype_name(x.dtype)]
     rows, cols = map(int, x.shape)
     ids = None
     while True:
@@ -105,10 +128,16 @@ def wide_topk_cuda(x, k, dim=-1, largest=True, sorted=True):
         inputs = [x] if ids is None else [x, ids]
         fetch = 'int(col)' if ids is None else '@in1(row,col)'
         source = (_TILE.replace('COLUMNS', str(cols)).replace('FETCH_ID', fetch)
-                       .replace('SMALL_K', str(k)))
+                       .replace('SMALL_K', str(k))
+                       .replace('FIRST_RADIX_BIT', str(first_radix_bit)))
         ids = jt.code((rows, tiles * k), jt.int32, inputs, cuda_header=_HEADER, cuda_src=source)
         if tiles == 1:
             break
         cols = tiles * k
+    if first_radix_bit:
+        # Tiled radix selection retains input order within ties, as in the
+        # full sort that handled low-precision rows before this fast path.
+        return tuple(jt.code([(rows, k)] * 2, [x.dtype, jt.int64], [x, ids],
+                             cuda_src=_GATHER_STABLE))
     return tuple(jt.code([(rows, k)] * 2, [x.dtype, jt.int64], [x, ids],
                          cuda_header=_HEADER, cuda_src=_ORDER.replace('K', str(k))))

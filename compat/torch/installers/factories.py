@@ -57,8 +57,9 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves input shape, dtype, device and leaf-gradient options but "
-    "approximates or omits Torch layout, pin-memory and memory-format semantics"
+    "preserves shape, dtype, device, leaf-gradient options and dense storage order; "
+    "honors contiguous_format; "
+    "other layouts and pin-memory options are approximate"
 )
 
 
@@ -99,6 +100,11 @@ def _invoke_factory(name, args, kwargs):
                 requested = "cuda" if value.is_cuda else "cpu"
                 break
     meta = _is_meta_device_request(requested)
+    if not meta and name in ("empty", "empty_like"):
+        result = _fresh_cuda_empty(context.target_namespace, name, implementation, args,
+                                   kwargs, requested, like)
+        if result is not None:
+            return result
     # torch's meta tensors carry shape/dtype only; Jittor has no meta backend,
     # so the same contract `with torch.device("meta")` uses applies here: the
     # Var is really allocated (on the host) and reports "meta" via the
@@ -237,8 +243,79 @@ def _factory_implementation(value):
     return value
 
 
-def _allocate_empty_like(input):
-    return jt.empty(input.shape, dtype=input.dtype)
+def _allocate_empty_like(input, dtype=None, preserve_layout=True):
+    shape = tuple(input.shape)
+    dtype = input.dtype if dtype is None else dtype
+    if preserve_layout and not input._storage_is_contiguous():
+        strides = input._storage_strides()
+        # Torch densifies a strided slice in its physical axis order. The
+        # dimension order matters even when the source has gaps between rows.
+        if all(size <= 1 or stride > 0 for size, stride in zip(shape, strides)):
+            order = sorted(range(len(shape)), key=lambda axis: (strides[axis], shape[axis]),
+                           reverse=True)
+            if order != list(range(len(shape))):
+                inverse = [0] * len(order)
+                for position, axis in enumerate(order):
+                    inverse[axis] = position
+                storage = jt.empty([shape[axis] for axis in order], dtype=dtype)
+                return storage._storage_permute(jt.NanoVector(inverse))
+    return jt.empty(shape, dtype=dtype)
+
+
+def _fresh_cuda_empty(namespace, name, implementation, args, kwargs, device, like):
+    if (not args or kwargs.keys() - {"dtype", "device", "requires_grad"}
+            or kwargs.get("requires_grad", False) is not False
+            or (device is None and (not isinstance(like, jt.Var) or like.placement_backend != 1))
+            or (device is not None and not _device_is_cuda(device))):
+        return None
+    if name == "empty":
+        # A replacement factory can compute on inputs or return an alias.
+        if (type(implementation) is not functools.partial
+                or implementation.func is not _constructor_adapter
+                or implementation.args != ("empty", _native_creation.empty, True)
+                or implementation.keywords):
+            return None
+        head = args[0]
+        dimensions = head if (len(args) == 1
+                              and (type(head) in (tuple, list) or isinstance(head, jt.NanoVector))) else args
+        if not all(type(dim) is int for dim in dimensions):
+            return None
+    elif (implementation is not _empty_like_implementation or len(args) != 1
+          or not isinstance(like, jt.Var) or getattr(like, "_jittor_torch_meta", False)
+          or getattr(like, "_jittor_torch_meta_data", False)):
+        return None
+    elif not jt.flags.no_grad and not like._storage_is_contiguous():
+        # Densifying in physical axis order may return a view. In grad mode
+        # let the existing constructor apply the frontend's leaf policy.
+        return None
+
+    from ..frontend import _placement_request
+    tensor_type = namespace.Var
+    if getattr(tensor_type, "_frontend_backend", None) is not jt:
+        return None
+    placement = _placement_request(jt, device, like)
+    if placement[0] != 1:
+        return None
+    dtype = kwargs.get("dtype")
+    if dtype is None:
+        dtype = namespace.get_default_dtype() if like is None else like.dtype
+    dtype = _dtype_to_str(dtype)
+
+    # These built-ins only allocate a fresh leaf. The native constructors
+    # still read the frontend and placement, and the leaf is explicitly stopped.
+    token = jt.core._set_tensor_frontend_type(tensor_type)
+    try:
+        placement_token = jt.core._set_tensor_placement(*placement)
+        try:
+            result = (_native_creation.empty(*args, dtype=dtype) if like is None
+                      else _allocate_empty_like(like, dtype=dtype))
+            result._jittor_torch_ext_mutable = True
+            result.requires_grad_(False)
+            return result
+        finally:
+            jt.core._reset_tensor_placement(placement_token)
+    finally:
+        jt.core._reset_tensor_frontend_type(token)
 
 
 def _copy_like(input):
@@ -279,7 +356,10 @@ def _empty_like_implementation(input, **kwargs):
         # device the factory call requested.
         device = kwargs.pop("device", None)
         return _materialize_meta_like(input, device, **kwargs)
-    return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
+    factory = _allocate_empty_like
+    if kwargs.get("memory_format") not in (None, "preserve_format"):
+        factory = functools.partial(factory, preserve_layout=False)
+    return _constructor_adapter("empty_like", factory, True, input, **kwargs)
 
 
 def _install_empty_like(root):

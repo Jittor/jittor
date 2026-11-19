@@ -46,6 +46,7 @@ import threading
 import time
 from ..diagnostics import EXPECTED, swallowed
 from .argument_binding import bind_arguments
+from .batch import current_batch
 
 __all__ = ["is_available", "run", "make_do_bench", "JittorTritonError"]
 
@@ -1085,9 +1086,6 @@ def _compile(jitfn, signature, constants, options=None, device=0, aligned=()):
     """
     if {name for name, kind in signature.items() if kind == "constexpr"} != set(constants):
         raise JittorTritonError("Triton constants must match the constexpr signature slots")
-    triton = real_triton()
-    from triton.compiler import ASTSource
-
     drv = _Driver.get(device)
     opt_items = tuple(sorted((options or {}).items()))
     key = (id(jitfn), tuple(sorted(signature.items())),
@@ -1100,6 +1098,8 @@ def _compile(jitfn, signature, constants, options=None, device=0, aligned=()):
         cached = _COMPILE_CACHE.get(key)
         if cached is not None:
             return cached
+        triton = real_triton()
+        from triton.compiler import ASTSource
         from triton.backends.compiler import GPUTarget
         target = GPUTarget("cuda", drv.arch, 32)
         try:
@@ -1247,6 +1247,11 @@ def run(jitfn, args, kwargs, grid):
     """
     from jittor._runtime.graph_replay import graph_replay_barrier
     graph_replay_barrier("Triton launch is not recorded in the native graph")
+    batch = current_batch()
+    if batch is not None:
+        if batch.enqueue(jitfn, args, kwargs, grid):
+            return None
+        batch.flush()
     rt = _ambient_runtime()
     before = _current_device(rt)
     try:

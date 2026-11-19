@@ -171,6 +171,7 @@ class TestDeviceObject(_Case):
         self.assertEqual(torch.device("cpu").type, "cpu")
         self.assertIsNone(torch.device("cpu").index)
         self.assertEqual(torch.device("cpu", 0).index, 0)
+        self.assertIsNot(torch.device("cuda", 0), torch.device("cuda", 0))
         self.assertEqual(str(torch.device("cuda:1")), "cuda:1")
         self.assertEqual(str(torch.device("cuda")), "cuda")
         self.assertEqual(repr(torch.device("cuda", 3)),

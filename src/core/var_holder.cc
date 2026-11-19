@@ -665,6 +665,17 @@ void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
                      src->var->mem_ptr, source_device, var->size, true);
         return;
     }
+    if (destination_device.backend != BackendId::Cpu
+            && destination_device.backend == source_device.backend
+            && destination_device.index == source_device.index) {
+        vector<int64> shape, strides;
+        for (uint d = 0; d < var->shape.size(); ++d) {
+            shape.push_back(var->shape[d]);
+            strides.push_back(var->storage_stride(d));
+        }
+        if (backend_copy_strided_from_dense(var->mem_ptr, src->var->mem_ptr,
+                destination_device, shape, strides, var->dsize())) return;
+    }
     // Coalesce the innermost contiguous dimensions. Each run uses the same
     // backend/stream copy as the dense path, without rebinding either holder
     // or reading accelerator data on the host.
@@ -1341,8 +1352,14 @@ bool VarHolder::copy_view_into(VarHolder* src) {
     }
     vector<VarViewStep> target_steps;
     if (view && view->base) target_steps = view->steps;
-    // The caller has drained pending readers. Keep every existing holder and
-    // graph node, preparing the complete write on independent device storage.
+    // Logical views can own distinct physical allocations. Preserve their
+    // pending readers as well as the base before refreshing any of them;
+    // the caller need not publish unrelated holder sinks to protect these.
+    vector<VarHolder*> written{base};
+    for (auto& record : records) written.push_back(record.first);
+    preserve_step_readers(written);
+    // Keep every existing holder and graph node, preparing the complete write
+    // on independent device storage.
     sync(false, false);
     src->sync(false, false);
     validate_logical_copy_alias(this, src);
@@ -2257,6 +2274,31 @@ ItemData VarHolder::item() {
 
 // from fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
+
+void poll_fetches() {
+    {
+        // The executor can retire a fetch while it waits for a prior batch.
+        // Keep its root alive once we release the graph lock.
+        vector<VarPtr> pending;
+        {
+            ExecutorEntryScope entry;
+            pending.reserve(fetcher.size());
+            for (const auto& v : fetcher)
+                pending.emplace_back(v.ptr);
+        }
+        if (!pending.empty()) {
+            vector<Var*> vars;
+            vars.reserve(pending.size());
+            for (const auto& v : pending)
+                vars.push_back(v.ptr);
+            runtime_executor().run_sync(move(vars), false, false);
+        }
+    }
+#ifdef HAS_ACCELERATOR
+    ExecutorEntryScope entry;
+    event_queue.flush();
+#endif
+}
 
 void sync_all(bool device_sync) {
     vector<Var*> vars;
