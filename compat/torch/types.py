@@ -1,5 +1,6 @@
 """Torch-compatible dtype, device, and residency primitives."""
 
+from builtins import type as _builtin_type
 import os
 import threading
 import types as _python_types
@@ -270,6 +271,12 @@ class device:
     _prev_index: typing.Optional[int]
 
     def __init__(self, type="cpu", index=None):
+        # Tensor.device reports an already separated name and index. Keep
+        # each device object fresh and retain the parser for other spellings.
+        if (_builtin_type(type) is str and type in _DEVICE_TYPES
+                and (index is None or (_builtin_type(index) is int and index >= 0))):
+            self.type, self.index = type, index
+            return
         if isinstance(type, device):
             if index is not None:
                 raise RuntimeError(
