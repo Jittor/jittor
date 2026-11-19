@@ -74,7 +74,8 @@ def test_eager_triton_batch_can_write_padded_storage(monkeypatch, allow_strided)
     triton = pytest.importorskip("triton")
     global tl
     import triton.language as tl
-    from jittor.compat.triton import backend, batch_launches
+    from jittor.compat.triton import backend
+    from jittor.kernels import batch_triton_launches
 
     @triton.jit
     def store(dst, WIDTH: tl.constexpr, PITCH: tl.constexpr, VALUE: tl.constexpr):
@@ -89,7 +90,7 @@ def test_eager_triton_batch_can_write_padded_storage(monkeypatch, allow_strided)
         dst = raw[:, :13]
         assert tuple(dst._storage_strides()) == (16, 1)
         jt.sync([dst], True)
-        with batch_launches((store,), allow_strided=allow_strided) as batch:
+        with batch_triton_launches((store,), allow_strided=allow_strided) as batch:
             backend.run(store, (dst,), {"WIDTH": 13, "PITCH": 16, "VALUE": 7.0}, (3,))
         assert batch.submitted_launches == int(allow_strided)
         jt.sync([raw], True)
