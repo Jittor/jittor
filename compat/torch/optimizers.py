@@ -45,6 +45,17 @@ from .context import get_install_context
 from .fidelity import Fidelity, register_api_bindings
 from types import MappingProxyType
 
+
+class _RequiredParameter:
+    """Sentinel used by Torch optimizers for options without a default."""
+
+    def __repr__(self):
+        return "<required parameter>"
+
+
+required = _RequiredParameter()
+
+
 def replay_books_of_step(opt):
     """Advance, on every replay of a captured step, the counts `step()` keeps.
 
@@ -125,6 +136,7 @@ def _install_optimizers(g, registry=None):
             _modules["torch.optim.optimizer"] = _optim_sub
         _optim_sub.Optimizer = Base
         _optim_sub.ParamsT = object
+        _optim_sub.required = required
         for _name in ("DeviceDict", "_default_to_fused_or_foreach",
                       "_disable_dynamo_if_unsupported",
                       "_get_capturable_supported_devices", "_get_value",
@@ -210,6 +222,7 @@ def _install_optimizers(g, registry=None):
         _modules["torch.optim.optimizer"] = _optim_sub
     _optim_sub.Optimizer = Base
     _optim_sub.ParamsT = object
+    _optim_sub.required = required
     for _name in ("DeviceDict", "_default_to_fused_or_foreach",
                   "_disable_dynamo_if_unsupported",
                   "_get_capturable_supported_devices", "_get_value",
