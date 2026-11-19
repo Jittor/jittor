@@ -134,6 +134,21 @@ class TestCumsumCPU(_Cumsum, unittest.TestCase):
 class TestCumsumCUDA(_Cumsum, unittest.TestCase):
     use_cuda = 1
 
+    def test_wide_row_scan_and_reverse_gradient(self):
+        cases = ((2, 4097, "float32"), (1, 248320, "float32"),
+                 (4, 32769, "float64"), (5, 32769, "float32"))
+        for rows, width, dtype in cases:
+            with self.subTest(rows=rows, width=width, dtype=dtype):
+                raw = self.rng.integers(-3, 4, (rows, width)).astype(dtype)
+                seed = self.rng.integers(-3, 4, raw.shape).astype(dtype)
+                with jt.flag_scope(use_cuda=1, backend_fallback="error"):
+                    x = jt.array(raw)
+                    output = jt.cumsum(x, -1)
+                    gradient = jt.grad((output * jt.array(seed)).sum(), [x])[0]
+                    np.testing.assert_array_equal(output.numpy(), np.cumsum(raw, axis=-1))
+                    expected = np.cumsum(seed[:, ::-1], axis=-1)[:, ::-1]
+                    np.testing.assert_array_equal(gradient.numpy(), expected)
+
 
 class TestCumsumHasOneKernelEntryPoint(unittest.TestCase):
 
