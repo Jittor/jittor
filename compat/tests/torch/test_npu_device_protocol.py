@@ -27,6 +27,8 @@ def test_npu_namespace_refuses_rather_than_inventing_a_device():
         pytest.skip("this is the CPU half; the ACL half is the next case")
     assert torch.npu.is_available() is False
     assert torch.npu.device_count() == 0
+    assert torch.npu.manual_seed(1729) is None
+    assert torch.npu.manual_seed_all(1729) is None
     for operation in (torch.npu.current_device,
                       lambda: torch.npu.set_device(0),
                       torch.npu.synchronize,
@@ -111,6 +113,19 @@ def test_torch_npu_primitives_match_their_definitions():
     # Fused attention is refused, not quietly replaced with an unfused stand-in.
     with pytest.raises(NotImplementedError):
         torch_npu.npu_fusion_attention()
+
+
+@pytest.mark.skipif(os.environ.get("JITTOR_TEST_DEVICES") != "npu",
+                    reason="requires a selected ACL device")
+@pytest.mark.parametrize("api", ["manual_seed", "manual_seed_all"])
+def test_npu_seed_spelling_reseeds_acl_random_ops(api):
+    getattr(torch.npu, api)(1729)
+    first = torch.rand(16, device="npu")
+    torch.npu.synchronize()
+    getattr(torch.npu, api)(1729)
+    second = torch.rand(16, device="npu")
+    torch.npu.synchronize()
+    assert torch.equal(first, second)
 
 
 @pytest.mark.skipif(os.environ.get("JITTOR_TEST_DEVICES") != "npu",
