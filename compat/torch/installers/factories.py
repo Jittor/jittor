@@ -381,16 +381,20 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         out._jittor_torch_ext_mutable = True
         return out
     g = get_install_context(jt).target_namespace
-    # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
-    if (name == "empty" and not kwargs and args and
-            g.get_default_dtype() == g.float32 and
-            (len(args) == 1 or all(type(dim) is int for dim in args))):
+    if (name == "empty" and orig is _native_creation.empty and _accepts_dtype
+            and args and (len(args) == 1 or all(type(dim) is int for dim in args))
+            and kwargs.keys() <= {"device", "dtype", "requires_grad"}
+            and kwargs.get("requires_grad", False) is False):
         shape = args[0]
         native_shape = isinstance(shape, jt.NanoVector) or type(shape) is int
         if type(shape) in (tuple, list):
             native_shape = all(type(dim) is int for dim in shape)
         if native_shape:
-            out = orig(*args)
+            # EmptyOp creates independent uninitialized storage with the exact
+            # dtype. Mark its holder directly to avoid a second detached alias.
+            dtype = kwargs.get("dtype")
+            dtype = _dtype_to_str(g.get_default_dtype() if dtype is None else dtype)
+            out = orig(*args, dtype=dtype)
             out._jittor_torch_ext_mutable = True
             out.requires_grad_(False)
             return out
