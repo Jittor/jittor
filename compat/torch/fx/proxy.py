@@ -172,6 +172,15 @@ def wrap(f):
         return [wrap(item) for item in f]
     if isinstance(f, str):
         module_name, _, attr = f.rpartition(".")
+        if not module_name:
+            # A bare name (`torch.fx.wrap("name")`): resolve it in the caller's
+            # globals; with nothing to resolve there is nothing to wrap.
+            import sys as _sys
+            frame = _sys._getframe(1)
+            candidate = frame.f_globals.get(f) or frame.f_locals.get(f)
+            if candidate is None:
+                return f
+            return wrap(candidate)
         module = __import__(module_name, fromlist=[attr])
         return wrap(getattr(module, attr))
 

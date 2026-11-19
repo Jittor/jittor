@@ -1,4 +1,22 @@
 """Torch optimizer behavior layered over Jittor optimizers."""
+
+def _unsupported_optimizer(name):
+    class _UnsupportedOptimizer:
+        _torch_unsupported_name = name
+
+        def __init__(self, *args, **kwargs):
+            raise NotImplementedError(
+                "torch.optim.%s: this optimizer is not implemented in "
+                "jittor-compat" % name)
+
+    _UnsupportedOptimizer.__name__ = name
+    return _UnsupportedOptimizer
+
+
+# `torch.optim.optimizer.required`: the "this argument is required"
+# sentinel third-party optimizers use as a default value (timm's SGDP
+# imports it at module scope).
+_OPTIMIZER_REQUIRED = object()
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Mapping
@@ -125,6 +143,7 @@ def _install_optimizers(g, registry=None):
             _modules["torch.optim.optimizer"] = _optim_sub
         _optim_sub.Optimizer = Base
         _optim_sub.ParamsT = object
+        _optim_sub.required = _OPTIMIZER_REQUIRED
         for _name in ("DeviceDict", "_default_to_fused_or_foreach",
                       "_disable_dynamo_if_unsupported",
                       "_get_capturable_supported_devices", "_get_value",
@@ -188,6 +207,14 @@ def _install_optimizers(g, registry=None):
             _native_steps[_native_kind] = _cls.step
             _cls.step = _STEP_APIS[_native_kind]
             _cls._torch_closure_step = True
+    # torch.optim classes without a native implementation are still exported:
+    # timm imports the whole list at module scope (`from torch.optim import
+    # Adadelta, Adagrad, Adamax, ...`). Constructing one raises instead of
+    # running a different algorithm.
+    for _missing in ("Adadelta", "Adamax", "ASGD", "NAdam", "RAdam",
+                     "SparseAdam", "Adafactor"):
+        if not hasattr(_optim, _missing):
+            setattr(_optim, _missing, _unsupported_optimizer(_missing))
     Base._torch_compat_wrapped = True
     if not hasattr(_optim, "LBFGS"):
         _optim.LBFGS = _lbfgs_type(Base)
@@ -210,6 +237,7 @@ def _install_optimizers(g, registry=None):
         _modules["torch.optim.optimizer"] = _optim_sub
     _optim_sub.Optimizer = Base
     _optim_sub.ParamsT = object
+    _optim_sub.required = _OPTIMIZER_REQUIRED
     for _name in ("DeviceDict", "_default_to_fused_or_foreach",
                   "_disable_dynamo_if_unsupported",
                   "_get_capturable_supported_devices", "_get_value",

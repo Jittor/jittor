@@ -676,6 +676,16 @@ def _api_pytree__register_pytree_node(*args, **kwargs):
     return _api_pytree_register_pytree_node(*args, **kwargs)
 
 
+def _api_pytree_register_constant(cls, name=None, namespace=None):
+    """Mark a class as a pytree constant.
+
+    A constant is a leaf: flattening already ends at anything that is not a
+    registered container, so the class needs no node registration. The call is
+    kept for the API contract and returns the class, as torch does.
+    """
+    return cls
+
+
 def _api_fake_tensor_unset_fake_temporarily():
     return _ctxlib_utils.nullcontext()
 
@@ -954,6 +964,7 @@ def install(ctx):
         _pytree.tree_leaves = _api_pytree_tree_leaves
         _pytree.register_pytree_node = _api_pytree_register_pytree_node
         _pytree._register_pytree_node = _api_pytree__register_pytree_node
+        _pytree.register_constant = _api_pytree_register_constant
         _modules["torch.utils._pytree"] = _pytree
     g.utils._pytree = _modules["torch.utils._pytree"]
     if "torch.utils._contextlib" not in _modules:
@@ -1041,6 +1052,15 @@ def install_parity(ctx):
         python_dispatch, "TorchDispatchMode", TorchDispatchMode
     )
     python_dispatch._get_current_dispatch_mode = _api_python_dispatch__get_current_dispatch_mode
+    # torch.utils._python_dispatch.return_and_correct_aliasing: after an op
+    # dispatched through a wrapper subclass, torch rewrites the output so its
+    # alias metadata matches the inputs. There is no wrapper-subclass dispatch
+    # here, so the output already is what the op returned; hand it back
+    # unchanged. torchao imports this at module scope.
+    def _return_and_correct_aliasing(func, args, kwargs, out):
+        return out
+
+    python_dispatch.return_and_correct_aliasing = _return_and_correct_aliasing
     g.utils._python_dispatch = python_dispatch
     _register_utility_fidelity(ctx)
 
