@@ -24,7 +24,7 @@ import torch.nn as nn
 from jittor.compat.torch import fidelity as fidelity_mod
 from jittor.compat.torch.installers.nn import module_methods as nn_installer
 
-from _helpers.device_types import instantiate_device_type_tests
+from _helpers.device_types import instantiate_device_type_tests, onlyCUDA
 
 
 # --------------------------------------------------------------------------
@@ -577,6 +577,35 @@ class TestModuleMethodsAcrossDevices:
         net.to(torch.float64)
         assert str(net.lin.weight.dtype) == "torch.float64"
         assert str(net.ids.dtype) in ("torch.int32", "torch.int64")
+
+    @onlyCUDA
+    def test_to_rebinds_index_buffer_views_across_devices(self, device):
+        source = torch.triu_indices(4, 4, offset=1, device="cpu")
+        rows, cols = source
+        module = nn.Module()
+        module.register_buffer("rows", rows, persistent=False)
+        module.register_buffer("cols", cols)
+
+        module.to(device, dtype=torch.float32)
+
+        assert rows.device.type == cols.device.type == source.device.type == "cpu"
+        assert module.rows is not rows and module.cols is not cols
+        assert module.rows.device.type == module.cols.device.type == "cuda"
+        assert module.rows.dtype == rows.dtype and module.cols.dtype == cols.dtype
+        assert module.rows.tolist() == rows.tolist()
+        assert module.cols.tolist() == cols.tolist()
+        assert "rows" not in module.state_dict()
+        assert "cols" in module.state_dict()
+
+        cuda_source = torch.triu_indices(4, 4, offset=1, device=device)
+        cuda_rows = cuda_source[0]
+        module.register_buffer("rows", cuda_rows, persistent=False)
+        module.to("cpu")
+
+        assert cuda_rows.device.type == cuda_source.device.type == "cuda"
+        assert module.rows is not cuda_rows
+        assert module.rows.device.type == "cpu"
+        assert module.rows.tolist() == rows.tolist()
 
     def test_round_trip_migration_preserves_values(self, device):
         """to(device) then to('cpu') is value-preserving, bit for bit."""
