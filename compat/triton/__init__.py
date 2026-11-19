@@ -91,10 +91,10 @@ import types
 from . import language
 from ..diagnostics import EXPECTED, swallowed
 
-def batch_launches(kernels):
-    """Group explicitly selected eager Triton launches."""
+def batch_launches(kernels, *, allow_strided=False):
+    """Group eager Triton launches, allowing stride-aware kernels to opt in."""
     from .batch import batch_launches as launch_batch
-    return launch_batch(kernels)
+    return launch_batch(kernels, allow_strided=allow_strided)
 
 
 __all__ = [

@@ -30,10 +30,11 @@ def current_batch():
 
 
 class _LaunchBatch:
-    def __init__(self, kernels):
+    def __init__(self, kernels, *, allow_strided=False):
         from . import backend
 
         self._kernels = frozenset(kernels)
+        self._allow_strided = allow_strided
         self._commands = []
         self.submitted_launches = 0
         self._device = jt.current_device()
@@ -66,7 +67,7 @@ class _LaunchBatch:
             if isinstance(value, jt.Var):
                 if (not backend._tensor_is_cuda(value)
                         or value.device_id not in (-1, self._device)
-                        or not backend._tensor_is_contiguous(value)):
+                        or (not self._allow_strided and not backend._tensor_is_contiguous(value))):
                     return False
                 kind = backend._ptr_sig(value)
             else:
@@ -147,18 +148,21 @@ class _LaunchBatch:
 
 
 @contextmanager
-def batch_launches(kernels):
+def batch_launches(kernels, *, allow_strided=False):
     """Group explicit CUDA Triton launches in a caller-owned inference pipeline.
 
     Pass upstream JITFunction objects for the allowed kernels. The surrounding
     code may allocate buffers and inspect metadata. It must flush before reading
     their values, constructing dependent Jittor computations, switching devices,
     or timing autotuning trials. The scope submits fresh launches on every call.
+    Set `allow_strided` when all selected kernels honor the physical strides
+    of any noncontiguous tensor arguments. Otherwise these launches are
+    submitted individually.
     """
     previous = current_batch()
     if previous is not None:
         previous.flush()
-    batch = _LaunchBatch(kernels)
+    batch = _LaunchBatch(kernels, allow_strided=allow_strided)
     _scope.current = batch
     try:
         yield batch
