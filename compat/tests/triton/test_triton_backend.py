@@ -248,6 +248,26 @@ def setUpModule():
 
 @unittest.skipUnless(_HAVE, "real upstream triton + CUDA not available")
 class TestTritonBackend(unittest.TestCase):
+    def test_alignment_uses_launched_storage_and_runtime_arguments(self):
+        def read_strided(src, dst, stride, BLOCK: tl.constexpr):
+            i = tl.arange(0, BLOCK)
+            tl.store(dst + i, tl.load(src + i * stride))
+
+        kernel = triton.jit(read_strided, do_not_specialize_on_alignment=["dst"])
+        base = jt.array(np.arange(1024, dtype=np.float32)).cuda()
+        bridge = _shim.backend
+        with mock.patch.object(bridge, "_compile", wraps=bridge._compile) as compile:
+            for offset, stride in ((0, 16), (1, 16), (0, 17), (0, 16)):
+                dest = jt.empty((32,), dtype="float32")
+                kernel[(1,)](base[offset:], dest, stride, BLOCK=32)
+                np.testing.assert_array_equal(
+                    dest.numpy(), np.arange(32, dtype=np.float32) * stride + offset)
+                expected = ()
+                if hasattr(kernel, "_pack_args"):
+                    expected = tuple(i for i, valid in ((0, offset == 0), (2, stride % 16 == 0))
+                                     if valid)
+                self.assertEqual(compile.call_args.kwargs["aligned"], expected)
+
     def test_compiled_kernel_identity_survives_callable_collection(self):
         """An ID-keyed entry must not become another kernel's cache hit."""
         def plus_one(X, O, N: tl.constexpr):
@@ -419,6 +439,44 @@ class TestTritonBackend(unittest.TestCase):
         mul2_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
         self.ac(out.float32().numpy(), xn * 2.0, atol=5e-2, msg="bf16 mul2")
 
+    def test_launch_option_named_constexpr_is_bound(self):
+        @triton.jit
+        def store_result(out, launch_pdl: tl.constexpr):
+            tl.store(out, 1 if launch_pdl else 7)
+
+        output = jt.zeros(1, dtype="int32")
+        store_result[(1,)](output, launch_pdl=False)
+        self.assertEqual(output.item(), 7)
+
+    def test_callable_grid_receives_and_can_replace_bound_operands(self):
+        @triton.jit
+        def copy_operand(source, output):
+            tl.store(output + tl.program_id(0), tl.load(source + tl.program_id(0)))
+
+        source = jt.zeros(3, dtype="int32")
+        replacement = jt.array(np.array([4, 5, 6], dtype=np.int32))
+        output = jt.zeros(3, dtype="int32")
+
+        def grid(meta):
+            self.assertIs(meta["source"], source)
+            meta["source"] = replacement
+            return (meta["output"].numel(),)
+
+        copy_operand[grid](source, output)
+        np.testing.assert_array_equal(output.numpy(), [4, 5, 6])
+        np.testing.assert_array_equal(source.numpy(), [0, 0, 0])
+
+    def test_exceeding_device_shared_memory_raises_triton_resource_error(self):
+        from jittor.compat.triton.backend import _Driver
+        from triton.runtime.autotuner import OutOfResources
+
+        driver = _Driver.get(jt.current_device())
+        requested = driver.max_shared_memory + 1
+        with self.assertRaises(OutOfResources) as raised:
+            driver.check_shared_memory(requested)
+        self.assertEqual(raised.exception.required, requested)
+        self.assertEqual(raised.exception.limit, driver.max_shared_memory)
+
     def test_autotune(self):
         n = 4096
         rs = np.random.RandomState(23)
@@ -548,6 +606,9 @@ class TestOptionalPointerPacking(unittest.TestCase):
             arch = 89
 
             def ensure_ctx(self):
+                pass
+
+            def check_shared_memory(self, shared):
                 pass
 
             def ensure_dynamic_shared(self, function, shared):
@@ -1090,6 +1151,88 @@ class TestTheLaunchBarrierNamesItsOperands(unittest.TestCase):
             ("sync_all", (False,)), seen,
             "the launch swept the whole process with jt.sync_all(False); name the "
             "operand Vars instead, or every launch pays for every live holder")
+
+    def test_the_launch_leaves_unrelated_pending_work_unsubmitted(self):
+        self._prepare()
+        n, block = 32, 32
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0), mock.patch.dict(
+                os.environ, {"JITTOR_TRITON_FAST_SYNC": "1",
+                             "JITTOR_TRITON_SYNC_BEFORE_LAUNCH": "0",
+                             "JITTOR_TRITON_SYNC_AFTER_LAUNCH": "0"}):
+            # Compile before introducing the bystander: compiler initialization
+            # is outside the steady launch whose submission scope is tested.
+            warm = jt.zeros((n,), dtype="float32")
+            add_kernel[(1,)](warm, warm, warm, n, BLOCK=block)
+            warm.sync(True, False)
+            counter = jt.zeros((1,), dtype="int32")
+            counter.sync(True, False)
+            bystander = jt.code(
+                (1,), "int32", [counter],
+                cuda_src="""
+                __global__ static void mark_bystander(@ARGS_DEF) {
+                    @PRECALC
+                    if (threadIdx.x == 0) {
+                        atomicAdd(in0_p, 1);
+                        @out0(0) = 0;
+                    }
+                }
+                mark_bystander<<<1, 1>>>(@ARGS);
+                """)
+            try:
+                expected = np.arange(n, dtype="float32") + 3
+                x = jt.array(expected - 1) + 0.0
+                y = jt.ones((n,), dtype="float32")
+                out = jt.empty((n,), dtype="float32")
+                add_kernel[(1,)](x, y, out, n, BLOCK=block)
+                jt.sync([out], True, False)
+                self.assertEqual(
+                    jt.core._first_finished([bystander]), -1,
+                    "the foreign launch submitted an unrelated pending graph")
+                np.testing.assert_array_equal(out.numpy(), expected)
+            finally:
+                bystander.sync(True, False)
+
+    def test_inplace_launch_preserves_pending_value_and_view_snapshots(self):
+        self._prepare()
+        n, block = 32, 32
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0), mock.patch.dict(
+                os.environ, {"JITTOR_TRITON_FAST_SYNC": "1",
+                             "JITTOR_TRITON_SYNC_BEFORE_LAUNCH": "0",
+                             "JITTOR_TRITON_SYNC_AFTER_LAUNCH": "0"}):
+            expected = np.arange(n, dtype="float32")
+            x = jt.array(expected)
+            x.sync(True, False)
+            old = x.clone()
+            old_view = x.reshape((4, 8))[:, ::2].clone()
+            self.assertEqual(jt.core._first_finished([old, old_view]), -1)
+            y = jt.ones((n,), dtype="float32")
+            add_kernel[(1,)](x, y, x, n, BLOCK=block)
+            jt.sync([x], True, False)
+            np.testing.assert_array_equal(old.numpy(), expected)
+            np.testing.assert_array_equal(
+                old_view.numpy(), expected.reshape((4, 8))[:, ::2])
+            np.testing.assert_array_equal(x.numpy(), expected + 1)
+
+    def test_pending_output_view_preserves_its_base_snapshot(self):
+        self._prepare()
+        n, block = 32, 32
+        with jt.flag_scope(lazy_execution=1, auto_flush_ops=0), mock.patch.dict(
+                os.environ, {"JITTOR_TRITON_FAST_SYNC": "1",
+                             "JITTOR_TRITON_SYNC_BEFORE_LAUNCH": "0",
+                             "JITTOR_TRITON_SYNC_AFTER_LAUNCH": "0"}):
+            expected = np.arange(n + 1, dtype="float32")
+            base = jt.array(expected)
+            base.sync(True, False)
+            old = base.clone()
+            view = base[1:]
+            self.assertEqual(jt.core._first_finished([old, view]), -1)
+            increment = jt.ones((n,), dtype="float32")
+            add_kernel[(1,)](view, increment, view, n, BLOCK=block)
+            jt.sync([base], True, False)
+            np.testing.assert_array_equal(old.numpy(), expected)
+            updated = expected.copy()
+            updated[1:] += 1
+            np.testing.assert_array_equal(base.numpy(), updated)
 
 
 if __name__ == "__main__":
