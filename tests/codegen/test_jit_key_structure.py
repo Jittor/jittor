@@ -87,6 +87,29 @@ def fused_keys(build):
 
 
 class TestJitKeyIdentifiesTheKernel(unittest.TestCase):
+    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
+    def test_cuda_standalone_array_keys_use_dtype_not_payload(self):
+        with jt.flag_scope(use_cuda=1, auto_graph_replay=0, auto_flush_ops=0,
+                           use_cuda_host_allocator=0, auto_convert_64_to_32=0,
+                           backend_fallback="error"):
+            dtype_keys = []
+            for dtype in (np.int32, np.int64):
+                payload_keys = set()
+                for value in (0, 1, 2, 37, -2):
+                    expected = np.array([value], dtype=dtype)
+                    array = jt.array(expected)
+                    keys = fused_keys(lambda: array.sync(True, False))
+                    materializations = [key for key in keys if key.startswith("«opkey0:array")
+                                        and "«JIT_cuda:1" in key and "«opkey1:" not in key]
+                    self.assertEqual(len(materializations), 1, keys)
+                    payload_keys.add(materializations[0])
+                    self.assertEqual(array.location(), "device")
+                    self.assertEqual(array.numpy().dtype, expected.dtype)
+                    np.testing.assert_array_equal(array.numpy(), expected)
+                self.assertEqual(len(payload_keys), 1, payload_keys)
+                dtype_keys.extend(payload_keys)
+            self.assertNotEqual(*dtype_keys)
+
     def test_a_300_op_fusion_does_not_share_a_key_with_a_200_op_one(self):
         keys_200 = fused_keys(lambda: chain_sum(200).sync())
         keys_300 = fused_keys(lambda: chain_sum(300).sync())

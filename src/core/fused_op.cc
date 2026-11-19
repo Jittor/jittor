@@ -281,8 +281,16 @@ void FusedOp::prepare_fused_key(JK& jk) {
         Op* op = ops[i];
         jk << "«opkey" << i << JK::val;
         jk << op->name();
-        if (uniform) op->prepare_fragment_on(jk, op->execution_backend_for(requested));
-        else op->prepare_fragment(jk);
+        const auto backend = uniform ? op->execution_backend_for(requested) : op->execution_backend();
+        if (backend == BackendId::Cuda && ops.size() == 1 && op->is_op(op_ids::array())
+                && op->output(0)->num == 1) {
+            // PassManager's standalone array kernel takes the value as a launch
+            // argument. Only arrays fused with consumers can fold the value
+            // into generated code and need its bits in the key.
+            jk << "«T:" << op->output(0)->dtype();
+        } else {
+            op->prepare_fragment_on(jk, backend);
+        }
         const auto& identity = op->definition().compile_identity;
         if (!identity.empty()) add_jit_define(jk, "op_definition", i, identity);
     }
