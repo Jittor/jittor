@@ -439,6 +439,44 @@ class TestTritonBackend(unittest.TestCase):
         mul2_kernel[(triton.cdiv(n, BLOCK),)](x, out, n, BLOCK=BLOCK)
         self.ac(out.float32().numpy(), xn * 2.0, atol=5e-2, msg="bf16 mul2")
 
+    def test_launch_option_named_constexpr_is_bound(self):
+        @triton.jit
+        def store_result(out, launch_pdl: tl.constexpr):
+            tl.store(out, 1 if launch_pdl else 7)
+
+        output = jt.zeros(1, dtype="int32")
+        store_result[(1,)](output, launch_pdl=False)
+        self.assertEqual(output.item(), 7)
+
+    def test_callable_grid_receives_and_can_replace_bound_operands(self):
+        @triton.jit
+        def copy_operand(source, output):
+            tl.store(output + tl.program_id(0), tl.load(source + tl.program_id(0)))
+
+        source = jt.zeros(3, dtype="int32")
+        replacement = jt.array(np.array([4, 5, 6], dtype=np.int32))
+        output = jt.zeros(3, dtype="int32")
+
+        def grid(meta):
+            self.assertIs(meta["source"], source)
+            meta["source"] = replacement
+            return (meta["output"].numel(),)
+
+        copy_operand[grid](source, output)
+        np.testing.assert_array_equal(output.numpy(), [4, 5, 6])
+        np.testing.assert_array_equal(source.numpy(), [0, 0, 0])
+
+    def test_exceeding_device_shared_memory_raises_triton_resource_error(self):
+        from jittor.compat.triton.backend import _Driver
+        from triton.runtime.autotuner import OutOfResources
+
+        driver = _Driver.get(jt.current_device())
+        requested = driver.max_shared_memory + 1
+        with self.assertRaises(OutOfResources) as raised:
+            driver.check_shared_memory(requested)
+        self.assertEqual(raised.exception.required, requested)
+        self.assertEqual(raised.exception.limit, driver.max_shared_memory)
+
     def test_autotune(self):
         n = 4096
         rs = np.random.RandomState(23)
@@ -568,6 +606,9 @@ class TestOptionalPointerPacking(unittest.TestCase):
             arch = 89
 
             def ensure_ctx(self):
+                pass
+
+            def check_shared_memory(self, shared):
                 pass
 
             def ensure_dynamic_shared(self, function, shared):
