@@ -1470,6 +1470,36 @@ def _install_module_methods(nn, registry=None):
     if not isinstance(M.__dict__.get("_non_persistent_buffers_set"), property):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
+    # transformers marks a module initialized and then replaces its
+    # non-persistent buffers with `empty_like` (meta -> device); the module-level
+    # flag would then skip the re-initialization that recreates them. Derive the
+    # module's state from its own tensors instead: a replaced buffer has no
+    # initialized flag, so the module reports uninitialized and its init runs.
+    def _module_hf_initialized(self):
+        if not self.__dict__.get("_module_hf_initialized_state", False):
+            return False
+        try:
+            tensors = list(self.parameters(recurse=False)) + list(self.buffers(recurse=False))
+        except Exception:
+            return True
+        return all(getattr(tensor, "_is_hf_initialized", False) for tensor in tensors)
+
+    def _set_module_hf_initialized(self, value):
+        self.__dict__["_module_hf_initialized_state"] = bool(value)
+        if value:
+            try:
+                tensors = list(self.parameters(recurse=False)) + list(self.buffers(recurse=False))
+            except Exception:
+                return
+            for tensor in tensors:
+                try:
+                    setattr(tensor, "_is_hf_initialized", True)
+                except Exception:
+                    pass
+
+    if not isinstance(M.__dict__.get("_is_hf_initialized"), property):
+        M._is_hf_initialized = property(_module_hf_initialized, _set_module_hf_initialized)
+
     register_api_bindings(M, 'torch.nn.Module',
         ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
