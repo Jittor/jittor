@@ -224,6 +224,17 @@ def frontend_factory(function, tensor_type):
 
 
 class _TensorMeta(type):
+    def __instancecheck__(cls, instance):
+        # Every jittor Var is a torch.Tensor, even one produced by a native op
+        # that did not pass through the frontend constructor. Without this,
+        # isinstance(x, torch.Tensor) was False for such results, and callers
+        # (lm-eval's transformer-lens adapter, timm's collate) took the wrong
+        # branch.
+        backend = vars(cls).get("_frontend_backend")
+        if backend is not None and isinstance(instance, backend.Var):
+            return True
+        return super().__instancecheck__(instance)
+
     def __call__(cls, *args, **kwargs):
         backend = vars(cls).get("_frontend_backend")
         if backend is None:
@@ -278,10 +289,42 @@ class _TensorMeta(type):
             return result
 
 
+def _scalar_operand_wrapper(backend, name):
+    """Wrap a native arithmetic dunder so Python scalars never gain grad.
+
+    Jittor materializes a Python scalar as a floating Var, which defaults to
+    requires_grad=True; ``frozen_tensor * 1`` then came back requiring grad
+    while ``frozen_tensor * 1.0`` did not. Torch keeps the frozen flag, so the
+    scalar is converted here to an explicitly stopped tensor of the operand's
+    dtype before the native op runs.
+    """
+    native = getattr(backend.Var, name)
+
+    def operation(self, other):
+        if isinstance(other, (bool, int, float)):
+            try:
+                other = backend.array(other, dtype=self.dtype).stop_grad()
+            except Exception:
+                pass
+        return native(self, other)
+
+    operation.__name__ = name
+    return operation
+
+
 def make_tensor_type(backend):
     """Create the installation's real type without writing to native Var."""
     from .tensor_object_state import tensor_object_properties
+    _scalar_ops = {
+        name: _scalar_operand_wrapper(backend, name)
+        for name in ("__add__", "__radd__", "__sub__", "__rsub__",
+                     "__mul__", "__rmul__", "__truediv__", "__rtruediv__",
+                     "__pow__", "__rpow__", "__iadd__", "__isub__",
+                     "__imul__", "__itruediv__")
+        if hasattr(backend.Var, name)
+    }
     return _TensorMeta("Tensor", (backend.Var,), {
+        **_scalar_ops,
         "__module__": "torch",
         "__slots__": ("__weakref__",),
         "_frontend_backend": backend,

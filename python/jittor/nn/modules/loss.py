@@ -4,19 +4,35 @@ import jittor as jt
 
 
 class CrossEntropyLoss(jt.Module):
-    def __init__(self, weight=None, ignore_index=None, reduction="mean"):
+    def __init__(self, weight=None, ignore_index=None, reduction="mean",
+                 label_smoothing=0.0):
         self.weight = weight
         self.ignore_index = ignore_index
         self.reduction = reduction
+        self.label_smoothing = float(label_smoothing or 0.0)
+        if self.label_smoothing and (weight is not None or ignore_index is not None):
+            raise NotImplementedError(
+                "label_smoothing with weight/ignore_index is not supported yet")
 
     def execute(self, output, target):
-        return jt.nn.cross_entropy_loss(
-            output,
-            target,
-            self.weight,
-            self.ignore_index,
-            reduction=self.reduction,
-        )
+        if not self.label_smoothing:
+            return jt.nn.cross_entropy_loss(
+                output,
+                target,
+                self.weight,
+                self.ignore_index,
+                reduction=self.reduction,
+            )
+        eps = self.label_smoothing
+        logp = jt.nn.log_softmax(output, dim=1)
+        nll = jt.nn.nll_loss(logp, target, reduction="none")
+        smooth = -logp.mean(dim=1)
+        loss = (1.0 - eps) * nll + eps * smooth
+        if self.reduction == "mean":
+            return loss.mean()
+        if self.reduction == "sum":
+            return loss.sum()
+        return loss
 
 
 class MSELoss(jt.Module):

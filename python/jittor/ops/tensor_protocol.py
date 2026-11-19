@@ -157,7 +157,10 @@ def _var_device_spelling(var):
 
 
 def _parse_to(args, kwargs):
-    allowed = {"device", "dtype", "non_blocking", "copy"}
+    # memory_format is a layout request; jittor tensors are logically
+    # contiguous NCHW, so accept the spelling (diffusers' datasets call
+    # .to(memory_format=torch.contiguous_format)) without changing storage.
+    allowed = {"device", "dtype", "non_blocking", "copy", "memory_format"}
     unknown = set(kwargs) - allowed
     if unknown:
         raise TypeError("to() got unexpected keyword argument %r" % sorted(unknown)[0])

@@ -921,6 +921,14 @@ def install_parity(ctx):
 
     onnx = module("torch.onnx")
     onnx.is_in_onnx_export = _api_onnx_is_in_onnx_export
+    if not hasattr(onnx, "TrainingMode"):
+        import enum as _enum
+
+        class TrainingMode(_enum.Enum):
+            EVAL = "eval"
+            TRAINING = "training"
+
+        onnx.TrainingMode = TrainingMode
     if not hasattr(onnx, "register_custom_op_symbolic"):
         onnx.register_custom_op_symbolic = lambda *args, **kwargs: None
     if not hasattr(onnx, "symbolic_helper"):

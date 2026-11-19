@@ -332,6 +332,64 @@ def _install_functional(ctx):
     for template in (PixelShuffle, PixelUnshuffle):
         if not hasattr(nn, template.__name__):
             setattr(nn, template.__name__, _adapt_extra(template, ctx.registry))
+    try:
+        _utils_mod = ctx.registry.ensure("torch.nn.utils")
+    except Exception:
+        _utils_mod = None
+    if _utils_mod is not None and not hasattr(_utils_mod, "get_total_norm"):
+        from jittor.compat.torch.grad import (
+            _get_total_norm_device, _clip_grads_with_norm_device,
+            _clip_grad_norm_device)
+
+        def get_total_norm(tensors, norm_type=2.0, error_if_nonfinite=False,
+                           foreach=None):
+            grads = [t for t in tensors if t is not None]
+            return _get_total_norm_device(grads, norm_type, error_if_nonfinite)
+
+        def clip_grads_with_norm_(tensors, max_norm, total_norm, foreach=None):
+            grads = [t for t in tensors if t is not None]
+            _clip_grads_with_norm_device(grads, max_norm, total_norm)
+
+        def clip_grad_norm_(parameters, max_norm, norm_type=2.0,
+                            error_if_nonfinite=False, foreach=None):
+            grads = [p.grad for p in parameters
+                     if getattr(p, "grad", None) is not None]
+            return _clip_grad_norm_device(
+                grads, max_norm, norm_type, error_if_nonfinite)
+
+        for _owner_mod in (_utils_mod, nn):
+            setattr(_owner_mod, "get_total_norm", get_total_norm)
+            setattr(_owner_mod, "clip_grads_with_norm_", clip_grads_with_norm_)
+            setattr(_owner_mod, "clip_grad_norm_", clip_grad_norm_)
+        # diffusers VAE decoders call torch.nn.utils.weight_norm directly.
+        import jittor.nn as _native_nn
+        for _name in ("weight_norm", "remove_weight_norm"):
+            _value = getattr(getattr(_native_nn, "utils", None), _name, None)
+            if _value is not None and not hasattr(_utils_mod, _name):
+                setattr(_utils_mod, _name, _value)
+
+    if not hasattr(nn, "LocalResponseNorm"):
+        class LocalResponseNorm(nn.Module):
+            """torch.nn.LocalResponseNorm over native jittor ops."""
+
+            def __init__(self, size, alpha=1e-4, beta=0.75, k=1.0):
+                super().__init__()
+                self.size = size
+                self.alpha = alpha
+                self.beta = beta
+                self.k = k
+
+            def execute(self, x):
+                import jittor as _jt
+                sq = x * x
+                pooled = _jt.nn.avg_pool2d(
+                    sq, kernel_size=self.size, stride=1,
+                    padding=self.size // 2)
+                denom = (self.k + (self.alpha / self.size) * pooled) ** self.beta
+                return x / denom
+
+        LocalResponseNorm.__module__ = "torch.nn"
+        setattr(nn, "LocalResponseNorm", LocalResponseNorm)
     # F.logsigmoid (DPO/preference losses), F.gumbel_softmax (discrete/MoE sampling).
     if not hasattr(F, "logsigmoid"):
         # stable: log(sigmoid(x)) = min(x,0) - log(1+exp(-|x|))

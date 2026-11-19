@@ -70,10 +70,36 @@ def initialize_adagrad(self, params, lr=1e-2, lr_decay=0, weight_decay=0,
         dict(maximize=maximize, differentiable=differentiable, fused=fused))
 
 
+def initialize_adadelta(self, params, lr=1.0, rho=0.9, eps=1e-6,
+                        weight_decay=0, foreach=None, *, maximize=False,
+                        differentiable=False, fused=None):
+    return _initialize_algorithm("Adadelta", self,
+        (params, lr, rho, eps, weight_decay, foreach),
+        dict(maximize=maximize, differentiable=differentiable, fused=fused))
+
+
+def initialize_adamax(self, params, lr=2e-3, betas=(0.9, 0.999), eps=1e-8,
+                      weight_decay=0, foreach=None, *, maximize=False,
+                      differentiable=False, fused=None):
+    return _initialize_algorithm("Adamax", self,
+        (params, lr, betas, eps, weight_decay, foreach),
+        dict(maximize=maximize, differentiable=differentiable, fused=fused))
+
+
+def initialize_nadam(self, *args, **kwargs):
+    return _initialize_algorithm("NAdam", self, args, kwargs)
+
+
+def initialize_radam(self, *args, **kwargs):
+    return _initialize_algorithm("RAdam", self, args, kwargs)
+
+
 _ALGORITHM_INITIALIZERS = {
     "SGD": initialize_sgd, "Adam": initialize_adam, "AdamW": initialize_adamw,
     "RMSprop": initialize_rmsprop, "Adan": initialize_adan,
-    "Adagrad": initialize_adagrad,
+    "Adagrad": initialize_adagrad, "Adadelta": initialize_adadelta,
+    "Adamax": initialize_adamax, "NAdam": initialize_nadam,
+    "RAdam": initialize_radam,
 }
 
 
@@ -94,7 +120,8 @@ def make_optimizer_frontend(native, tensor_type):
         "__init__": initialize_base,
     })
     setattr(module, "Optimizer", base)
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad",
+                 "Adadelta", "Adamax", "NAdam", "RAdam"):
         algorithm = getattr(native, name, None)
         if algorithm is None:
             continue

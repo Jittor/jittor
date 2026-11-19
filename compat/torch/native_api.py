@@ -55,9 +55,19 @@ class NativeOperation:
     #: (5,5) -- a quietly different answer, not an error.
     _TORCH_DEFAULTS = {"linalg.svd": {"full_matrices": True}}
 
+    _AXIS_ALIASES = frozenset((
+        "mean", "prod", "sum", "amax", "amin", "median", "std", "var",
+        "norm", "nanmean", "nansum", "logsumexp"))
+
     def __call__(self, *args, **kwargs):
         import jittor
         context = get_install_context(jittor)
+        if ("axis" in kwargs and "dim" not in kwargs
+                and self._operation_key in self._AXIS_ALIASES):
+            # torch accepts axis= as a spelling of dim= on reductions;
+            # transformers' mean_resizing calls torch.mean(x, axis=0).
+            kwargs = dict(kwargs)
+            kwargs["dim"] = kwargs.pop("axis")
         implementation = context.state["native_torch_operations"][self._operation_key]
         defaults = self._TORCH_DEFAULTS.get(self._operation_key)
         if defaults:

@@ -176,6 +176,13 @@ def _torch_stream_randn(name, args, kwargs):
         return None
     if __import__("os").environ.get("MM_RANDN_NATIVE") == "1":
         return None
+    if name == "randn_like":
+        # torch.randn_like follows its input's device; only a CPU input may be
+        # drawn from the host MT19937 stream. An accelerator input must fall
+        # through to the native sampler, which inherits the like-placement.
+        _src = args[0] if args else kwargs.get("input")
+        if _src is not None and str(getattr(_src, "device", "cpu")).split(":")[0] not in ("cpu", ""):
+            return None
     placement = jt.core._current_tensor_placement()
     requested = kwargs.get("device")
     if requested is not None:

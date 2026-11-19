@@ -590,8 +590,26 @@ def adagrad_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
     return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'adagrad')
 
 
+def nadam_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
+    return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'nadam')
+
+
+def radam_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
+    return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'radam')
+
+
+def adadelta_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
+    return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'adadelta')
+
+
+def adamax_step(self, loss=None, retain_graph=False, closure=None, **kwargs):
+    return _step_with_closure(self, loss, retain_graph, closure, kwargs, 'adamax')
+
+
 _STEP_APIS = {"sgd": sgd_step, "rmsprop": rmsprop_step, "adan": adan_step,
-              "adagrad": adagrad_step}
+              "adagrad": adagrad_step, "adadelta": adadelta_step,
+              "adamax": adamax_step, "nadam": nadam_step,
+              "radam": radam_step}
 
 def adam_init(self, params, lr=1e-3, *args, **kwargs):
     return _initialize_adam(self, params, lr, args, kwargs, 'Adam')

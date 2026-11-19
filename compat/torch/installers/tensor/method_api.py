@@ -374,6 +374,25 @@ def _copy_detached_storage(self, value):
     return True
 
 
+_copy_detached_storage_native = _copy_detached_storage
+
+
+def _copy_detached_storage(self, value):
+    """Copy storage without letting a native write change the grad flag.
+
+    Jittor's native store adopts the RHS Var's autograd state, so an in-place
+    update of a frozen tensor (``avg += v`` on a checkpoint buffer) came back
+    with requires_grad=True. Torch keeps the destination frozen; restore it.
+    """
+    was_trainable = bool(self.requires_grad)
+    result = _copy_detached_storage_native(self, value)
+    if result and not was_trainable and self.requires_grad:
+        _context = get_install_context(_owner.jt)
+        _context.state["tensor_native_api"]["_native_requires_grad"].__set__(
+            self, False)
+    return result
+
+
 def _ip(self, value, preserve_storage=False):
     self._check_inplace_autograd()
     if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
@@ -1616,13 +1635,26 @@ def _promoting_binary(self, other, opname, reflected):
         # the scalar operand before dispatching.
         self_scalar = getattr(self, "ndim", None) == 0
         other_scalar = getattr(other, "ndim", None) == 0
-        self_cuda = bool(getattr(self, "is_cuda", False))
-        other_cuda = bool(getattr(other, "is_cuda", False))
-        if self_cuda != other_cuda and (self_scalar or other_scalar):
+        self_device = getattr(self, "device", None)
+        other_device = getattr(other, "device", None)
+        if (self_device != other_device and (self_scalar or other_scalar)
+                and (self_scalar or str(self_device).startswith("cpu"))
+                and (other_scalar or str(other_device).startswith("cpu"))):
+            # Compare actual devices: on Ascend `is_cuda` is False for both a
+            # host scalar and an NPU tensor, so the old CUDA-only test missed
+            # the one 0-dim CPU scalar torch permits next to an accelerator.
             if self_scalar and not other_scalar:
-                self = self.cuda() if other_cuda else self.cpu()
+                self = self.to(other_device)
             elif other_scalar and not self_scalar:
-                other = other.cuda() if self_cuda else other.cpu()
+                other = other.to(self_device)
+        elif self_device != other_device:
+            self_cuda = bool(getattr(self, "is_cuda", False))
+            other_cuda = bool(getattr(other, "is_cuda", False))
+            if self_cuda != other_cuda and (self_scalar or other_scalar):
+                if self_scalar and not other_scalar:
+                    self = self.cuda() if other_cuda else self.cpu()
+                elif other_scalar and not self_scalar:
+                    other = other.cuda() if self_cuda else other.cpu()
         da, db = _own_dtype_name(self, native_api), _own_dtype_name(other, native_api)
         if da == db and not da.startswith("uint"):
             return _binary_native(opname, self, other, native_api)
@@ -2041,8 +2073,12 @@ def _api_normal(self, mean=0.0, std=1.0, generator=None):
     return _random_inplace(self, _normal_values, mean, std, generator=generator)
 
 
-def _random_integer_values(tensor, generator=None):
-    """Draw Torch random_ integers on the destination tensor's device."""
+def _random_integer_values(tensor, low=None, high=None, generator=None):
+    """Draw Torch random_ integers on the destination tensor's device.
+
+    ``random_()`` fills the dtype's full range; ``random_(to)`` fills
+    ``[0, to)`` and ``random_(from, to)`` fills ``[from, to)``.
+    """
     dtype = _jittor_dtype_name(tensor.dtype)
     bits = {"bool": 1, "uint8": 8, "int8": 7, "int16": 15,
             "int32": 31, "int64": 63, "float16": 11,
@@ -2051,6 +2087,12 @@ def _random_integer_values(tensor, generator=None):
         raise TypeError("torch.Tensor.random_ requires a real or integral tensor")
     from jittor._core.var import device_scope_like
     with device_scope_like(tensor), _owner.jt.no_grad():
+        if low is not None or high is not None:
+            lo = 0 if low is None else int(low)
+            hi = (1 << bits) if high is None else int(high)
+            if hi <= lo:
+                raise RuntimeError("random_ expects from < to")
+            return _owner.jt.randint(lo, hi, tensor.shape, "int64").cast(dtype)
         # Keep each piece exactly representable in the native random sampler.
         remaining = bits
         value = None
@@ -2062,8 +2104,9 @@ def _random_integer_values(tensor, generator=None):
         return value.cast(dtype)
 
 
-def _api_random(self):
-    return _random_inplace(self, _random_integer_values)
+def _api_random(self, from_=None, to=None, *, generator=None):
+    return _random_inplace(self, _random_integer_values, from_, to,
+                           generator=generator)
 
 
 def _api_uniform(self, a=0.0, b=1.0, generator=None):

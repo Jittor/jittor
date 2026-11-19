@@ -1436,6 +1436,18 @@ def _install_module_methods(nn, registry=None):
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
     M.load_state_dict = _load_state_dict
+    if not getattr(M, "_torch_state_dict_detach", False):
+        _orig_state_dict = M.state_dict
+
+        def _state_dict_torch(self, *args, **kwargs):
+            # torch.nn.Module.state_dict returns detached tensors unless
+            # keep_vars=True; jittor's native default keeps live Vars.
+            if "keep_vars" not in kwargs and len(args) < 5:
+                kwargs["keep_vars"] = False
+            return _orig_state_dict(self, *args, **kwargs)
+
+        M.state_dict = _state_dict_torch
+        M._torch_state_dict_detach = True
     M._parameters = property(_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
     M.train = _train
@@ -1469,6 +1481,27 @@ def _install_module_methods(nn, registry=None):
         M.type = _module_type
     if not isinstance(M.__dict__.get("_non_persistent_buffers_set"), property):
         M._non_persistent_buffers_set = property(_nonpersist_set)
+
+    # jittor.models builds native jittor Modules, which inherit the native
+    # ``_core.module.Module`` rather than the torch-facing M. Publishing the
+    # torch state/placement methods on that base too makes the model zoo usable
+    # from torch-style references (``torchvision.models.get_model(...).to(...)``).
+    _native_module = getattr(getattr(jt, "nn", None), "Module", None)
+    if _native_module is not None and _native_module is not M:
+        for _name in ("_apply", "to", "to_empty", "cuda", "npu", "cpu",
+                      "train", "eval", "zero_grad", "state_dict",
+                      "load_state_dict", "named_parameters", "named_buffers",
+                      "named_modules", "parameters", "buffers"):
+            _value = getattr(M, _name, None)
+            if _value is None:
+                continue
+            if _name in ("state_dict", "load_state_dict", "parameters",
+                         "named_parameters", "named_buffers", "named_modules"):
+                setattr(_native_module, _name, _value)
+            elif not hasattr(_native_module, _name):
+                setattr(_native_module, _name, _value)
+        if not isinstance(_native_module.__dict__.get("_non_persistent_buffers_set"), property):
+            _native_module._non_persistent_buffers_set = property(_nonpersist_set)
 
     # transformers marks a module initialized and then replaces its
     # non-persistent buffers with `empty_like` (meta -> device); the module-level

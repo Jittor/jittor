@@ -118,6 +118,8 @@ def _install_optimizers(g, registry=None):
             _modules["torch.optim.optimizer"] = _optim_sub
         _optim_sub.Optimizer = Base
         _optim_sub.ParamsT = object
+        if not hasattr(_optim_sub, "required"):
+            _optim_sub.required = object()
         return
     import weakref as _weakref
     _native_steps = {}
@@ -170,7 +172,9 @@ def _install_optimizers(g, registry=None):
         AdamW._torch_adamw_step = True
         AdamW._skips_step_on_device = _adamw_skips_step_on_device
     for _cls_name, _native_kind in (("SGD", "sgd"), ("RMSprop", "rmsprop"),
-                                    ("Adan", "adan"), ("Adagrad", "adagrad")):
+                                    ("Adan", "adan"), ("Adagrad", "adagrad"),
+                                    ("Adadelta", "adadelta"), ("Adamax", "adamax"),
+                                    ("NAdam", "nadam"), ("RAdam", "radam")):
         _cls = getattr(_optim, _cls_name, None)
         if _cls is not None and not getattr(_cls, "_torch_closure_step", False):
             _native_steps[_native_kind] = _cls.step
@@ -198,6 +202,8 @@ def _install_optimizers(g, registry=None):
         _modules["torch.optim.optimizer"] = _optim_sub
     _optim_sub.Optimizer = Base
     _optim_sub.ParamsT = object
+    if not hasattr(_optim_sub, "required"):
+        _optim_sub.required = object()
 
     # jittor's load_state_dict runs a dfs that calls .stop_grad() on every Var
     # it meets -- including params nested under param_groups -- freezing all
@@ -226,7 +232,8 @@ def _install_optimizers(g, registry=None):
         Fidelity.APPROXIMATE,
         "State and gradient adapters over native parameter groups; only known "
         "optimizer state layouts and supported restore formats are handled")
-    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad"):
+    for name in ("SGD", "Adam", "AdamW", "RMSprop", "Adan", "Adagrad",
+                 "Adadelta", "Adamax", "NAdam", "RAdam"):
         algorithm = getattr(_optim, name, None)
         if algorithm is not None:
             register_api_bindings(algorithm, "torch.optim." + name,
