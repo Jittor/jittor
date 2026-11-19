@@ -300,13 +300,25 @@ def _scalar_operand_wrapper(backend, name):
     """
     native = getattr(backend.Var, name)
 
+    _inplace = name.startswith("__i")
+
     def operation(self, other):
+        was_trainable = bool(self.requires_grad)
+        result = native(self, other)
         if isinstance(other, (bool, int, float)):
-            try:
-                other = backend.array(other, dtype=self.dtype).stop_grad()
-            except Exception:
-                pass
-        return native(self, other)
+            # Native scalar arithmetic can activate requires_grad on the
+            # output; torch keeps the operand's flag. The values themselves
+            # are already correct, so restore only the flag.
+            if _inplace:
+                if not was_trainable and self.requires_grad:
+                    from .context import get_install_context
+                    context = get_install_context(backend)
+                    context.state["tensor_native_api"][
+                        "_native_requires_grad"].__set__(self, False)
+            elif (not was_trainable and isinstance(result, backend.Var)
+                    and result.requires_grad):
+                result = result.detach()
+        return result
 
     operation.__name__ = name
     return operation

@@ -494,6 +494,7 @@ class _WeightEnum(metaclass=_IRMMeta):
 
 
 class _ModelsModule(types.ModuleType):
+    __path__ = []   # a package, so torchvision.models.<arch> imports resolve
     VGG16_Weights = type("VGG16_Weights", (_WeightEnum,), {})
     AlexNet_Weights = type("AlexNet_Weights", (_WeightEnum,), {})
     SqueezeNet1_1_Weights = type("SqueezeNet1_1_Weights", (_WeightEnum,), {})
@@ -510,9 +511,16 @@ class _ModelsModule(types.ModuleType):
     list_models = staticmethod(_list_models)
 
 
+def _Image_fromarray(array, mode=None):
+    """torchvision.utils._Image_fromarray used by the official test utilities."""
+    from PIL import Image as _Im
+    return _Im.fromarray(array, mode=mode) if mode is not None else _Im.fromarray(array)
+
+
 class _UtilsModule(types.ModuleType):
     make_grid = staticmethod(_make_grid)
     save_image = staticmethod(_save_image)
+    _Image_fromarray = staticmethod(_Image_fromarray)
 
 
 _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadMode,
@@ -532,7 +540,16 @@ _CONCRETE = {"InterpolationMode": InterpolationMode, "ImageReadMode": ImageReadM
              "CenterCrop": CenterCrop}
 
 
-class _Passthrough:
+class _PlaceholderMeta(type):
+    """Fabricated torchvision classes answer unknown attributes by name."""
+
+    def __getattr__(cls, name):
+        if name.startswith("__") and name.endswith("__"):
+            raise AttributeError(name)
+        return name
+
+
+class _Passthrough(metaclass=_PlaceholderMeta):
     """Base for fabricated transform classes: identity unless implemented."""
     def __init__(self, *args, **kwargs):
         self.args = args
