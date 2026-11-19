@@ -20,7 +20,9 @@ from jittor._runtime.dispatch import (
 )
 
 from .backends import hooks as _backend_hooks
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _fused_add_rms_norm_cuda
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import (
+    _fused_add_rms_norm_cuda, _fused_add_rms_norm_single_round_cuda,
+)
 from jittor.backends.cuda.kernels.nn.rope_cuda import _rotary_embedding_cuda
 from jittor.backends.cuda.kernels.nn.swiglu_cuda import _silu_and_mul_cuda
 
@@ -70,11 +72,16 @@ def silu_and_mul(x):
     return jt.nn.silu(x[..., :d]) * x[..., d:]
 
 
-def rms_norm(x, weight, eps=1e-6):
-    """Root-mean-square normalise ``x`` over its last axis and scale."""
+def rms_norm(x, weight, eps=1e-6, *, round_before_weight=True):
+    """Normalize the last axis and scale.
+
+    By default the normalized input is rounded before applying the weight.
+    With ``round_before_weight=False`` both operations use the accumulation
+    dtype and the completed result is cast to the input dtype.
+    """
     backend_weight = weight
     if (
-        _query_backend(dispatch_context, x, weight) == "acl"
+        round_before_weight and _query_backend(dispatch_context, x, weight) == "acl"
         and not _output_requires_grad(x, weight)
         and _jittor_dtype_name(x.dtype) == "float32"
         and _jittor_dtype_name(weight.dtype) in ("float16", "bfloat16")
@@ -86,7 +93,9 @@ def rms_norm(x, weight, eps=1e-6):
     # The legacy hook facade resolves the ambient backend before calling this
     # same registry. Select once from the actual operands; live overrides and
     # eligibility predicates remain owned by the canonical dispatcher.
-    fused = try_dispatch("nn.rms_norm.inference", x, backend_weight, eps)
+    operation = ("nn.rms_norm.inference" if round_before_weight
+                 else "nn.rms_norm.single_round.inference")
+    fused = try_dispatch(operation, x, backend_weight, eps)
     if fused is not None:
         return fused
     dtype = x.dtype
@@ -101,7 +110,10 @@ def rms_norm(x, weight, eps=1e-6):
     # whose backward is correct.
     value = x if _jittor_dtype_name(dtype) in ("float32", "float64") else x.float32()
     scale = jt.rsqrt((value * value).mean(-1, keepdims=True) + eps)
-    return (value * scale).cast(dtype) * weight
+    normalized = value * scale
+    if round_before_weight:
+        return normalized.cast(dtype) * weight
+    return (normalized * weight.cast(value.dtype)).cast(dtype)
 
 
 def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
@@ -118,22 +130,46 @@ def dual_rms_norm(first, second, first_weight, second_weight, eps=1e-6):
     )
 
 
-def fused_add_rms_norm(x, residual, weight, eps=1e-6):
+def fused_add_rms_norm(x, residual, weight, eps=1e-6, *, round_before_weight=True,
+                       fp32_residual=False, weight_offset=0.0):
     """Add the residual, then normalise -- returning ``(normalised, residual)``.
 
     The updated residual is the sum, which the next layer adds onto in turn;
     returning both is what lets the two steps share one pass over the data.
+    ``round_before_weight`` has the same meaning as in ``rms_norm``.
+    With ``fp32_residual=True``, normalize and scale the unrounded sum in
+    the accumulation dtype, regardless of ``round_before_weight``. Both
+    results are cast to the input dtype. ``weight_offset`` is added to the
+    scale before multiplication.
     """
+    offset = float(weight_offset)
+    if fp32_residual:
+        fused = try_dispatch("nn.add_rms_norm.fp32_residual.inference",
+                             x, residual, weight, eps, offset)
+        if fused is not None:
+            return fused
+        dtype = x.dtype
+        accumulation = "float64" if _jittor_dtype_name(dtype) == "float64" else "float32"
+        total = x.cast(accumulation) + residual.cast(accumulation)
+        scale = jt.rsqrt((total * total).mean(-1, keepdims=True) + eps)
+        weight = weight.cast(accumulation)
+        if offset:
+            weight = weight + offset
+        return (total * scale * weight).cast(dtype), total.cast(dtype)
+    if offset:
+        weight = weight + offset
     acl_backend = _backend_hooks.acl_grouped_add_rms_norm
-    if acl_backend is not None:
+    if round_before_weight and acl_backend is not None:
         fused = acl_backend(x, residual, weight, eps)
         if fused is not None:
             return fused
-    fused = _fused_add_rms_norm_cuda(x, residual, weight, eps)
+    kernel = (_fused_add_rms_norm_cuda if round_before_weight
+              else _fused_add_rms_norm_single_round_cuda)
+    fused = kernel(x, residual, weight, eps)
     if fused is not None:
         return fused
     total = x + residual
-    return rms_norm(total, weight, eps), total
+    return rms_norm(total, weight, eps, round_before_weight=round_before_weight), total
 
 
 def has_qk_rms_norm_rotary():

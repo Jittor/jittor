@@ -248,6 +248,7 @@ class _Driver:
         c_i, c_u = ctypes.c_int, ctypes.c_uint
         self._sig(lib.cuInit, [c_u])
         self._sig(lib.cuDeviceGet, [ctypes.POINTER(c_i), c_i])
+        self._sig(lib.cuDeviceGetAttribute, [ctypes.POINTER(c_i), c_i, c_i])
         self._sig(lib.cuDeviceComputeCapability,
                   [ctypes.POINTER(c_i), ctypes.POINTER(c_i), c_i])
         self._sig(lib.cuDevicePrimaryCtxRetain, [c_vpp, c_i])
@@ -275,6 +276,11 @@ class _Driver:
         # surfaced as a sticky cudaErrorIllegalAddress.
         self.check(lib.cuDeviceGet(ctypes.byref(dev), self.ordinal), "cuDeviceGet")
         self.device = dev
+        max_shared = c_i()
+        # CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN
+        self.check(lib.cuDeviceGetAttribute(ctypes.byref(max_shared), 97, dev),
+                   "cuDeviceGetAttribute(MAX_SHARED_MEMORY_PER_BLOCK_OPTIN)")
+        self.max_shared_memory = max_shared.value
         ctx = ctypes.c_void_p()
         self.check(lib.cuDevicePrimaryCtxRetain(ctypes.byref(ctx), dev),
                    "cuDevicePrimaryCtxRetain")
@@ -489,6 +495,11 @@ class _Driver:
     _ATTR_MAX_DYN_SHARED = 8
     #: kernels (by func handle value) already opted in to large dynamic smem
     _optedin = set()
+
+    def check_shared_memory(self, nbytes):
+        if nbytes > self.max_shared_memory:
+            from triton.runtime.autotuner import OutOfResources
+            raise OutOfResources(nbytes, self.max_shared_memory, "shared memory")
 
     def ensure_dynamic_shared(self, func, nbytes):
         """Opt a kernel in to >48 KB dynamic shared memory (required on sm_70+).
@@ -991,7 +1002,28 @@ def _looks_like_output_arg(name):
     )
 
 
-def _make_ast_source(ASTSource, jitfn, signature, constants):
+def _launch_alignment(jitfn, runtime_vals, pointers):
+    """Return aligned argument positions for Triton's path-based attributes."""
+    if not hasattr(jitfn, "_pack_args"):
+        return ()
+    positions = {param.name: i for i, param in enumerate(getattr(jitfn, "params", ()) or ())
+                 if not getattr(param, "do_not_specialize", False)
+                 and not getattr(param, "do_not_specialize_on_alignment", False)}
+    aligned = []
+    for name, sig, value in runtime_vals:
+        index = positions.get(name)
+        if index is None:
+            continue
+        if sig.startswith("*"):
+            ptr = pointers[name]
+            if ptr and ptr % 16 == 0:
+                aligned.append(index)
+        elif type(value) is int and value % 16 == 0:
+            aligned.append(index)
+    return tuple(aligned)
+
+
+def _make_ast_source(ASTSource, jitfn, signature, constants, aligned=()):
     """Construct a triton ``ASTSource`` across triton versions.
 
     triton 3.1 : ``ASTSource(fn, signature, constants, attrs)`` where ``attrs``
@@ -1003,9 +1035,8 @@ def _make_ast_source(ASTSource, jitfn, signature, constants):
                  keyword names drifted again across 3.3/3.4, so we probe a few
                  conservative call forms and use the first that constructs.
 
-    We never assert divisibility / eq-1 specializations (empty attrs) so the
-    compiled kernel matches the conservative arg-passing the jittor launcher
-    does (all pointers treated as un-aligned, all ints as generic).
+    Modern compilers receive divisibility only for the verified launch values.
+    Argument sizes and the runtime argument list are unchanged.
     """
     # 3.1 / 3.2: AttrsDescriptor is re-exported from triton.compiler and
     # ASTSource(fn, signature, constants, attrs) accepts it positionally.
@@ -1014,6 +1045,9 @@ def _make_ast_source(ASTSource, jitfn, signature, constants):
         return ASTSource(jitfn, signature, constants, _AD())
     except EXPECTED as exc:
         swallowed("triton/backend.py _make_ast_source: from triton.compiler import AttrsDescriptor as _AD", exc)
+    if aligned:
+        return ASTSource(jitfn, signature, constants,
+                         {(index,): [("tt.divisibility", 16)] for index in aligned})
     # 3.2+: attrs defaults to None (ASTSource auto-builds an empty descriptor);
     # constants stays positional, but the keyword name drifted across releases.
     last = None
@@ -1035,7 +1069,7 @@ def _make_ast_source(ASTSource, jitfn, signature, constants):
             type(last).__name__ if last else "?", last))
 
 
-def _compile(jitfn, signature, constants, options=None, device=0):
+def _compile(jitfn, signature, constants, options=None, device=0, aligned=()):
     """Compile (cached) and return a dict with cubin/name/launch metadata.
 
     ``options`` is an optional dict of launch options forwarded to triton
@@ -1057,7 +1091,7 @@ def _compile(jitfn, signature, constants, options=None, device=0):
     drv = _Driver.get(device)
     opt_items = tuple(sorted((options or {}).items()))
     key = (id(jitfn), tuple(sorted(signature.items())),
-           tuple(sorted(constants.items())), opt_items, drv.arch)
+           tuple(sorted(constants.items())), opt_items, drv.arch, aligned)
     cached = _COMPILE_CACHE.get(key)
     if cached is not None:
         return cached
@@ -1069,7 +1103,7 @@ def _compile(jitfn, signature, constants, options=None, device=0):
         from triton.backends.compiler import GPUTarget
         target = GPUTarget("cuda", drv.arch, 32)
         try:
-            src = _make_ast_source(ASTSource, jitfn, signature, constants)
+            src = _make_ast_source(ASTSource, jitfn, signature, constants, aligned)
             compiled = triton.compile(src, target=target,
                                       options=dict(options) if options else None)
         except Exception as e:
@@ -1256,6 +1290,8 @@ def _run(jitfn, args, kwargs, grid):
 
     # -- separate launch-meta kwargs (num_warps/...) from real kernel kwargs --
     kwargs = dict(kwargs)
+    if kwargs.get("launch_pdl", False):
+        raise JittorTritonError("CUDA programmatic dependent launch is not supported")
     options = {}
     for m in ("num_warps", "num_stages"):
         if m in kwargs:
@@ -1267,7 +1303,8 @@ def _run(jitfn, args, kwargs, grid):
               "num_buffers_warp_spec", "num_consumer_groups",
               "reg_dec_producer", "reg_inc_consumer",
               "launch_cooperative_grid", "launch_pdl", "profile_scratch"):
-        kwargs.pop(m, None)
+        if m not in python_signature.parameters:
+            kwargs.pop(m, None)
 
     # -- which params are constexpr? (use triton's own param metadata if present)
     constexpr_names = set()
@@ -1288,6 +1325,15 @@ def _run(jitfn, args, kwargs, grid):
     except TypeError as e:
         raise JittorTritonError(
             "could not bind args for triton kernel %r: %s" % (kname, e))
+
+    if callable(grid):
+        # Match Triton's callable-grid contract. Buffer setup in the callback
+        # must also precede device submission and argument pointer collection.
+        meta = {"num_warps": options.get("num_warps", 4),
+                "num_stages": options.get("num_stages", 3)}
+        meta.update(bound_arguments)
+        grid = grid(meta)
+        bound_arguments = {name: meta[name] for name in bound_arguments}
 
     signature = {}        # every param name -> runtime type or "constexpr"
     constants = {}        # explicit constexpr or implicit None -> python value
@@ -1404,42 +1450,7 @@ def _run(jitfn, args, kwargs, grid):
             "triton backend needs at least one device tensor (jittor Var or a "
             "torch-shim tensor) to launch on." % kname)
 
-    # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
-    info = _compile(jitfn, signature, constants, options, device=_launch_dev)
-
-    if os.environ.get("JT_TRITON_DEBUG"):
-        import sys as _sys
-        print("[JT_TRITON_DEBUG] kernel=%s" % kname, file=_sys.stderr)
-        try:
-            pnames = [getattr(p, "name", "?") for p in (jitfn.params or [])]
-            print("  jitfn.params order: %r" % pnames, file=_sys.stderr)
-        except EXPECTED as exc:
-            swallowed("triton/backend.py run: pnames = [getattr(p, 'name', '?') for p in (jitfn.param...", exc)
-        print("  constexpr_names: %r" % sorted(constexpr_names), file=_sys.stderr)
-        print("  signature (runtime order): %r" % list(signature.items()),
-              file=_sys.stderr)
-        print("  constants: %r" % constants, file=_sys.stderr)
-        print("  runtime_vals order: %r" % [
-            (n, s, ("TENSOR%s" % (tuple(getattr(v, "shape", ())),)) if _is_tensor(v) else v)
-            for (n, s, v) in runtime_vals], file=_sys.stderr)
-        print("  compiled name=%s n_ptx_params=%d num_warps=%d shared=%d scratch=%d" % (
-            info["name"], info["n_ptx_params"], info["num_warps"], info["shared"],
-            info["scratch"]), file=_sys.stderr)
-
     _stats_t0 = time.perf_counter() if _stats_on() else 0.0
-    # -- resolve grid (tuple or callable(meta)) ----------------------------- #
-    if callable(grid):
-        meta = dict(constants)
-        meta["num_warps"] = info["num_warps"]
-        meta["num_stages"] = options.get("num_stages", 3)
-        g = grid(meta)
-    else:
-        g = grid
-    if isinstance(g, int):
-        g = (g,)
-    g = tuple(int(x) for x in g)
-    g = (g + (1, 1, 1))[:3]
-
     # -- materialise Var memory so device pointers are valid + inputs computed ---- #
     _ptrtrace = os.environ.get("JT_TRITON_PTRTRACE")
     if _ptrtrace:
@@ -1475,7 +1486,12 @@ def _run(jitfn, args, kwargs, grid):
     operand_vars = [v for v in out_vars if _is_var(v)]
     fast_sync = _fast_sync_enabled()
     if operand_vars:
-        jt.sync(operand_vars, not fast_sync)
+        # A weak sync also submits older, unrelated pending holders. The
+        # foreign launch needs only these operands and their dependencies.
+        jt.sync(operand_vars, not fast_sync, False)
+        # Materialize views before walking their sharing rings. Any pointer
+        # parameter may be written, so retain its pending readers' old bytes.
+        jt.core._preserve_step_readers(operand_vars)
     elif out_vars:
         # A launchable tensor that is not a jittor Var (a genuine torch.Tensor)
         # cannot be named to `jt.sync`; keep the broad sweep for that case.
@@ -1497,6 +1513,40 @@ def _run(jitfn, args, kwargs, grid):
     bounced = []
     pointers = {name: _tensor_ptr(value) for name, signature, value in runtime_vals
                 if signature.startswith("*") and value is not None}
+    # ASTSource needs the JITFunction itself (it reads .cache_key), not fn.
+    alignment = _launch_alignment(jitfn, runtime_vals, pointers)
+    compile_started = time.perf_counter() if _stats_t0 else 0.0
+    info = _compile(jitfn, signature, constants, options, device=_launch_dev,
+                    aligned=alignment)
+    compile_time = time.perf_counter() - compile_started if compile_started else 0.0
+    drv.check_shared_memory(info["shared"])
+
+    if os.environ.get("JT_TRITON_DEBUG"):
+        import sys as _sys
+        print("[JT_TRITON_DEBUG] kernel=%s" % kname, file=_sys.stderr)
+        try:
+            pnames = [getattr(p, "name", "?") for p in (jitfn.params or [])]
+            print("  jitfn.params order: %r" % pnames, file=_sys.stderr)
+        except EXPECTED as exc:
+            swallowed("triton/backend.py run: pnames = [getattr(p, 'name', '?') for p in (jitfn.param...", exc)
+        print("  constexpr_names: %r" % sorted(constexpr_names), file=_sys.stderr)
+        print("  signature (runtime order): %r" % list(signature.items()),
+              file=_sys.stderr)
+        print("  constants: %r" % constants, file=_sys.stderr)
+        print("  runtime_vals order: %r" % [
+            (n, s, ("TENSOR%s" % (tuple(getattr(v, "shape", ())),)) if _is_tensor(v) else v)
+            for (n, s, v) in runtime_vals], file=_sys.stderr)
+        print("  compiled name=%s n_ptx_params=%d num_warps=%d shared=%d scratch=%d" % (
+            info["name"], info["n_ptx_params"], info["num_warps"], info["shared"],
+            info["scratch"]), file=_sys.stderr)
+
+    # The callable case was resolved before materializing its operands.
+    g = grid
+    if isinstance(g, int):
+        g = (g,)
+    g = tuple(int(x) for x in g)
+    g = (g + (1, 1, 1))[:3]
+
     guard_enabled = _guard_enabled()
     # The C path packs the same slots without a ctypes array per launch.  The
     # guard path rewrites pointers, so it stays on the Python path.
@@ -1672,10 +1722,10 @@ def _run(jitfn, args, kwargs, grid):
         _stats_t4 = time.perf_counter()
         _STATS["n"] += 1
         _STATS["sync"] += _stats_t1 - _stats_t0
-        _STATS["pack"] += _stats_t2 - _stats_t1
+        _STATS["pack"] += _stats_t2 - _stats_t1 - compile_time
         _STATS["launch"] += _stats_t3 - _stats_t2
         _STATS["final"] += _stats_t4 - _stats_t3
-        _STATS["total"] += _stats_t4 - _stats_t0
+        _STATS["total"] += _stats_t4 - _stats_t0 - compile_time
         if _STATS["n"] % _STATS_EVERY == 0:
             _stats_report()
 
