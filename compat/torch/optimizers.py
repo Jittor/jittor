@@ -16,7 +16,6 @@ def _unsupported_optimizer(name):
 # `torch.optim.optimizer.required`: the "this argument is required"
 # sentinel third-party optimizers use as a default value (timm's SGDP
 # imports it at module scope).
-_OPTIMIZER_REQUIRED = object()
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 from collections.abc import Mapping
@@ -62,6 +61,17 @@ from .optimizer_api import (
 from .context import get_install_context
 from .fidelity import Fidelity, register_api_bindings
 from types import MappingProxyType
+
+
+class _RequiredParameter:
+    """Sentinel used by Torch optimizers for options without a default."""
+
+    def __repr__(self):
+        return "<required parameter>"
+
+
+_OPTIMIZER_REQUIRED = _RequiredParameter()
+
 
 def replay_books_of_step(opt):
     """Advance, on every replay of a captured step, the counts `step()` keeps.

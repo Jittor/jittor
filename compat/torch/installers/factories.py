@@ -57,9 +57,8 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves shape, dtype, device, leaf-gradient options and dense storage order; "
-    "honors contiguous_format; "
-    "other layouts and pin-memory options are approximate"
+    "preserves shape, dtype, device, leaf-gradient options and dense storage order. "
+    "It honors contiguous_format. Other layouts and pin-memory options are approximate."
 )
 
 

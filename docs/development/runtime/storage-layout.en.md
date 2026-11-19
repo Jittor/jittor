@@ -154,3 +154,13 @@ lifetime during transfers and independent waits. Device acceptance and
 performance records belong in [PR #18149](https://github.com/Jittor/jittor/pull/18149).
 Core and backend maintainers should rerun the relevant device cases when
 allocation ownership, stream dependencies or alias rules change.
+
+## Readers of in-place copies
+
+Before writing storage, core materializes only its pending readers. Refreshing logical views
+with independent physical buffers also protects the base and those views' readers. The
+compatibility layer submits only the right-hand value, without sweeping unrelated tensor
+graphs. Ordinary users obtain complete in-place semantics through public APIs such as
+`Tensor.copy_`. Regression entry point `compat/tests/torch/test_tensor_copy_strided.py`
+covers old snapshots, logical view refresh, gradients and unrelated graphs remaining pending;
+`test_tensor_inplace_storage.py` covers the other in-place operators.
