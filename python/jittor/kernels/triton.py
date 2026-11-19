@@ -1,4 +1,7 @@
-"""Triton compilation and launch; no Torch shim or private CUDA launcher."""
+"""Triton compilation and launch for executor-owned CUDA buffers."""
+
+from dataclasses import dataclass
+from functools import lru_cache
 
 
 def launch(kernel, args, grid, options, context):
@@ -29,3 +32,156 @@ def launch(kernel, args, grid, options, context):
             *bound.arguments.values(), stream=context.stream)
     finally:
         active.set_current_device(previous)
+
+
+# This path supplies a native executor node with an already compiled launch.
+# The driver keeps the loaded module alive for the process lifetime.
+_PREPARED_HEADER = """
+#include <cuda.h>
+#include "runtime/device.h"
+static uint64_t launch_word(double low, double high) {
+    return uint64_t(low) | (uint64_t(high) << 32);
+}
+"""
+
+
+def _launch_word(name, value):
+    return {name + "_low": value & 0xffffffff, name + "_high": value >> 32}
+
+
+@dataclass(frozen=True)
+class _InitializedOutput:
+    """An executor-owned output initialized from a read-only input."""
+    initial: object
+
+
+@lru_cache(maxsize=128)
+def _prepared_source(layout, copies):
+    declarations = []
+    for index, kind in enumerate(layout):
+        if kind.startswith(("in", "out")):
+            declarations.append(f"const void* arg{index} = {kind}_p;")
+        elif kind == "null":
+            declarations.append(f"const void* arg{index} = nullptr;")
+        else:
+            width = 64 if kind in ("i64", "u64", "fp64") else 32
+            declarations.append(
+                f"uint{width}_t arg{index} = launch_word(data[\"arg{index}_low\"], data[\"arg{index}_high\"]);")
+    parameters = ", ".join(f"&arg{index}" for index in range(len(layout)))
+    initializers = "\n".join(
+        f"USER_CHECK(cudaMemcpyAsync(out{destination}_p, in{source}_p, out{destination}->size,"
+        f" cudaMemcpyDeviceToDevice, reinterpret_cast<cudaStream_t>(stream)) == cudaSuccess)"
+        f' << "prepared Triton output copy failed";'
+        for destination, source in copies
+    )
+    return "\n".join(declarations) + """
+    using Launch = CUresult (*)(CUfunction, unsigned, unsigned, unsigned, unsigned,
+                                unsigned, unsigned, unsigned, CUstream, void**, void**);
+    auto function = reinterpret_cast<CUfunction>(launch_word(data["function_low"], data["function_high"]));
+    auto launch = reinterpret_cast<Launch>(launch_word(data["launcher_low"], data["launcher_high"]));
+    USER_CHECK(current_device() == int(data["device"])) << "prepared Triton kernel device changed";
+    auto stream = backend_stream({BackendId::Cuda, current_device()}, BackendStreamKind::Compute).handle;
+""" + initializers + f"\nvoid* parameters[] = {{{parameters}}};" + """
+    const auto status = launch(function, int(data["gx"]), int(data["gy"]), int(data["gz"]),
+        int(data["threads"]), 1, 1, int(data["shared"]), reinterpret_cast<CUstream>(stream),
+        parameters, nullptr);
+    USER_CHECK(status == CUDA_SUCCESS) << "prepared Triton CUDA launch failed: " << int(status);
+"""
+
+
+def _prepared_call(kernel, *args, grid, **options):
+    """Schedule a scratch-free, inference-only CUDA Triton kernel for replay.
+
+    Inputs are read-only and contiguous. Declare every writable buffer with
+    TensorSpec or _InitializedOutput. Prepare the launch on the current device before the executor
+    may begin recording the graph.
+    """
+    import ctypes
+    import jittor as jt
+    from triton.runtime.jit import JITFunction
+    from jittor.compat.triton import backend
+    from jittor.compat.triton.argument_binding import bind_arguments
+    from . import TensorSpec
+
+    if not isinstance(kernel, JITFunction):
+        raise TypeError("prepared Triton requires a JITFunction")
+    if not jt.flags.no_grad or not jt.flags.use_cuda or jt.core.graph_capture_active():
+        raise RuntimeError("prepare Triton before CUDA recording in no_grad mode")
+    values = {k: v for k, v in options.items() if k in kernel.signature.parameters}
+    compiler = {k: v for k, v in options.items() if k not in values}
+    if compiler.keys() - {"num_warps", "num_stages", "num_ctas"} or compiler.get("num_ctas", 1) != 1:
+        raise ValueError("unsupported prepared Triton compilation options")
+    bound = bind_arguments(kernel, kernel.signature, args, values)
+    dims = grid(bound) if callable(grid) else grid
+    dims = (dims,) if type(dims) is int else tuple(dims)
+    if not 1 <= len(dims) <= 3 or any(type(n) is not int or not 0 < n < 2**31 for n in dims):
+        raise ValueError("prepared Triton requires one to three positive grid dimensions")
+
+    device = jt.current_device()
+    inputs, outputs, layout, copies = [], [], [], []
+    kinds, constants, scalar_bits = {}, {}, {}
+
+    def add_input(value):
+        if (not isinstance(value, jt.Var) or value.placement_backend != 1
+                or value.device_id != device or not value._storage_is_contiguous()):
+            raise ValueError("prepared Triton requires contiguous inputs on the current CUDA device")
+        index = len(inputs)
+        inputs.append(value)
+        return index
+
+    for parameter in kernel.params:
+        name = parameter.name
+        value = bound[name]
+        if value is None or parameter.is_constexpr:
+            kinds[name] = "constexpr"
+            constants[name] = getattr(value, "value", value)
+            continue
+        if isinstance(value, jt.Var):
+            slot = f"in{add_input(value)}"
+            kinds[name] = backend._ptr_sig(value)
+        elif isinstance(value, _InitializedOutput):
+            source = add_input(value.initial)
+            slot = f"out{len(outputs)}"
+            copies.append((len(outputs), source))
+            outputs.append(TensorSpec(tuple(value.initial.shape), value.initial.dtype))
+            kinds[name] = backend._ptr_sig(value.initial)
+        elif isinstance(value, TensorSpec):
+            slot = f"out{len(outputs)}"
+            outputs.append(value)
+            kinds[name] = backend._ptr_sig(value)
+        else:
+            if type(value) is int and not -(2**63) <= value < 2**63:
+                raise OverflowError("prepared Triton integer outside int64")
+            slot = kinds[name] = backend._scalar_sig(value)
+            scalar_bits.update(_launch_word(f"arg{len(layout)}", backend._scalar_bits(slot, value)))
+        layout.append(slot)
+    if not inputs or not outputs:
+        raise ValueError("prepared Triton requires inputs and explicit outputs")
+
+    driver = backend._Driver.get(device)
+    driver.ensure_ctx()
+    # Pointer alignment is intentionally unspecialized. Replay can substitute
+    # allocations with the same layout but different alignment.
+    info = backend._compile(kernel, kinds, constants, compiler, device=device)
+    if info["scratch"] or info["profile_scratch"]:
+        raise NotImplementedError("prepared Triton does not support global scratch")
+    layout.extend(["null"] * (int(info["has_scratch"]) + int(info["has_profile_scratch"])))
+    if info["n_ptx_params"] and info["n_ptx_params"] != len(layout):
+        raise RuntimeError("prepared Triton argument count differs from compiled kernel")
+    function = driver.get_function(info["cubin"], info["name"])
+    driver.ensure_dynamic_shared(function, info["shared"])
+    driver.check_shared_memory(info["shared"])
+    launcher = ctypes.cast(driver.lib.cuLaunchKernel, ctypes.c_void_p).value
+    gx, gy, gz = dims + (1,) * (3 - len(dims))
+    data = {
+        **_launch_word("function", function.value),
+        **_launch_word("launcher", launcher),
+        **scalar_bits,
+        "device": device, "gx": gx, "gy": gy, "gz": gz,
+        "threads": info["num_warps"] * 32, "shared": info["shared"],
+    }
+    shapes = [spec.shape for spec in outputs]
+    dtypes = [spec.dtype.removeprefix("torch.") for spec in outputs]
+    result = jt.code(shapes, dtypes, inputs, cuda_header=_PREPARED_HEADER,
+                     cuda_src=_prepared_source(tuple(layout), tuple(copies)), data=data, backend="cuda")
+    return result[0] if len(outputs) == 1 else tuple(result)

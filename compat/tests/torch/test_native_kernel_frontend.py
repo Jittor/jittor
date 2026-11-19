@@ -61,3 +61,98 @@ def test_tilelang_native_kernel_with_torch_frontend():
                 Y[i] = X[i] * 2
     kernel = tilelang.compile(double, out_idx=[], target="cuda", execution_backend="tvm_ffi")
     check_double(lambda x: tilelang_call(kernel, x, TensorSpec(x.shape, x.dtype)))
+
+
+def test_prepared_triton_replays_indexed_state_updates():
+    require_cuda()
+    from jittor.compat.triton import backend
+    from jittor.kernels.triton import _prepared_call
+
+    triton = backend.real_triton()
+    if triton is None:
+        pytest.skip("Triton compiler is not installed")
+    import triton.language as tl
+
+    @triton.jit
+    def indexed_increment(state, index, update, output, scale, bias, OFFSET: tl.constexpr):
+        row = tl.load(index)
+        value = tl.load(state + row) + tl.load(update) * scale + (bias - OFFSET)
+        tl.store(output, value)
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        state = torch.zeros(4, device="cuda")
+        numbers = [
+            (torch.tensor([i % 4], device="cuda", dtype=torch.int32),
+             torch.tensor([i + 1.0], device="cuda", dtype=torch.float32))
+            for i in range(12)
+        ]
+        jt.sync([state, *(value for pair in numbers for value in pair)], True, False)
+
+        def step(index, update):
+            row = _prepared_call(
+                indexed_increment, state, index, update, TensorSpec((1,)),
+                -0.5, 2**33 + 1, OFFSET=2**33, grid=(1,), num_warps=1,
+            )
+            state[index] = row
+            return row
+
+        reference = np.zeros(4, dtype=np.float32)
+        captured = jt.capture_step(step)
+        before = jt.core.graph_launch_count()
+        storage = None
+        snapshots = []
+        try:
+            for i, (index, update) in enumerate(numbers):
+                value = captured(index, update)
+                reference[i % 4] += 1 - (i + 1) * 0.5
+                snapshots.append((value, reference[i % 4]))
+                if i == 1:
+                    storage = state._mem_ptr_now
+                elif i > 1:
+                    assert state._mem_ptr_now == storage
+            torch.cuda.synchronize()
+            assert jt.core.graph_launch_count() > before
+        finally:
+            captured.invalidate()
+        assert state.location() == "device"
+        np.testing.assert_array_equal(state.cpu().numpy(), reference)
+        for actual, expected in snapshots:
+            np.testing.assert_array_equal(actual.cpu().numpy(), [expected])
+
+
+def test_prepared_triton_initializes_its_own_writable_output():
+    require_cuda()
+    from jittor.compat.triton import backend
+    from jittor.kernels.triton import _InitializedOutput, _prepared_call
+
+    triton = backend.real_triton()
+    if triton is None:
+        pytest.skip("Triton compiler is not installed")
+    import triton.language as tl
+
+    @triton.jit
+    def increment(values, amount):
+        i = tl.arange(0, 32)
+        tl.store(values + i, tl.load(values + i) + tl.load(amount))
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        source = torch.arange(32, device="cuda", dtype=torch.float32)
+        amounts = [torch.tensor([i], device="cuda", dtype=torch.float32) for i in range(8)]
+        jt.sync([source, *amounts], True, False)
+
+        def step(amount):
+            return _prepared_call(increment, _InitializedOutput(source), amount,
+                                  grid=(1,), num_warps=1)
+
+        captured = jt.capture_step(step)
+        before = jt.core.graph_launch_count()
+        try:
+            outputs = [captured(amount) for amount in amounts]
+            torch.cuda.synchronize()
+            assert jt.core.graph_launch_count() > before
+        finally:
+            captured.invalidate()
+        assert source.location() == "device"
+        np.testing.assert_array_equal(source.cpu().numpy(), np.arange(32))
+        for offset, value in enumerate(outputs):
+            np.testing.assert_array_equal(value.cpu().numpy(), np.arange(32) + offset)
