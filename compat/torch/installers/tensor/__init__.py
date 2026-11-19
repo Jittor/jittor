@@ -666,10 +666,9 @@ def from_numpy(arr, *, device=None):
                 and arr.dtype.itemsize <= 8 and arr.dtype.isnative
                 and arr.flags.writeable and arr.flags.c_contiguous
                 and hasattr(arr, '__dlpack__')):
-            # NumPy owns this CPU allocation. DLPack retains that owner, so
-            # both mutation directions and escaped tensor lifetimes work
-            # without copying every image in a DataLoader worker.
-            v = g.Tensor(jt.from_dlpack(arr, copy=False).stop_grad())
+            # A contiguous NumPy CPU array can supply its capsule directly.
+            # The native importer validates it and retains the storage owner.
+            v = jt.core.from_dlpack_capsule(arr.__dlpack__()).stop_grad()
         else:
             v = _array_keep_dtype(arr)
         v.requires_grad_(False)
