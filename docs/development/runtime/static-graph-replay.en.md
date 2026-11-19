@@ -95,6 +95,23 @@ capture's training step. At capture completion, pending detached outputs and pos
 readouts consume already executed kept values; they must not execute the optimizer twice.
 These temporary execution boundaries do not change graph lifetime or finished flags.
 
+Physical views refreshed by a root storage rebind belong to the same state. If the
+root has a valid capture record, commit and write back the root only, letting it
+refresh its views. Restoring those views as independent state would write through
+the root again; later replays could overwrite fresh data with an old view snapshot.
+Logical views and views without a valid root record retain their own state records.
+
+During a no-grad captured step, indexed CUDA FP32 and BF16 stores can update materialized
+root storage directly. This path accepts equally sized paired 1-D int32/int64
+indices including axis 0, with full slices on the remaining axes. The RHS must
+match the selection shape and dtype; destination strides must be positive and
+non-overlapping, and neither the RHS nor indices may overlap destination storage.
+The write produces state sharing the root allocation, preserving the actual store
+in replay without rebuilding the entire cache for each layer. The Torch frontend
+uses it when those conditions hold. Ordinary execution, CPU, gradient-enabled
+calls, other dtypes, and other slices use ordinary indexed assignment. Index
+values stay on the device.
+
 When a capture is refused, submit only unfinished computations for its explicit
 outputs and state roots. Already executed kept values form boundaries, then
 complete their ordinary execution lifetime. This batch does not pull in sibling

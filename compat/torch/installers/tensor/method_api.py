@@ -172,7 +172,25 @@ def _set_data_owner(view, slices, value):
     return _write_data_owner_numpy(view, value, slices)
 
 
+def _try_captured_indexed_store(self, slices, value):
+    if not _owner.jt.core._state_capture_active() or not isinstance(value, _NativeVar):
+        return False
+    if getattr(self, '_torch_data_owner', None) is not None:
+        return False
+    parts = slices if isinstance(slices, tuple) else (slices,)
+    indices, axes = [], []
+    for axis, part in enumerate(parts):
+        if isinstance(part, _NativeVar):
+            indices.append(part)
+            axes.append(axis)
+        elif not (isinstance(part, slice) and part == slice(None)):
+            return False
+    return self._try_indexed_storage_write(value, indices, axes)
+
+
 def _torch_setitem(self, slices, value):
+    if _try_captured_indexed_store(self, slices, value):
+        return self
     slices = _normalize_index_sequence(slices)
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
