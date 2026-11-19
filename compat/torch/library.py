@@ -826,6 +826,40 @@ def install_torch_library(torch_module, modules):
         onnx_module._jittor_custom_symbolics = _custom_symbolics
     onnx_module.__path__ = getattr(onnx_module, "__path__", [])
     torch_module.onnx = onnx_module
+    # torch.nn.modules.<file> paths libraries import directly (torchvision uses
+    # `utils._pair`, `batchnorm.BatchNorm2d` and `instancenorm.InstanceNorm2d`).
+    _nn_modules = ctx.registry.ensure("torch.nn.modules")
+    _nn = torch_module.nn
+
+    def _nn_ntuple(n):
+        def parse(x):
+            from collections.abc import Iterable
+            if isinstance(x, Iterable) and not isinstance(x, str):
+                return tuple(x)
+            return tuple(x for _ in range(n))
+
+        return parse
+
+    _nn_modules_utils = ctx.registry.ensure("torch.nn.modules.utils")
+    _nn_modules_utils._single = _nn_ntuple(1)
+    _nn_modules_utils._pair = _nn_ntuple(2)
+    _nn_modules_utils._triple = _nn_ntuple(3)
+    _nn_modules_utils._quadruple = _nn_ntuple(4)
+    _nn_modules_utils._ntuple = _nn_ntuple
+    _nn_modules.utils = _nn_modules_utils
+    for _sub, _names in (
+        ("batchnorm", ("BatchNorm1d", "BatchNorm2d", "BatchNorm3d",
+                       "SyncBatchNorm")),
+        ("instancenorm", ("InstanceNorm1d", "InstanceNorm2d",
+                          "InstanceNorm3d")),
+    ):
+        _submodule = ctx.registry.ensure("torch.nn.modules." + _sub)
+        for _name in _names:
+            _value = getattr(_nn, _name, None)
+            if _value is not None:
+                setattr(_submodule, _name, _value)
+        setattr(_nn_modules, _sub, _submodule)
+    torch_module.nn.modules = _nn_modules
     if not hasattr(onnx_module, "TensorProtoDataType"):
         class _TensorProtoDataType:
             FLOAT = 1
