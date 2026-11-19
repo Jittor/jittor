@@ -31,6 +31,37 @@ def _view(value, layout):
     return value[:, 1:7:2].T
 
 
+@pytest.mark.parametrize('destination_kind', ['physical', 'logical', 'base_with_logical_sibling'])
+def test_copy_preserves_target_readers_without_publishing_unrelated_sinks(destination_kind, rng_device):
+    import jittor as jt
+
+    with torch.no_grad(), jt.flag_scope(auto_flush_ops=0):
+        original = np.arange(24, dtype='float32').reshape(3, 8)
+        root = torch.tensor(original, device=rng_device)
+        logical = jt.transpose(root, (1, 0))
+        destination = (root.T if destination_kind == 'physical' else
+                       logical if destination_kind == 'logical' else root)
+        for tensor in (root, logical, destination):
+            tensor.sync(True, False)
+        assert not logical._storage_view_is_physical()
+        old_root, old_logical, old_destination = root.clone(), logical.clone(), destination.clone()
+        source = torch.full_like(destination, 47)
+        source.sync(True, False)
+        unrelated = jt.code([17], jt.float32, [],
+                            cpu_src='for (int i=0; i<17; ++i) out0_p[i]=13.f;',
+                            cuda_header='__global__ void fill_copy_sentinel(float* o) { o[threadIdx.x]=13.f; }',
+                            cuda_src='fill_copy_sentinel<<<1,17>>>(out0_p);')
+        assert not unrelated._mem_ptr_now
+        assert destination.copy_(source) is destination
+        assert not unrelated._mem_ptr_now
+        np.testing.assert_array_equal(_array(old_root), original)
+        np.testing.assert_array_equal(_array(old_logical), original.T)
+        np.testing.assert_array_equal(_array(old_destination), original if destination is root else original.T)
+        np.testing.assert_array_equal(_array(root), np.full((3, 8), 47.))
+        np.testing.assert_array_equal(_array(logical), np.full((8, 3), 47.))
+        np.testing.assert_array_equal(_array(destination), np.full(tuple(destination.shape), 47.))
+
+
 @pytest.mark.parametrize("layout", ["slice", "step", "transpose", "nested"])
 @pytest.mark.parametrize("nonleaf_base", [False, True])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])

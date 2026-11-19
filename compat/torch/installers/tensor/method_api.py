@@ -339,15 +339,10 @@ def _copy_detached_storage(self, value):
         if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
                 and _owner.jt.core._try_ordered_unaliased_inplace(self, value)):
             return True
-        # Resolve pending readers (including clone snapshots) before changing
-        # bytes. _copy_into owns placement, stream ordering and dense copies.
-        # An optimizer group resolves them once for every parameter instead
-        # (see `_optimizer_write_scope`), and here only materializes the value
-        # whose graph contains this tensor's readers.
-        if _OPTIMIZER_WRITES[0]:
-            value.sync()
-        else:
-            _owner.jt.sync_all()
+        # Native storage writes preserve their own pending readers, including
+        # those of materialized logical views. Publish only this RHS rather
+        # than sweeping unrelated sinks and breaking asynchronous overlap.
+        value.sync(False, False)
         if not self._mem_ptr_now or not value._mem_ptr_now:
             # Still unbuilt after the sync: a call being captured for replay,
             # where the sync runs nothing. Such a tensor has no storage an

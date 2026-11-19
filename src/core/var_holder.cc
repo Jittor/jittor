@@ -1341,8 +1341,14 @@ bool VarHolder::copy_view_into(VarHolder* src) {
     }
     vector<VarViewStep> target_steps;
     if (view && view->base) target_steps = view->steps;
-    // The caller has drained pending readers. Keep every existing holder and
-    // graph node, preparing the complete write on independent device storage.
+    // Logical views can own distinct physical allocations. Preserve their
+    // pending readers as well as the base before refreshing any of them;
+    // the caller need not publish unrelated holder sinks to protect these.
+    vector<VarHolder*> written{base};
+    for (auto& record : records) written.push_back(record.first);
+    preserve_step_readers(written);
+    // Keep every existing holder and graph node, preparing the complete write
+    // on independent device storage.
     sync(false, false);
     src->sync(false, false);
     validate_logical_copy_alias(this, src);
