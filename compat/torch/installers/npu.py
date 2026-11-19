@@ -110,12 +110,16 @@ def manual_seed(seed):
     if not device_count():
         return
     from .core import _normalize_seed
-    jt.set_global_seed(_normalize_seed(seed), different_seed_for_mpi=False)
+    jt.core.rng_manual_seed("acl", _normalize_seed(seed), current_device())
 
 
 def manual_seed_all(seed):
     """Seed random operations on every visible ACL device."""
-    manual_seed(seed)
+    seed = int(seed)
+    if not device_count():
+        return
+    from .core import _normalize_seed
+    jt.core.rng_manual_seed_all("acl", _normalize_seed(seed))
 
 
 def npu_rms_norm(input, weight, epsilon=1e-6):
