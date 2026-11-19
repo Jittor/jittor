@@ -3,6 +3,7 @@
 import sys
 import types
 
+from .. import functional_collectives
 from . import (
     _context_parallel, api, common, compat_types, config, dtensor, grad_sync,
     optimizer, shard, public_helpers,
@@ -183,77 +184,7 @@ def install_with_registry(dist, torch_module=None, registry=None):
     comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
     dist._functional_collectives = functional_collectives_mod
 
-    # Functional collectives in a single process are the identity: with world
-    # size 1 every reduce/scatter/gather returns the input unchanged, and the
-    # async wrappers resolve immediately. Import-time users (torchao's float8
-    # utilities, transformers' distributed helpers) read these names at module
-    # scope; leaving the module empty failed their imports.
-    def _fc_all_reduce(tensor, op=None, group=None):
-        return tensor
-
-    def _fc_wait_tensor(tensor):
-        return tensor
-
-    def _fc_all_gather_into_tensor(output, input, group=None):
-        output.copy_(input)
-        return output
-
-    def _fc_reduce_scatter_tensor(output, input, op=None, group=None):
-        output.copy_(input)
-        return output
-
-    def _fc_all_gather(output, input, group=None):
-        for slot in output:
-            slot.copy_(input)
-        return output
-
-    def _fc_broadcast(tensor, src=0, group=None):
-        return tensor
-
-    class AsyncCollectiveTensor:
-        """Awaitable view over a completed collective.
-
-        The collectives above run synchronously, so `wait()` hands the tensor
-        back and attribute access falls through to it.
-        """
-
-        def __init__(self, tensor):
-            object.__setattr__(self, "_tensor", tensor)
-
-        def wait(self):
-            return object.__getattribute__(self, "_tensor")
-
-        def __getattr__(self, name):
-            return getattr(object.__getattribute__(self, "_tensor"), name)
-
-        def __repr__(self):
-            return "AsyncCollectiveTensor(%r)" % (
-                object.__getattribute__(self, "_tensor"),)
-
-    # torch.ops._c10d_functional: the operator namespace behind the functional
-    # collectives. Single-process calls are the identity as well; torchao
-    # names these operators in module-scope tables.
-    _ops_dispatcher = getattr(torch_module, "ops", None)
-    _ops_get_or_create = getattr(_ops_dispatcher, "get_or_create", None)
-    if _ops_get_or_create is not None:
-        # Create through the dispatcher API: attribute access on the ops
-        # namespace probes the native module first and escapes as an install
-        # error while the shim is in its strict bootstrap.
-        _ops_get_or_create("_c10d_functional", "all_gather_into_tensor").register_impl(
-            "CompositeExplicitAutograd",
-            lambda input, group_size, group_name="": input, allow_override=True)
-        _ops_get_or_create("_c10d_functional", "reduce_scatter_tensor").register_impl(
-            "CompositeExplicitAutograd",
-            lambda input, reduceOp="sum", group_size=1, group_name="": input,
-            allow_override=True)
-
-    functional_collectives_mod.all_reduce = _fc_all_reduce
-    functional_collectives_mod.wait_tensor = _fc_wait_tensor
-    functional_collectives_mod.all_gather_into_tensor = _fc_all_gather_into_tensor
-    functional_collectives_mod.reduce_scatter_tensor = _fc_reduce_scatter_tensor
-    functional_collectives_mod.all_gather = _fc_all_gather
-    functional_collectives_mod.broadcast = _fc_broadcast
-    functional_collectives_mod.AsyncCollectiveTensor = AsyncCollectiveTensor
+    functional_collectives.install(functional_collectives_mod)
 
     exports = {}
     for owner, names in (
@@ -375,7 +306,6 @@ def install_with_registry(dist, torch_module=None, registry=None):
     dist.DeviceMesh = exports["DeviceMesh"]
     dist.init_device_mesh = exports["init_device_mesh"]
     dist.is_available = public_helpers.is_available
-    functional_collectives_mod.AsyncCollectiveTensor = public_helpers.AsyncCollectiveTensor
 
     checkpoint_wrapper_mod.checkpoint_wrapper = compat_types._checkpoint_wrapper
     checkpoint_wrapper_mod.apply_activation_checkpointing = (

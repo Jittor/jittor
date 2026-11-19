@@ -1,5 +1,6 @@
 """The import-time API surface torchao, transformers and peft touch."""
 import typing
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -30,7 +31,7 @@ def test_library_impl_accepts_the_torch_2_6_call_form():
     def double(x):
         return x * 2
 
-    result = torch.ops.impl_form_probe.double(torch.tensor([1.0, 2.0]))
+    result = torch.ops.impl_form_probe.double(torch.tensor([1.0, 2.0], device="cpu"))
     assert result.tolist() == [2.0, 4.0]
 
 
@@ -73,6 +74,77 @@ def test_functional_collectives_are_identity_in_one_process():
     tensor = torch.tensor([1.0, 2.0])
     assert all_reduce(tensor) is tensor
     assert wait_tensor(tensor) is tensor
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_functional_collectives_copy_single_rank_buffers(device):
+    from torch.distributed import _functional_collectives as collectives
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires a CUDA device")
+    source = torch.tensor([1.0, 2.0, 3.0], device=device)
+    stacked = torch.zeros((1, 3), device=device)
+    reduced = torch.zeros_like(source)
+    assert collectives.all_gather_into_tensor(stacked, source) is stacked
+    assert collectives.reduce_scatter_tensor(reduced, stacked) is reduced
+    assert reduced.tolist() == [1.0, 2.0, 3.0]
+    assert collectives.wait_tensor(collectives.AsyncCollectiveTensor(reduced)) is reduced
+    if device == "cuda":
+        assert stacked.location() == reduced.location() == "device"
+
+
+def test_functional_collectives_refuse_multi_rank_requests_without_mutation(monkeypatch):
+    from jittor.compat import functional_collectives as owner
+    from torch.distributed import _functional_collectives as collectives
+
+    source = torch.tensor([1.0, 2.0, 3.0], device="cpu")
+    output = torch.zeros_like(source)
+    ops = torch.ops._c10d_functional
+    assert ops.all_gather_into_tensor.default(source, 1, "world") is source
+    with pytest.raises(NotImplementedError, match="single-process.*group_size=2"):
+        ops.all_gather_into_tensor.default(source, 2, "world")
+    with pytest.raises(NotImplementedError, match="single-process.*group_size=2"):
+        ops.reduce_scatter_tensor.default(source, "sum", 2, "world")
+    legacy = torch.ops.c10d_functional
+    assert legacy.all_gather_into_tensor.default(source, "", [0], 1) is source
+    assert legacy.wait_tensor.default(source) is source
+    assert ops.wait_tensor.default(source) is source
+    with pytest.raises(NotImplementedError, match="single-process.*group_size=2"):
+        legacy.all_gather_into_tensor.default(source, "", [0, 1], 2)
+    with pytest.raises(NotImplementedError, match="c10d.scatter_ is not supported"):
+        torch.ops.c10d.scatter_.default(output, source)
+    two_rank_group = SimpleNamespace(size=lambda: 2)
+    with pytest.raises(NotImplementedError, match="single-process.*group_size=2"):
+        collectives.all_gather_into_tensor(output, source, two_rank_group)
+    assert output.tolist() == [0.0, 0.0, 0.0]
+    with pytest.raises(ValueError, match="output shape"):
+        collectives.all_gather_into_tensor(torch.zeros((2, 3), device="cpu"), source)
+    monkeypatch.setattr(owner, "_world_size", lambda: 2)
+    with pytest.raises(NotImplementedError, match="single-process.*world_size=2"):
+        collectives.all_reduce(source)
+    with pytest.raises(NotImplementedError, match="single-process.*world_size=2"):
+        ops.all_gather_into_tensor.default(source, 1, "world")
+
+
+@pytest.mark.parametrize("namespace", ["_c10d_functional", "c10d", "c10d_functional"])
+def test_unknown_collective_has_no_dispatch_entry(namespace):
+    with pytest.raises(AttributeError, match="not_a_registered_collective"):
+        getattr(torch.ops, namespace).not_a_registered_collective
+
+
+def test_onnx_and_nn_import_helpers_use_their_existing_owners():
+    from jittor.compat.torch.installers import compiler
+    from jittor.ops.tuples import _pair
+    from torch.nn.modules.batchnorm import BatchNorm2d
+    from torch.nn.modules.instancenorm import InstanceNorm2d
+    from torch.nn.modules.utils import _pair as published_pair
+    from torch.onnx.symbolic_helper import parse_args
+
+    assert parse_args is compiler._api_onnx_parse_args
+    assert torch.onnx.register_custom_op_symbolic is compiler._api_onnx_register_custom_op_symbolic
+    assert published_pair is _pair
+    assert BatchNorm2d is torch.nn.BatchNorm2d
+    assert InstanceNorm2d is torch.nn.InstanceNorm2d
 
 
 def test_aten_overload_falls_back_to_the_eager_function():

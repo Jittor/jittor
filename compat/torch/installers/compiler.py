@@ -602,6 +602,30 @@ def _api_onnx_is_in_onnx_export():
     return False
 
 
+def _api_onnx_parse_args(*arg_descriptors, **kwargs):
+    return _identity
+
+
+def _api_onnx_parse_arg(value, desc):
+    return value
+
+
+def _api_onnx_register_custom_op_symbolic(symbolic_name, symbolic_fn, opset_version):
+    onnx = _compiler_context().target_namespace.onnx
+    onnx._jittor_custom_symbolics[(symbolic_name, opset_version)] = symbolic_fn
+
+
+class _TensorProtoDataType:
+    FLOAT = 1
+    UINT8 = 2
+    INT8 = 3
+    INT16 = 5
+    INT32 = 6
+    INT64 = 7
+    BOOL = 9
+    DOUBLE = 11
+
+
 def _register_fx_fidelity(graph_module_cls):
     """Record what the FX surface does and does not promise.
 
@@ -1119,8 +1143,20 @@ def install_parity(ctx):
 
     onnx = module("torch.onnx")
     onnx.is_in_onnx_export = _api_onnx_is_in_onnx_export
-
-
+    # These names let libraries register export metadata during import.
+    symbolic_helper = module("torch.onnx.symbolic_helper")
+    symbolic_helper.parse_args = _api_onnx_parse_args
+    symbolic_helper._parse_arg = _api_onnx_parse_arg
+    symbolic_opset11 = module("torch.onnx.symbolic_opset11")
+    symbolic_opset11.unsqueeze = None
+    symbolic_opset11.squeeze = None
+    symbolic_opset11.select = None
+    onnx.symbolic_helper = symbolic_helper
+    onnx.symbolic_opset11 = symbolic_opset11
+    if not hasattr(onnx, "register_custom_op_symbolic"):
+        onnx._jittor_custom_symbolics = {}
+        onnx.register_custom_op_symbolic = _api_onnx_register_custom_op_symbolic
+    _bind_missing(onnx, "TensorProtoDataType", _TensorProtoDataType)
     onnx.export = onnx_export
     onnx.OperatorExportTypes = getattr(
         onnx,

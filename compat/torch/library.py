@@ -344,15 +344,6 @@ class _OpNamespace:
             torch_module = _library_state()["torch_module"]
             function = getattr(torch_module, name, None)
             return _AtenOpProxy(name, function if callable(function) else None)
-        if object.__getattribute__(self, "_namespace") in ("_c10d_functional", "c10d", "c10d_functional"):
-            # The functional collectives' operator namespace. A single process
-            # is the identity for every member, so an unregistered name answers
-            # by returning its tensor argument (torchao names
-            # `all_gather_into_tensor` at module scope).
-            def _c10d_collective_identity(*args, **kwargs):
-                return args[0] if args else None
-
-            return _AtenOpProxy(name, _c10d_collective_identity)
         raise AttributeError(
             "torch.ops.%s has no op '%s'" % (object.__getattribute__(self, "_namespace"), name)
         )
@@ -753,6 +744,7 @@ def _install_dispatch_key_surface(torch_c):
 
 def install_torch_library(torch_module, modules):
     """Publish stable API objects and the installation-owned dispatcher."""
+    from ..functional_collectives import install_dispatcher as install_collective_dispatcher
     from .context import get_install_context
     from .fidelity import Fidelity, register_api_bindings
     from ..stub_policy import record_unimplemented
@@ -781,6 +773,7 @@ def install_torch_library(torch_module, modules):
     torch_module.library = library_module
     torch_module._ops = ops_module
     torch_module.ops = state["dispatcher"]
+    install_collective_dispatcher(state["dispatcher"])
     torch_module.Tag = Tag
     torch_c = modules.get("torch._C")
     if torch_c is None:
@@ -795,83 +788,6 @@ def install_torch_library(torch_module, modules):
         setattr(custom_ops_module, _name, globals()[_name])
     torch_module._custom_ops = custom_ops_module
     modules["torch._custom_ops"] = custom_ops_module
-    # torch.onnx surface torchvision touches at import time: the opset modules
-    # (only used while exporting) and `symbolic_helper.parse_args`, a decorator
-    # that is applied at module scope.
-    onnx_module = modules.get("torch.onnx") or ctx.registry.ensure("torch.onnx")
-    symbolic_helper = ctx.registry.ensure("torch.onnx.symbolic_helper")
-
-    def _onnx_parse_args(*arg_descriptors, **kwargs):
-        def decorator(fn):
-            return fn
-
-        return decorator
-
-    symbolic_helper.parse_args = _onnx_parse_args
-    symbolic_helper._parse_arg = lambda value, desc: value
-    symbolic_opset11 = ctx.registry.ensure("torch.onnx.symbolic_opset11")
-    symbolic_opset11.unsqueeze = None
-    symbolic_opset11.squeeze = None
-    symbolic_opset11.select = None
-    onnx_module.symbolic_helper = symbolic_helper
-    onnx_module.symbolic_opset11 = symbolic_opset11
-    if not hasattr(onnx_module, "register_custom_op_symbolic"):
-        _custom_symbolics = {}
-
-        def _register_custom_op_symbolic(symbolic_name, symbolic_fn,
-                                         opset_version):
-            _custom_symbolics[(symbolic_name, opset_version)] = symbolic_fn
-
-        onnx_module.register_custom_op_symbolic = _register_custom_op_symbolic
-        onnx_module._jittor_custom_symbolics = _custom_symbolics
-    onnx_module.__path__ = getattr(onnx_module, "__path__", [])
-    torch_module.onnx = onnx_module
-    # torch.nn.modules.<file> paths libraries import directly (torchvision uses
-    # `utils._pair`, `batchnorm.BatchNorm2d` and `instancenorm.InstanceNorm2d`).
-    _nn_modules = ctx.registry.ensure("torch.nn.modules")
-    _nn = torch_module.nn
-
-    def _nn_ntuple(n):
-        def parse(x):
-            from collections.abc import Iterable
-            if isinstance(x, Iterable) and not isinstance(x, str):
-                return tuple(x)
-            return tuple(x for _ in range(n))
-
-        return parse
-
-    _nn_modules_utils = ctx.registry.ensure("torch.nn.modules.utils")
-    _nn_modules_utils._single = _nn_ntuple(1)
-    _nn_modules_utils._pair = _nn_ntuple(2)
-    _nn_modules_utils._triple = _nn_ntuple(3)
-    _nn_modules_utils._quadruple = _nn_ntuple(4)
-    _nn_modules_utils._ntuple = _nn_ntuple
-    _nn_modules.utils = _nn_modules_utils
-    for _sub, _names in (
-        ("batchnorm", ("BatchNorm1d", "BatchNorm2d", "BatchNorm3d",
-                       "SyncBatchNorm")),
-        ("instancenorm", ("InstanceNorm1d", "InstanceNorm2d",
-                          "InstanceNorm3d")),
-    ):
-        _submodule = ctx.registry.ensure("torch.nn.modules." + _sub)
-        for _name in _names:
-            _value = getattr(_nn, _name, None)
-            if _value is not None:
-                setattr(_submodule, _name, _value)
-        setattr(_nn_modules, _sub, _submodule)
-    torch_module.nn.modules = _nn_modules
-    if not hasattr(onnx_module, "TensorProtoDataType"):
-        class _TensorProtoDataType:
-            FLOAT = 1
-            UINT8 = 2
-            INT8 = 3
-            INT16 = 5
-            INT32 = 6
-            INT64 = 7
-            BOOL = 9
-            DOUBLE = 11
-
-        onnx_module.TensorProtoDataType = _TensorProtoDataType
     register_api_bindings(library_module, "torch.library",
                           ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
                            "register_kernel", "impl", "register_autograd"),
