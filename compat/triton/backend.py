@@ -1086,9 +1086,6 @@ def _compile(jitfn, signature, constants, options=None, device=0, aligned=()):
     """
     if {name for name, kind in signature.items() if kind == "constexpr"} != set(constants):
         raise JittorTritonError("Triton constants must match the constexpr signature slots")
-    triton = real_triton()
-    from triton.compiler import ASTSource
-
     drv = _Driver.get(device)
     opt_items = tuple(sorted((options or {}).items()))
     key = (id(jitfn), tuple(sorted(signature.items())),
@@ -1101,6 +1098,8 @@ def _compile(jitfn, signature, constants, options=None, device=0, aligned=()):
         cached = _COMPILE_CACHE.get(key)
         if cached is not None:
             return cached
+        triton = real_triton()
+        from triton.compiler import ASTSource
         from triton.backends.compiler import GPUTarget
         target = GPUTarget("cuda", drv.arch, 32)
         try:
