@@ -98,3 +98,40 @@ def test_eager_triton_batch_can_write_padded_storage(monkeypatch, allow_strided)
         expected = np.zeros((3, 16), dtype=np.float32)
         expected[:, :13] = 7
         np.testing.assert_array_equal(raw.numpy(), expected)
+
+
+def test_eager_triton_batch_preserves_pending_readers_without_a_global_flush(monkeypatch):
+    import jittor as jt
+    if not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("real CUDA and Triton are required")
+    triton = pytest.importorskip("triton")
+    global tl
+    import triton.language as tl
+    from jittor.compat.triton import backend, batch_launches
+
+    @triton.jit
+    def increment(value):
+        i = tl.arange(0, 32)
+        tl.store(value + i, tl.load(value + i) + 1)
+
+    monkeypatch.setenv("JITTOR_TRITON_GUARD_ENABLE", "0")
+    monkeypatch.setenv("JITTOR_TRITON_FAST_SYNC", "1")
+    with jt.flag_scope(use_cuda=1, auto_graph_replay=0,
+                       lazy_execution=1, auto_flush_ops=0), jt.no_grad():
+        data = np.arange(32, dtype=np.float32)
+        x = jt.array(data)
+        x.sync(True, False)
+        with batch_launches((increment,)) as warm:
+            backend.run(increment, (x,), {}, (1,))
+        assert warm.submitted_launches == 1
+        x.sync(True, False)
+
+        snapshot = x.clone()
+        unrelated = jt.ones((113,), dtype="float32") * 19
+        assert jt.core._first_finished([snapshot, unrelated]) == -1
+        with batch_launches((increment,)) as batch:
+            backend.run(increment, (x,), {}, (1,))
+        assert batch.submitted_launches == 1
+        assert jt.core._first_finished([unrelated]) == -1
+        np.testing.assert_array_equal(snapshot.numpy(), data + 1)
+        np.testing.assert_array_equal(x.numpy(), data + 2)

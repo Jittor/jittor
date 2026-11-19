@@ -102,7 +102,10 @@ class _LaunchBatch:
 
         buffers = {id(value): value for call in commands for _, kind, value in call.runtime
                    if kind.startswith("*")}
-        jt.sync(list(buffers.values()), False)
+        operands = list(buffers.values())
+        jt.sync(operands, False, False)
+        # Like a standalone foreign launch, any pointer may be written.
+        jt.core._preserve_step_readers(operands)
         pointers = {key: value.device_ptr_ready for key, value in buffers.items()}
         driver = backend._Driver.get(self._device)
         driver.ensure_ctx()
