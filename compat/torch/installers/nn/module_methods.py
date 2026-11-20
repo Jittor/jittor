@@ -8,6 +8,7 @@ import weakref
 import os
 import jittor as jt
 from jittor import nn
+from jittor._core.hooks import _RemovableHandle
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
@@ -47,6 +48,39 @@ _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
 _ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
+_ORIG_MODULE_GETATTR = nn.Module.__getattr__
+_ORIG_MODULE_REGISTER_BACKWARD_HOOK = nn.Module.register_backward_hook
+_ORIG_MODULE_REMOVE_BACKWARD_HOOK = nn.Module.remove_backward_hook
+
+_TORCH_HOOK_TABLES = {
+    "_forward_hooks", "_forward_pre_hooks", "_backward_hooks", "_backward_pre_hooks",
+}
+
+
+def _getattr(self, name):
+    if name in _TORCH_HOOK_TABLES:
+        return self._hooks(name, create=True)
+    return _ORIG_MODULE_GETATTR(self, name)
+
+
+def _register_backward_hook(self, hook):
+    native_handle = _ORIG_MODULE_REGISTER_BACKWARD_HOOK(self, hook)
+    hooks = self._hooks("_backward_hooks", create=True)
+    key = next(nn.Module._hook_serial)
+    hooks[key] = hook
+
+    def remove():
+        native_handle.remove()
+        hooks.pop(key, None)
+
+    return _RemovableHandle(remove)
+
+
+def _remove_backward_hook(self):
+    _ORIG_MODULE_REMOVE_BACKWARD_HOOK(self)
+    hooks = self._hooks("_backward_hooks")
+    if hooks is not None:
+        hooks.clear()
 
 
 # torch models define forward(); jittor calls execute(). Make the base
@@ -1528,6 +1562,9 @@ def _install_module_methods(nn, registry=None):
     M.named_parameters = _named_parameters
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
+    M.__getattr__ = _getattr
+    M.register_backward_hook = _register_backward_hook
+    M.remove_backward_hook = _remove_backward_hook
     M.load_state_dict = _load_state_dict
     M._parameters = property(_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
