@@ -1,6 +1,5 @@
 from ...fidelity import register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
-from jittor._core.hooks import _RemovableHandle
 import collections as _collections
 from collections.abc import MutableMapping as _MutableMapping
 import functools as _functools
@@ -9,6 +8,7 @@ import weakref
 import os
 import jittor as jt
 from jittor import nn
+from jittor._core.hooks import _RemovableHandle
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
