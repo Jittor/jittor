@@ -465,7 +465,7 @@ def ones(*shape, dtype="float32"):
     return _constant_scalar(1, dtype).broadcast(shape)._as_tensor()
 
 @contextmanager
-def placement_scope_like(x):
+def placement_scope_like(x, *, prefer_reference=False):
     """Run a block under `x`'s explicit tensor placement, if it has one.
 
     Allocation helpers (`jt.empty`, `jt.ones`, ...) follow the *ambient*
@@ -480,11 +480,14 @@ def placement_scope_like(x):
     outranks it: `torch.zeros_like(gpu, device="cpu")` has already placed the
     construction on the host, and re-scoping to the source's device would hand
     back a CUDA tensor.
+
+    Internal sampling operations with no device override may set
+    `prefer_reference` so the explicit input placement takes precedence.
     """
     import jittor as jt
     # `int` is shadowed in this module by jittor's integer dtype constructor.
     backend = ori_int(x.placement_backend)
-    if backend < 0 or jt.core._current_tensor_placement() is not None:
+    if backend < 0 or (not prefer_reference and jt.core._current_tensor_placement() is not None):
         yield
         return
     device = max(ori_int(x.device_id), 0)
@@ -501,7 +504,7 @@ def placement_scope_like(x):
 
 
 @contextmanager
-def device_scope_like(x):
+def device_scope_like(x, *, prefer_reference=False):
     """Run a block so that constructors allocate on `x`'s device.
 
     `torch.ones_like` and the rest of the `*_like` family preserve the reference
@@ -516,8 +519,8 @@ def device_scope_like(x):
     address.
 
     An explicit request still wins over both: `device=` names the device the
-    caller wants, and the reference tensor only fills in for a caller who named
-    none.
+    caller wants. Internal operations whose output must share an input's
+    placement may set `prefer_reference`.
 
     Two scopes, because a Var can be off the ambient device with nothing
     recording it: `placement_scope_like` covers an *explicit* placement, while a
@@ -529,8 +532,9 @@ def device_scope_like(x):
     device_id = ori_int(getattr(x, "device_id", -1))
     previous = ori_int(jt.current_device())
     requested = jt.core._current_tensor_placement()
-    with placement_scope_like(x):
-        if requested is not None or device_id < 0 or device_id == previous:
+    with placement_scope_like(x, prefer_reference=prefer_reference):
+        if ((not prefer_reference and requested is not None)
+                or device_id < 0 or device_id == previous):
             yield
             return
         jt.flags.device_id = device_id

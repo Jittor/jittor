@@ -213,8 +213,9 @@ __device__ double draw_gamma(double alpha, curandStatePhilox4_32_10_t* state) {
     }
 }
 
-__global__ void sample_gamma_batch(const float* alpha, const double* seed_parts,
-                                   float* out, int64_t total) {
+template <typename T>
+__global__ void sample_gamma_batch(const T* alpha, const double* seed_parts,
+                                   T* out, int64_t total) {
     // Use a seed from Jittor's device RNG and a separate subsequence per sample.
     constexpr double two_to_32 = 4294967296.0;
     uint32_t low = static_cast<uint64_t>(seed_parts[0] * two_to_32);
@@ -237,8 +238,9 @@ __global__ void sample_gamma_batch(const float* alpha, const double* seed_parts,
 
 
 _SAMPLE_GAMMA_GRAD_HEADER = r"""
-__global__ void sample_gamma_batch_grad(const float* alpha, const float* sample,
-                                        const float* dout, float* out, int64_t total) {
+template <typename T>
+__global__ void sample_gamma_batch_grad(const T* alpha, const T* sample,
+                                        const T* dout, T* out, int64_t total) {
     int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
     int64_t stride = (int64_t)gridDim.x * blockDim.x;
     for (; index < total; index += stride) {
@@ -285,7 +287,7 @@ class _CudaGammaSampler(Function):
         """)
 
 
-register_kernel("math.sample_gamma", "cuda", _CudaGammaSampler.apply, dtypes={"float32"})
+register_kernel("math.sample_gamma", "cuda", _CudaGammaSampler.apply, dtypes={"float32", "float64"})
 
 
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):
