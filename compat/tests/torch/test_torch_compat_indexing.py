@@ -146,6 +146,27 @@ class TestFancyIndexing(Base):
 
 
 class TestBooleanMask(Base):
+    def test_python_bool_list_masks_select_rows_and_columns(self):
+        values = np.arange(12, dtype=np.float32).reshape(3, 4)
+        rows = [True, False, True]
+        columns = [False, True, True, False]
+
+        def body(dev):
+            parameter = torch.nn.Parameter(torch.tensor(values, device=dev))
+            selected_rows = parameter[rows]
+            selected_columns = parameter[:, columns]
+            self.assertEqual(selected_rows.device.type, dev)
+            self.assertEqual(selected_columns.device.type, dev)
+            self.ae(selected_rows.numpy(), values[rows])
+            self.ae(selected_columns.numpy(), values[:, columns])
+            self.ae(parameter[[False, False, False]].numpy(), values[:0])
+            self.ae(parameter[[1, 0]].numpy(), values[[1, 0]])
+
+            (selected_rows.sum() + selected_columns.sum()).backward()
+            self.ae(parameter.grad.numpy(), [[1, 2, 2, 1], [0, 1, 1, 0], [1, 2, 2, 1]])
+
+        both_devices(body)
+
     def test_mask_same_rank(self):
         x = np.arange(20).reshape(4, 5).astype("float32")
         def body(dev):
