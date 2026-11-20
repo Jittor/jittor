@@ -92,6 +92,32 @@ def _torch_optimizer_kind(opt):
             or type(opt).__name__.lower())
 
 
+def _uses_native_state(kind):
+    return kind in _TORCH_TO_NATIVE_STATE or kind == "lbfgs"
+
+
+def _optimizer_extra_state(opt):
+    """State outside native buffers belongs to the optimizer, not the view."""
+    return vars(opt).setdefault("_torch_extra_state", {})
+
+
+def _load_custom_parameter_state(value, param, group, field=None):
+    if isinstance(value, jt.Var):
+        if field == "step":
+            if not (group.get("fused") or group.get("capturable")):
+                return value
+            dtype = get_install_context(jt).target_namespace.float32
+        else:
+            dtype = param.dtype if param.is_floating_point() else value.dtype
+        return value.to(device=param.device, dtype=dtype)
+    if isinstance(value, Mapping):
+        return {key: _load_custom_parameter_state(item, param, group, key)
+                for key, item in value.items()}
+    if isinstance(value, (tuple, list, set)):
+        return type(value)(_load_custom_parameter_state(item, param, group) for item in value)
+    return value
+
+
 class _ParamState(dict):
     def __init__(self, owner, param, values):
         dict.__init__(self, values)
@@ -109,19 +135,24 @@ class _ParamState(dict):
 class _OptState:
     def __init__(self, opt):
         self._opt = opt
-        self._external = {}
+        self._kind = _torch_optimizer_kind(opt)
     def _find(self, param):
         for pg in self._opt.param_groups:
             for i, p in enumerate(pg.get("params", [])):
                 if p is param:
                     return pg, i
         return None, None
-    def _params(self):
-        for pg in self._opt.param_groups:
-            for p in pg.get("params", []):
-                marker = object()
-                if self.get(p, marker) is not marker:
-                    yield p
+    def _slot(self, key):
+        return self._find(key) if _uses_native_state(self._kind) else (None, None)
+
+    def _keys(self):
+        if _uses_native_state(self._kind):
+            for pg in self._opt.param_groups:
+                for p in pg.get("params", []):
+                    marker = object()
+                    if self.get(p, marker) is not marker:
+                        yield p
+        yield from _optimizer_extra_state(self._opt)
     def _reset_slot(self, pg, i):
         steps = _param_steps(pg)
         if "_adagrad_steps" in pg:
@@ -145,14 +176,7 @@ class _OptState:
         pg, i = self._find(param)
         if pg is None:
             raise KeyError(param)
-        kind = _torch_optimizer_kind(self._opt)
-        if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
-            store = getattr(self._opt, "_torch_external_state", None)
-            if store is None:
-                store = {}
-                object.__setattr__(self._opt, "_torch_external_state", store)
-            store.setdefault(id(param), {})[key] = value
-            return
+        kind = self._kind
         if key == "step":
             if isinstance(value, jt.Var) and kind not in ("adam", "adamw"):
                 value = value.item()
@@ -180,20 +204,10 @@ class _OptState:
             if kind == "sgd" and key == "momentum_buffer":
                 _momentum_initialized_flags(pg)[i] = True
     def get(self, param, default=None):
-        pg, i = self._find(param)
+        pg, i = self._slot(param)
         if pg is None:
-            return default
-        kind = _torch_optimizer_kind(self._opt)
-        if kind not in _TORCH_TO_NATIVE_STATE and kind != "lbfgs":
-            # A third-party optimizer defines its own state layout; keep the
-            # Torch contract (state[p] is a mutable mapping) without guessing
-            # a native buffer name. `state` builds a fresh _OptState per
-            # access, so the storage must live on the optimizer itself.
-            store = getattr(self._opt, "_torch_external_state", None)
-            if store is None:
-                store = {}
-                object.__setattr__(self._opt, "_torch_external_state", store)
-            return store.setdefault(id(param), {})
+            return _optimizer_extra_state(self._opt).get(param, default)
+        kind = self._kind
         steps = _param_steps(pg)
         if kind == "adagrad":
             return _ParamState(self, param, {
@@ -223,6 +237,8 @@ class _OptState:
                 **present(), "step": float(steps[i])})
         return default
     def __getitem__(self, param):
+        if self._slot(param)[0] is None:
+            return _optimizer_extra_state(self._opt).setdefault(param, {})
         r = self.get(param, None)
         if r is None:
             # torch's Optimizer.state is a defaultdict(dict): reading the
@@ -230,15 +246,13 @@ class _OptState:
             # empty entry instead of raising. DeepSpeed's ZeRO-2 mixed
             # precision linkage reads every optimizer group's entry right
             # after stepping only the first group, so this read has to answer.
-            pg, i = self._find(param)
-            if pg is None:
-                raise KeyError(param)
             return _ParamState(self, param, {})
         return r
     def __setitem__(self, param, d):
-        pg, i = self._find(param)
+        pg, i = self._slot(param)
         if pg is None:
-            raise KeyError(param)
+            _optimizer_extra_state(self._opt)[param] = d
+            return
         if not isinstance(d, Mapping):
             raise TypeError("optimizer state must be a mapping")
         values = dict(d)
@@ -248,9 +262,12 @@ class _OptState:
                 self._set_field(param, key, value)
         self._set_field(param, "step", values.get("step", 1 if values else 0))
     def __delitem__(self, param):
-        pg, i = self._find(param)
+        pg, i = self._slot(param)
+        if pg is None:
+            del _optimizer_extra_state(self._opt)[param]
+            return
         marker = object()
-        if pg is None or self.get(param, marker) is marker:
+        if self.get(param, marker) is marker:
             raise KeyError(param)
         self._reset_slot(pg, i)
         self._sync_n_step()
@@ -258,22 +275,22 @@ class _OptState:
         marker = object()
         return self.get(param, marker) is not marker
     def __iter__(self):
-        return self._params()
+        return self._keys()
     def __len__(self):
-        return sum(1 for _ in self._params())
+        return sum(1 for _ in self._keys())
     def keys(self):
-        return list(self._params())
+        return list(self._keys())
     def values(self):
-        return [self.get(p, {}) for p in self._params()]
+        return [self.get(p, {}) for p in self._keys()]
     def items(self):
-        return [(p, self.get(p, {})) for p in self._params()]
+        return [(p, self.get(p, {})) for p in self._keys()]
     def setdefault(self, param, default=None):
+        if self._slot(param)[0] is None:
+            return _optimizer_extra_state(self._opt).setdefault(param, default)
         marker = object()
         state = self.get(param, marker)
         if state is not marker:
             return state
-        if self._find(param)[0] is None:
-            raise KeyError(param)
         if default is None:
             default = {}
         if not isinstance(default, Mapping):
