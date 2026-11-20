@@ -139,6 +139,22 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
 
 
 @pytest.mark.cuda
+def test_to_device_keyword_accepts_accelerator_index():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime():
+        host = torch.tensor([1.5, -2.0], device="cpu")
+        moved = host.to(device=0, dtype=torch.float16)
+        squared = moved.square()
+        jt.sync_all(True)
+        _cpu(host)
+        assert moved.device == torch.device("cuda:0") and moved.dtype == torch.float16
+        assert squared.device == moved.device and squared.location() == "device"
+        np.testing.assert_array_equal(squared.cpu().numpy(), [2.25, 4.0])
+
+
+@pytest.mark.cuda
 def test_a_device_var_parked_on_the_host_is_moved_back_by_to_device():
     """Asking for the device must not accept host storage for a device Var.
 
