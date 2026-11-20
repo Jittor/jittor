@@ -1,5 +1,10 @@
 """Torch numerical linalg operations."""
 
+from collections import namedtuple
+
+
+_QRFactors = namedtuple("linalg_qr", ("Q", "R"))
+
 def eye(n, m=None, dtype=None, device=None, requires_grad=False, out=None, **kwargs):
     """Create a square or rectangular identity matrix, on ``device``.
 
@@ -87,6 +92,13 @@ def pca_lowrank(A, q=6, center=True, niter=2):
     )
     centered = A - (A.mean(0, keepdims=True) if center else 0)
     return svd_lowrank(centered, q=q, niter=niter)
+
+
+def qr(input, mode="reduced"):
+    """Return the QR factors with the torch.linalg.qr mode and named outputs."""
+    import jittor.linalg as native_linalg
+
+    return _QRFactors(*native_linalg.qr(input, mode=mode))
 
 
 def det(input):
