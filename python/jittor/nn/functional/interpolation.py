@@ -218,16 +218,16 @@ def resize(img, size, mode="nearest", align_corners=False, tf_mode=False):
     return _interpolate(img, x, y, (nid, cid), mode)
 
 
-def _nearest_exact_scaled_size(x, scale_factor):
+def _integer_scaled_size(x, scale_factor, mode):
     factors = tuple(scale_factor) if isinstance(scale_factor, (tuple, list)) else (scale_factor, scale_factor)
     if len(factors) != 2:
-        raise ValueError("nearest-exact scale_factor must have two spatial factors")
+        raise ValueError(f"{mode} scale_factor must have two spatial factors")
     factors = tuple(float(value) for value in factors)
     if any(value <= 0 or not value.is_integer() for value in factors):
         # Replacing an explicit fractional scale by floor(input*scale) changes
         # its coordinate mapping. Admit only exact integer scales here until
         # the scale itself can be carried through the resize kernel contract.
-        raise NotImplementedError("nearest-exact supports positive integer scale_factor only; use size= for other output sizes")
+        raise NotImplementedError(f"{mode} supports positive integer scale_factor only; use size= for other output sizes")
     return tuple(int(size) * int(factor) for size, factor in zip(x.shape[-2:], factors))
 
 
@@ -240,13 +240,18 @@ def interpolate(
     tf_mode=False,
 ):
     if mode == "nearest-exact" and scale_factor is not None:
-        size = _nearest_exact_scaled_size(X, scale_factor)
+        size = _integer_scaled_size(X, scale_factor, mode)
         return jt.nn.resize(X, size, mode, align_corners, tf_mode)
-    if scale_factor is not None:
+    upsampling = False
+    if isinstance(scale_factor, (tuple, list)):
+        size = _integer_scaled_size(X, scale_factor, mode)
+        upsampling = any(target > source for target, source in zip(size, X.shape[-2:]))
+    elif scale_factor is not None:
         size = [int(X.shape[-2] * scale_factor), int(X.shape[-1] * scale_factor)]
+        upsampling = scale_factor > 1
     if isinstance(size, int):
         size = (size, size)
-    if scale_factor is not None and scale_factor > 1:
+    if upsampling:
         return jt.nn.upsample(X, size, mode, align_corners, tf_mode)
     return jt.nn.resize(X, size, mode, align_corners, tf_mode)
 
