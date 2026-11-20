@@ -14,6 +14,13 @@ def module_setattr(module, name, value):
     attributes = vars(module)
     if attributes.get("_native_parameter_construction", False):
         return owner.native_module.__setattr__(module, name, value)
+    layers = attributes.get("layers")
+    if layers is not None and isinstance(module, owner.backend.nn.Sequential) and name in layers:
+        if value is not None and not isinstance(value, owner.native_module):
+            raise TypeError(f"cannot assign '{type(value).__name__}' as child module '{name}'")
+        # Sequential's registry, traversal and forward all read this mapping.
+        layers[name] = value
+        return
     if isinstance(value, owner.backend.Var) and not name.startswith("_"):
         parameters = attributes.setdefault("_parameter_names", set())
         non_parameters = attributes.setdefault("_non_parameter_names", set())
