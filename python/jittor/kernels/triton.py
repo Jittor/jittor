@@ -55,6 +55,12 @@ class _InitializedOutput:
     initial: object
 
 
+@dataclass(frozen=True)
+class _BoundOutput:
+    """A ready CUDA storage buffer replaced by the recorded write."""
+    buffer: object
+
+
 @lru_cache(maxsize=128)
 def _prepared_source(layout, copies):
     declarations = []
@@ -92,9 +98,10 @@ def _prepared_source(layout, copies):
 def _prepared_call(kernel, *args, grid, **options):
     """Schedule a scratch-free, inference-only CUDA Triton kernel for replay.
 
-    Inputs are read-only and contiguous. Declare every writable buffer with
-    TensorSpec or _InitializedOutput. Prepare the launch on the current device before the executor
-    may begin recording the graph.
+    Ordinary inputs are read-only and contiguous. Declare writable buffers
+    using TensorSpec, _InitializedOutput, or _BoundOutput. A bound buffer has
+    to remain alive through replay. Its kernel must keep writes from racing
+    reads by other threads. Prepare on the recording device before capture.
     """
     import ctypes
     import jittor as jt
@@ -119,7 +126,7 @@ def _prepared_call(kernel, *args, grid, **options):
 
     device = jt.current_device()
     inputs, outputs, layout, copies = [], [], [], []
-    kinds, constants, scalar_bits = {}, {}, {}
+    kinds, constants, scalar_bits, bound_outputs = {}, {}, {}, {}
 
     def add_input(value):
         if (not isinstance(value, jt.Var) or value.placement_backend != 1
@@ -145,6 +152,19 @@ def _prepared_call(kernel, *args, grid, **options):
             copies.append((len(outputs), source))
             outputs.append(TensorSpec(tuple(value.initial.shape), value.initial.dtype))
             kinds[name] = backend._ptr_sig(value.initial)
+        elif isinstance(value, _BoundOutput):
+            target = value.buffer
+            add_input(target)
+            if not target.is_finished or not target._mem_ptr_now or target.numel() == 0:
+                raise ValueError("prepared Triton bound outputs require ready, nonempty storage")
+            begin = int(target._mem_ptr_now)
+            end = begin + target.nbytes
+            if any(begin < hi and lo < end for _, lo, hi in bound_outputs.values()):
+                raise ValueError("prepared Triton bound outputs overlap")
+            slot = f"out{len(outputs)}"
+            bound_outputs[len(outputs)] = (target, begin, end)
+            outputs.append(TensorSpec(tuple(target.shape), target.dtype))
+            kinds[name] = backend._ptr_sig(target)
         elif isinstance(value, TensorSpec):
             slot = f"out{len(outputs)}"
             outputs.append(value)
@@ -182,6 +202,17 @@ def _prepared_call(kernel, *args, grid, **options):
     }
     shapes = [spec.shape for spec in outputs]
     dtypes = [spec.dtype.removeprefix("torch.") for spec in outputs]
-    result = jt.code(shapes, dtypes, inputs, cuda_header=_PREPARED_HEADER,
-                     cuda_src=_prepared_source(tuple(layout), tuple(copies)), data=data, backend="cuda")
+    source = _prepared_source(tuple(layout), tuple(copies))
+    if bound_outputs:
+        from jittor._core.var import placement_scope_like
+
+        with placement_scope_like(inputs[0]):
+            buffers = [bound_outputs[i][0] if i in bound_outputs else jt.empty(shape, dtype)
+                       for i, (shape, dtype) in enumerate(zip(shapes, dtypes))]
+        data["_order_prepared_storage_writes"] = 1
+        result = jt.code(inputs, buffers, cuda_header=_PREPARED_HEADER,
+                         cuda_src=source, data=data, backend="cuda")
+    else:
+        result = jt.code(shapes, dtypes, inputs, cuda_header=_PREPARED_HEADER,
+                         cuda_src=source, data=data, backend="cuda")
     return result[0] if len(outputs) == 1 else tuple(result)

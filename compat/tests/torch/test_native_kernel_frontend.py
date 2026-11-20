@@ -216,3 +216,62 @@ def test_prepared_kernel_can_read_strided_physical_storage_without_copy():
         assert window.shape == (68,)
         assert window.is_contiguous()
         np.testing.assert_array_equal(window.cpu().numpy(), np.arange(68))
+
+
+@pytest.mark.parametrize("physical_window", [False, True])
+def test_prepared_triton_writes_bound_storage_after_pending_readers(physical_window):
+    require_cuda()
+    from jittor.compat.triton import backend
+    from jittor.kernels.triton import _BoundOutput, _prepared_call
+
+    triton = backend.real_triton()
+    if triton is None:
+        pytest.skip("Triton compiler is not installed")
+    import triton.language as tl
+
+    @triton.jit
+    def advance(source, delta, updated, output):
+        i = tl.arange(0, 8)
+        value = tl.load(source + i) + tl.load(delta + i)
+        tl.store(updated + i, value)
+        tl.store(output + i, value)
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        backing = torch.full((16 if physical_window else 8,), 17.0, device="cuda")
+        state = backing[:8] if physical_window else backing
+        deltas = [torch.full((8,), float(i % 3 + 1), device="cuda") for i in range(12)]
+        jt.sync([state, *deltas], True, False)
+        if physical_window:
+            state = state._physical_storage_window()
+        alias = jt.core._ready_step_gradient(state)
+        address = state._mem_ptr_now
+
+        def step(delta):
+            _, output = _prepared_call(
+                advance, state, delta, _BoundOutput(state), TensorSpec((8,), "float32"),
+                grid=(1,), num_warps=1,
+            )
+            return output
+
+        captured = jt.capture_step(step)
+        launch_count = jt.core.graph_launch_count()
+        snapshots = []
+        expected = 17.0
+        try:
+            for i, delta in enumerate(deltas):
+                prior = alias.copy()
+                assert not prior.is_finished
+                value = captured(delta)
+                value.sync(False, False)
+                snapshots.append((prior, expected, value, expected + i % 3 + 1))
+                expected += i % 3 + 1
+                assert state._mem_ptr_now == address
+            assert jt.core.graph_launch_count() > launch_count
+        finally:
+            captured.invalidate()
+
+        for prior, old, value, new in snapshots:
+            np.testing.assert_array_equal(prior.numpy(), np.full(8, old))
+            np.testing.assert_array_equal(value.numpy(), np.full(8, new))
+        tail = np.full(8, 17.0) if physical_window else np.empty(0)
+        np.testing.assert_array_equal(backing.numpy(), np.concatenate((np.full(8, expected), tail)))

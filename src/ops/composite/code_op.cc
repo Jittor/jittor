@@ -96,7 +96,19 @@ CodeOp::CodeOp(
             TODO: vary shape not allowed in direct output
         */
     }
+    order_bound_outputs = this->data.erase("_order_prepared_storage_writes") != 0;
     configure_grad();
+}
+
+void CodeOp::infer_shape() {
+    if (!order_bound_outputs) return;
+    order_bound_outputs = false;
+    vector<Var*> written;
+    for (Var* output : _outputs)
+        if (output->share_src) written.push_back(output->share_src);
+    // Custom prepared kernels write these allocations directly. Existing
+    // readers need an edge to the write while the graph is still lazy.
+    order_after_readers(this, written);
 }
 
 void CodeOp::configure_grad() {
