@@ -27,12 +27,17 @@ LGAMMA_CUDA_HEADER = '''
         '''
 
 
-LGAMMA_CUDA_SRC = '''
-        @alias(x, in0)
-        @alias(lx ,out0)
-        int batch_size = x_stride0 == 1 ? 1 : x_shape0;
-        int batch_shape = x_shape0 * x_stride0 / batch_size;
-        lgamma_cuda<<<batch_size, 16>>>(x_p, lx_p, batch_shape);   // T deduced from x_p
+_GAMMA_CUDA_GRID = '''
+        const auto elements = in0->num;
+        if (elements == 0) return;
+        const auto leading = in0->shape.size() ? in0->shape[0] : 1;
+        const auto blocks = elements == leading ? 1 : leading;
+        const auto batch_shape = elements / blocks;
+        '''
+
+
+LGAMMA_CUDA_SRC = _GAMMA_CUDA_GRID + '''
+        lgamma_cuda<<<blocks, 16>>>(in0_p, out0_p, batch_shape);
         '''
 
 
@@ -138,12 +143,8 @@ DIGAMMA_CUDA_HEADER = '''
         '''
 
 
-DIGAMMA_CUDA_SRC = '''
-        @alias(x, in0)
-        @alias(di_x, out0)
-        int block_num = x_stride0 == 1 ? 1 : x_shape0;
-        int batch_shape = x_stride0 == 1 ? x_shape0: x_stride0;
-        digamma_cuda<<<block_num, 16>>>(x_p, di_x_p, batch_shape);
+DIGAMMA_CUDA_SRC = _GAMMA_CUDA_GRID + '''
+        digamma_cuda<<<blocks, 16>>>(in0_p, out0_p, batch_shape);
         '''
 
 
@@ -161,12 +162,8 @@ def _digamma_cuda(owner, x):
 
 def _polygamma_cuda(owner, x, n):
     import jittor as jt
-    source = f'''
-        @alias(x, in0)
-        @alias(px ,out0)
-        int batch_size = x_stride0 == 1 ? 1 : x_shape0;
-        int batch_shape = x_shape0 * x_stride0 / batch_size;
-        polygamma_cuda<<<batch_size, 16>>>(x_p, px_p, {n}, batch_shape);
+    source = _GAMMA_CUDA_GRID + f'''
+        polygamma_cuda<<<blocks, 16>>>(in0_p, out0_p, {n}, batch_shape);
     '''
     return jt.code(x.shape, x.dtype, [x], cuda_header=owner.cuda_header, cuda_src=source)
 
