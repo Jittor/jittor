@@ -795,6 +795,30 @@ class TestOverridesAndDefaults(StubPolicyBase):
         got = overrides.handle_torch_function(lambda *a, **k: "plain", [_Sub()])
         self.assertEqual(got, "intercepted")
 
+    def test_assert_scalar_conditions_and_exception_message(self):
+        self.assertIsNone(torch._assert(True, "success"))
+        with self.assertRaisesRegex(AssertionError, "expected failure"):
+            torch._assert(False, "expected failure")
+
+        devices = ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]
+        for device in devices:
+            with self.subTest(device=device):
+                condition = torch.tensor(True, device=device)
+                self.assertEqual(condition.device.type, device)
+                self.assertIsNone(torch._assert(condition, "success"))
+                with self.assertRaisesRegex(AssertionError, "tensor condition"):
+                    torch._assert(torch.tensor(False, device=device), "tensor condition")
+
+    def test_assert_delegates_to_torch_function(self):
+        class Condition:
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return func, args
+
+        condition = Condition()
+        self.assertEqual(torch._assert(condition, "message"),
+                         (torch._assert, (condition, "message")))
+
     def test_torch_function_mode_is_refused(self):
         import sys
         overrides = sys.modules["torch.overrides"]
