@@ -69,15 +69,24 @@ def svd(x, some=True, compute_uv=True, **kwargs):
 
 
 def svd_lowrank(A, q=6, niter=2, M=None):
-    """Return a rank-``q`` approximation using Jittor's native SVD."""
+    """Return the truncated native SVD with right singular vectors in columns."""
+    from operator import index
+
+    from jittor.linalg._helpers import _conj_T, _is_native_complex
+
     from . import (
         jt,
     )
+    q = 6 if q is None else index(q)
+    if q < 0:
+        raise ValueError("svd_lowrank requires a nonnegative rank")
     if M is not None:
         A = A - M
-    u, s, v = jt.linalg.svd(A)
-    q = min(q, s.shape[0])
-    return u[:, :q], s[:q], v[:, :q]
+    u, s, vh = jt.linalg.svd(A)
+    if _is_native_complex(A):
+        s = s.real
+    q = min(q, s.shape[-1])
+    return u[..., :q], s[..., :q], _conj_T(vh[..., :q, :])
 
 
 def pca_lowrank(A, q=6, center=True, niter=2):
@@ -85,7 +94,7 @@ def pca_lowrank(A, q=6, center=True, niter=2):
     from . import (
         svd_lowrank,
     )
-    centered = A - (A.mean(0, keepdims=True) if center else 0)
+    centered = A - A.mean(-2, keepdims=True) if center else A
     return svd_lowrank(centered, q=q, niter=niter)
 
 
