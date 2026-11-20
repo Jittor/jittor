@@ -19,6 +19,7 @@ from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _is_ind
 from ....diagnostics import EXPECTED, swallowed
 from ....stub_policy import unimplemented as _unimplemented
 from .... import fsdp_hooks as _fsdp_hooks
+from .lazy import is_lazy
 
 def _pipelining_from_environment():
     """Initial execution-pipelining threshold, read from the environment.
@@ -486,6 +487,8 @@ def _state_dict_key_diff(root, state_dict):
         if not isinstance(target, jt.Var):
             continue
         src = state_dict[key]
+        if is_lazy(src) and is_lazy(target):
+            continue
         src_shape = getattr(src, "shape", None)
         if src_shape is None:
             continue
@@ -542,6 +545,9 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                 trainable.add(n)
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
+    # A lazy-to-lazy checkpoint carries no tensor contents to copy.
+    if any(is_lazy(value) for value in state_dict.values()):
+        state_dict = {key: value for key, value in state_dict.items() if not is_lazy(value)}
     load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
     if unexpected:
         # jittor's load_parameters LOG.w's on every unknown key; drop them

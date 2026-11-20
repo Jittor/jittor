@@ -60,23 +60,6 @@ def fuse_conv_bn_eval(conv, bn, transpose=False):
     return fused
 
 
-class UninitializedTensorMixin:
-    pass
-
-
-class UninitializedParameter(UninitializedTensorMixin):
-    pass
-
-
-class UninitializedBuffer(UninitializedTensorMixin):
-    pass
-
-
-def is_lazy(param):
-    """Identify uninitialized parameters and buffers."""
-    return isinstance(param, UninitializedTensorMixin)
-
-
 class _DataParallel(nn.Module):
     def __init__(self, module, *args, **kwargs):
         super().__init__()
