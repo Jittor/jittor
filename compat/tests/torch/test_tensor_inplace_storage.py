@@ -218,6 +218,26 @@ class TestTensorInplaceStorage:
             np.testing.assert_array_equal(value.detach().cpu().numpy(), [6., 8.])
         assert parameter.is_leaf and parameter.requires_grad
 
+    def test_parameter_data_advanced_index_writeback_repeats(self, device):
+        parameter = torch.nn.Parameter(torch.tensor(
+            [[1., 2., 3.], [4., 5., 6.]],
+            dtype=torch.bfloat16, device=device))
+        indices = torch.tensor([0, 2], dtype=torch.long, device=device)
+        data = parameter.data
+
+        first = data[:, indices]
+        first.copy_(torch.tensor([[10., 30.], [40., 60.]], device=device))
+        data[:, indices] = first
+        second = data[:, indices]
+        second.copy_(torch.tensor([[11., 31.], [41., 61.]], device=device))
+        data[:, indices] = second
+
+        np.testing.assert_array_equal(
+            parameter.detach().float().cpu().numpy(),
+            [[11., 2., 31.], [41., 5., 61.]],
+        )
+        assert parameter.is_leaf and parameter.requires_grad
+
     def test_copy_broadcast_and_shape_failure_preserve_target(self, device):
         target = torch.tensor([[1., 2.], [3., 4.]], device=device)
         alias = target.detach()
