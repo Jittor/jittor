@@ -6,10 +6,23 @@ Registered buffers are replayed on copies; other Python side effects run twice.
 Higher-order differentiation and non-reentrant early-stop replay are unsupported.
 """
 
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 
 from jittor._core.function import Function
 from ._checkpoint_capture import Capture, flatten, unflatten, structure
+
+
+_rematerializing = ContextVar("jittor_checkpoint_rematerializing", default=False)
+
+
+@contextmanager
+def _rematerialization_scope():
+    token = _rematerializing.set(True)
+    try:
+        yield
+    finally:
+        _rematerializing.reset(token)
 
 
 def _rng_snapshot():
@@ -48,7 +61,7 @@ class _Rematerialize(Function):
         args, kwargs = unflatten(self.capture.spec, values)
         # This is a training forward, despite no_grad. Automatic inference
         # replay would retain a second graph and can replay mutable buffers.
-        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0):
+        with _rematerialization_scope(), jt.no_grad(), jt.flag_scope(auto_graph_replay=0):
             outputs = self.capture.function(*args, **kwargs)
             flat = []
             self.output_spec = flatten(outputs, flat, {})
@@ -87,7 +100,9 @@ class _Rematerialize(Function):
         try:
             if self.preserve_rng_state:
                 _rng_restore(self.rng_before)
-            with jt.enable_grad(), jt.flag_scope(auto_graph_replay=0, **self.amp_flags), self.context_fn(), self.capture.replay(leaves) as fn:
+            with _rematerialization_scope(), jt.enable_grad(), jt.flag_scope(
+                auto_graph_replay=0, **self.amp_flags
+            ), self.context_fn(), self.capture.replay(leaves) as fn:
                 args, kwargs = unflatten(self.capture.spec, leaves)
                 outputs = fn(*args, **kwargs)
                 flat = []

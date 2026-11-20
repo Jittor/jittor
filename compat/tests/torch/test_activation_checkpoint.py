@@ -111,6 +111,35 @@ def test_closure_tensor_captures_and_nested_keyword_inputs(native_device):
     np.testing.assert_allclose(snapshot(weight.grad), [8., 10.], rtol=0, atol=0)
 
 
+def test_checkpoint_preserves_materialized_frozen_convolution_weight(native_device):
+    if native_device != "cuda":
+        pytest.skip("requires the CUDA convolution filter layout optimization")
+    dtype = torch.float16
+    conv = torch.nn.Conv2d(3, 4, 3, padding=1, bias=False)
+    conv.to(device=native_device, dtype=dtype).requires_grad_(False)
+    with torch.no_grad():
+        values = torch.arange(conv.weight.numel(), device=native_device, dtype=torch.float32)
+        conv.weight.copy_(values.reshape(conv.weight.shape).to(dtype) / 128)
+    before = snapshot(conv.weight)
+    version = conv.weight._version
+    strides = tuple(conv.weight._storage_strides())
+    assert conv.weight.is_finished and conv.weight._storage_is_contiguous()
+    shape = (2, 3, 11, 13)
+    values = torch.arange(int(np.prod(shape)), device=native_device, dtype=torch.float32)
+    x = (values.reshape(shape).to(dtype) / 1024).requires_grad_(True)
+    replay_x = x.detach().clone().requires_grad_(True)
+    expected = conv(x)
+    expected.sum().backward()
+    actual = checkpoint(conv, replay_x)
+    actual.sum().backward()
+
+    np.testing.assert_allclose(snapshot(actual), snapshot(expected), rtol=0.002, atol=0.004)
+    np.testing.assert_allclose(snapshot(replay_x.grad), snapshot(x.grad), rtol=0.002, atol=0.004)
+    np.testing.assert_array_equal(snapshot(conv.weight), before)
+    assert tuple(conv.weight._storage_strides()) == strides
+    assert conv.weight._version == version
+
+
 def test_dropout_replays_mask_and_restores_current_rng(native_device):
     x = torch.ones((8, 16), device=native_device, requires_grad=True)
     y = x.detach().clone().requires_grad_(True)
