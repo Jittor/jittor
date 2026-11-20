@@ -57,7 +57,7 @@ def both_devices(fn):
 @pytest.mark.parametrize("device, default_device", [("cpu", "cuda"), ("cuda", "cpu")])
 def test_multivariate_normal_samples_on_the_location_device(device, default_device):
     if not torch.cuda.is_available():
-        pytest.skip("requires two distinct backend placements")
+        pytest.skip("requires CUDA for two distinct backend placements")
     if device == "cuda" and not cuda_numpy_code_available():
         pytest.skip("requires CUDA linear algebra inputs")
     original_default = torch.get_default_device()

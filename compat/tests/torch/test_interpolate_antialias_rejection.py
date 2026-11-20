@@ -23,10 +23,12 @@ def test_unsupported_antialias_inputs_reject_and_ordinary_interpolation_works(de
         else:
             with pytest.raises(ValueError, match="antialias=True.*bilinear or bicubic"):
                 torch.nn.functional.interpolate(x, size=(2, 3), mode="nearest", antialias=True)
-        # Ordinary interpolation remains usable; identity keeps an independent
-        # oracle on CPU as well as the actual accelerator path.
+        # Exercise a supported ordinary path on each backend. The ACL
+        # bilinear provider is currently restricted to Ascend 310P.
+        ordinary_mode = "nearest" if device == "acl" and mode == "bilinear" else mode
         for kwargs in ({}, {"antialias": False}):
-            result = torch.nn.functional.interpolate(x, size=(4, 5), mode=mode, align_corners=False, **kwargs)
+            align = None if ordinary_mode == "nearest" else False
+            result = torch.nn.functional.interpolate(x, size=(4, 5), mode=ordinary_mode, align_corners=align, **kwargs)
             jt.sync_all(True)
             assert result.device.type == ("npu" if device == "acl" else "cpu")
             assert bool((result == x).all().item())
