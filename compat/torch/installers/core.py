@@ -5,6 +5,8 @@ changing the compatibility semantics.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from typing import List, Tuple, Union
+
 import jittor as jt
 import types as _types_misc
 import numpy as _np
@@ -34,6 +36,7 @@ from ..types import (
 )
 from ..core_install_api import bind_core_install_api
 from ..generator import Generator as _Generator
+from ..nested import _TorchSize
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_flag
@@ -103,7 +106,11 @@ def install(ctx):
     ctx.registry.publish("torch", g)
     g.torch = g
     ctx.registry.publish("torch.torch", g)
-    ctx.registry.publish("torch.types", make_torch_types_module())
+    types_module = make_torch_types_module()
+    types_module._device = device
+    types_module._dtype = dtype
+    types_module._size = Union[_TorchSize, List[int], Tuple[int, ...]]
+    ctx.registry.publish("torch.types", types_module)
 
     # Escape hatch for the APIs this layer refuses to fake.  See
     # jittor/compat/stub_policy.py; JITTOR_TORCH_ALLOW_STUB=1 does the same.

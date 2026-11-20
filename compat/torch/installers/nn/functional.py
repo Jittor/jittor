@@ -1,4 +1,5 @@
-from jittor.nn.functional.loss import _checked_class_target
+from jittor.nn.functional.interpolation import _interpolate_antialiased
+from jittor.nn.functional.loss import _checked_class_target, _legacy_reduction, smooth_l1_loss as _native_smooth_l1
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
@@ -66,6 +67,29 @@ def _selu(input, inplace=False):
     return _activation_result(input, output, inplace)
 
 
+def _hardtanh(input, min_val=-1.0, max_val=1.0, inplace=False):
+    _check_activation_input(input, "hardtanh")
+    if min_val > max_val:
+        raise ValueError("min_val cannot be greater than max_val")
+    dtype = _dtype_to_str(input.dtype)
+    if dtype == "bool" or dtype.startswith("complex"):
+        raise NotImplementedError(f"hardtanh does not support {dtype} inputs")
+    if "int" in dtype:
+        info = jt.iinfo(dtype)
+        min_val, max_val = int(min_val), int(max_val)
+        if min_val > info.max or max_val < info.min:
+            raise RuntimeError(f"hardtanh bounds are outside the representable range of {dtype}")
+        output = jt.nn.hardtanh(input, max(min_val, info.min), min(max_val, info.max))
+    else:
+        # Hardtanh has zero gradient at either bound. Compare in opmath
+        # precision for half and bfloat16, whose clipping rounds the bounds.
+        compare = input.float32() if dtype in ("float16", "bfloat16") else input
+        saturated = (compare <= min_val) | (compare >= max_val)
+        clipped = jt.nn.hardtanh(input, min_val, max_val)
+        output = jt.ternary(saturated, clipped.detach(), input)
+    return _activation_result(input, output, inplace)
+
+
 def _check_activation_input(input, name):
     if not isinstance(input, jt.Var):
         raise TypeError("{}(): argument 'input' must be Tensor".format(name))
@@ -114,7 +138,7 @@ def _poisson_nll(input, target, log_input=True, full=False, size_average=None,
 
 from ...context import get_install_context
 from types import MappingProxyType
-from .loss_modules import LOSS_CLASSES, PixelShuffle, PixelUnshuffle
+from .loss_modules import CrossEntropyLoss, LOSS_CLASSES, PixelShuffle, PixelUnshuffle
 from .extra_api import _adapt_extra
 
 def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
@@ -140,15 +164,13 @@ def _interpolate(input=None, size=None, scale_factor=None,
                  mode="nearest", align_corners=None,
                  recompute_scale_factor=None, antialias=False,
                  **_kw):
-    if antialias:
-        raise NotImplementedError(
-            "torch.nn.functional.interpolate antialias=True is not implemented "
-            "by the Jittor frontend; use antialias=False")
-    _context = get_install_context(jt)
-    _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
     if input is None:
         input = _kw.pop("X")
     ac = False if align_corners is None else align_corners
+    if antialias:
+        return _interpolate_antialiased(input, size, scale_factor, mode, ac, recompute_scale_factor)
+    _context = get_install_context(jt)
+    _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
     return _jt_interpolate(input, size=size,
                            scale_factor=scale_factor, mode=mode,
                            align_corners=ac)
@@ -299,6 +321,11 @@ def _api_F_celu(input, alpha=1.0, inplace=False):
     return _activation_result(input, output, inplace)
 
 
+def _smooth_l1_loss(input, target, size_average=None, reduce=None, reduction="mean", beta=1.0):
+    reduction = _legacy_reduction(reduction, size_average, reduce)
+    return _native_smooth_l1(input, target, reduction=reduction, beta=beta)
+
+
 def _install_functional(ctx):
     nn = ctx.target_namespace.nn
     _modules = ctx.registry.module_map
@@ -364,9 +391,12 @@ def _install_functional(ctx):
         ("margin_ranking_loss", _native_margin_ranking),
     ):
         setattr(F, _name, _fn)
-    # nn.*Loss class versions (criterion = nn.HuberLoss()): thin wrappers over the
-    # functional. KLDivLoss/BCELoss/BCEWithLogitsLoss/CrossEntropyLoss/MSELoss/L1Loss
-    # already exist on jittor.nn (verified correct); add the rest.
+    F.smooth_l1_loss = _smooth_l1_loss
+    # CrossEntropyLoss needs Torch's constructor and functional arguments.
+    nn.CrossEntropyLoss = _adapt_extra(CrossEntropyLoss, ctx.registry)
+    nn.modules.loss.CrossEntropyLoss = nn.CrossEntropyLoss
+    ctx.registry.module_map["torch.nn.modules.loss"] = nn.modules.loss
+    # Publish other functional loss wrappers where the native tree lacks them.
     _loss_functions = {}
     for template in LOSS_CLASSES:
         _loss_functions[template.functional_name] = getattr(F, template.functional_name)
@@ -402,6 +432,7 @@ def _install_functional(ctx):
         F.celu = _api_F_celu
     if not hasattr(F, "selu"):
         F.selu = _selu
+    F.hardtanh = _hardtanh
     if not hasattr(F, "threshold"):
         F.threshold = _threshold
     if not hasattr(F, "triplet_margin_loss"):
@@ -434,13 +465,13 @@ def _install_functional(ctx):
     })
 
     register_api_bindings(F, 'torch.nn.functional',
-        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
+        ('celu', 'cross_entropy', 'ctc_loss', 'embedding', 'gelu', 'gumbel_softmax', 'hardtanh', 'interpolate', 'layer_norm', 'linear', 'log_softmax', 'logsigmoid', 'pixel_shuffle', 'pixel_unshuffle', 'poisson_nll_loss', 'relu', 'rms_norm', 'selu', 'softmax', 'softmin', 'tanhshrink', 'threshold', 'triplet_margin_loss') + tuple(()),
         Fidelity.APPROXIMATE, 'Native neural-network mathematics with Torch argument adaptation; dtype, backend, and optional parameter restrictions apply')
     register_api_bindings(F, "torch.nn.functional",
         ("binary_cross_entropy", "cosine_embedding_loss", "gaussian_nll_loss",
          "huber_loss", "kl_div", "margin_ranking_loss"), Fidelity.APPROXIMATE,
         "Reuses the canonical native loss implementation and supported argument subset")
     register_api_bindings(nn, "torch.nn",
-        tuple(template.__name__ for template in LOSS_CLASSES) + ("PixelShuffle", "PixelUnshuffle"),
+        tuple(template.__name__ for template in LOSS_CLASSES) + ("CrossEntropyLoss", "PixelShuffle", "PixelUnshuffle"),
         Fidelity.APPROXIMATE, "Module-owned layer implementations reuse native functionals; "
         "installation adapters preserve Tensor and parameter ownership")

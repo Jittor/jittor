@@ -107,7 +107,8 @@ class Sequential(jt.Module):
         return len(self.layers)
 
     def named_children(self):
-        return list(self.layers.items())
+        return [(name, child) for name, child in self.layers.items()
+                if child is not None]
 
     @property
     def _modules(self):

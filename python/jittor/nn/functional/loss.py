@@ -223,7 +223,7 @@ def l1_loss(output, target, reduction="mean"):
     return _reduce(loss, reduction)
 
 
-def smooth_l1_loss(y_true, y_pred,reduction="mean"):
+def smooth_l1_loss(y_true, y_pred, reduction="mean", beta=1.0):
     """Implements Smooth-L1 loss.
     y_true and y_pred are typically: [N, 4], but could be any shape.
 
@@ -231,10 +231,15 @@ def smooth_l1_loss(y_true, y_pred,reduction="mean"):
          y_true - ground truth
          y_pred - predictions
          reduction - the mode of cal loss which must be in ['mean','sum','none']
+         beta - distance at which the quadratic loss becomes linear
     """
+    if beta < 0:
+        raise RuntimeError("smooth_l1_loss does not support negative beta")
+    if beta == 0:
+        return l1_loss(y_true, y_pred, reduction)
     diff = jt.abs(y_true - y_pred)
-    less_than_one = (diff<1.0).float32()
-    loss = (less_than_one * 0.5 * diff.sqr()) + (1 - less_than_one) * (diff - 0.5)
+    bounded = jt.minimum(diff, beta)
+    loss = jt.ternary(diff < beta, 0.5 * bounded * (bounded / beta), diff - 0.5 * beta)
     return _reduce(loss, reduction)
 
 

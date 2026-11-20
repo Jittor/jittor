@@ -208,7 +208,8 @@ def _install_nn_extras(nn, registry=None):
     if param_mod is not None:
         for _name, _value in (("UninitializedTensorMixin", UninitializedTensorMixin),
                               ("UninitializedParameter", UninitializedParameter),
-                              ("UninitializedBuffer", UninitializedBuffer)):
+                              ("UninitializedBuffer", UninitializedBuffer),
+                              ("is_lazy", _extra_api.is_lazy)):
             if not hasattr(param_mod, _name):
                 setattr(param_mod, _name, _value)
         _modules["torch.nn.parameter"] = param_mod
@@ -468,6 +469,8 @@ def _install_nn_extras(nn, registry=None):
     if not hasattr(nn, "Hardsigmoid"):
         Hardsigmoid = _adapt_extra(_extra_api.Hardsigmoid, active_registry)
         nn.Hardsigmoid = Hardsigmoid
+    if not hasattr(nn, "Hardtanh"):
+        nn.Hardtanh = _adapt_extra(_extra_api.Hardtanh, active_registry)
     if not hasattr(nn, "Identity"):
         Identity = _adapt_extra(_extra_api.Identity, active_registry)
         nn.Identity = Identity
@@ -634,7 +637,7 @@ def _install_nn_extras(nn, registry=None):
     })
 
     register_api_bindings(nn, 'torch.nn',
-        ('CELU', 'ConvTranspose1d', 'DataParallel', 'Hardshrink', 'Hardsigmoid', 'Hardswish', 'Identity', 'ModuleDict', 'Parameter', 'ParameterList', 'RMSNorm', 'SELU', 'Softplus', 'Softshrink', 'Softsign', 'SyncBatchNorm', 'Tanhshrink', 'Transformer', 'TransformerDecoder', 'TransformerDecoderLayer', 'TransformerEncoder', 'TransformerEncoderLayer', 'attention', 'parallel', 'parameter', 'utils') + tuple(()),
+        ('CELU', 'ConvTranspose1d', 'DataParallel', 'Hardshrink', 'Hardsigmoid', 'Hardswish', 'Hardtanh', 'Identity', 'ModuleDict', 'Parameter', 'ParameterList', 'RMSNorm', 'SELU', 'Softplus', 'Softshrink', 'Softsign', 'SyncBatchNorm', 'Tanhshrink', 'Transformer', 'TransformerDecoder', 'TransformerDecoderLayer', 'TransformerEncoder', 'TransformerEncoderLayer', 'attention', 'parallel', 'parameter', 'utils') + tuple(()),
         Fidelity.APPROXIMATE, 'Native neural-network implementations and installation-owned layer adapters; unsupported Torch modes and parameter subsets remain restricted')
     register_api_bindings(F, "torch.nn.functional", ("linear",),
         Fidelity.APPROXIMATE, "Native linear mathematics with frontend dtype promotion and installation-owned delegates")

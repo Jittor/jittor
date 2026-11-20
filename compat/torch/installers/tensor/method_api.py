@@ -78,7 +78,17 @@ def _write_data_owner_numpy(view, value, slices):
         target = target[_numpy_data_value(index)]
     if not getattr(getattr(target, "flags", None), "writeable", True):
         return _assign_data_owner(view, value, (slices,))
-    target[_numpy_data_value(slices)] = _numpy_data_value(value)
+    if _jittor_dtype_name(owner.dtype) == "bfloat16":
+        # Native DataView exposes bfloat16 storage as uint16. Assign the
+        # converted tensor's bits, not the float values returned by numpy().
+        source = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
+        source = source.to("cpu").cast("bfloat16")
+        payload = _native_data_descriptor.__get__(source, Var)
+        if payload.size == 1:
+            payload = payload.reshape(())[()]
+    else:
+        payload = _numpy_data_value(value)
+    target[_numpy_data_value(slices)] = payload
     return True
 
 
@@ -368,7 +378,15 @@ def _copy_detached_storage(self, value):
 
 def _ip(self, value, preserve_storage=False):
     self._check_inplace_autograd()
-    if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
+    data_owner = getattr(self, "_torch_data_owner", None)
+    if (data_owner is not None and not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
+            and (self.requires_grad or value.requires_grad)):
+        # Store into the shared allocation and give the history to the data alias.
+        # Rebinding its owner would attach this history to the parameter.
+        data_owner.sync(False, False)
+        _owner.jt.core._preserve_step_readers([data_owner])
+        return _copy_(self, value)
+    if preserve_storage or data_owner is not None:
         if self.requires_grad and not _owner.jt.flags.no_grad:
             if self.is_leaf:
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
@@ -579,6 +597,18 @@ def _new_scope(self, device):
     from ...frontend import tensor_frontend
     context = get_install_context(_owner.jt)
     return tensor_frontend(context.target_namespace.Var, device=device, like=self)
+
+
+def _new(self, *args, device=None):
+    target = get_install_context(_owner.jt).target_namespace
+    device = self.device if device is None else target.device(device)
+    if device.type != self.device.type:
+        raise RuntimeError(f"Expected a {self.device.type} device for Tensor.new, got {device}")
+    if len(args) == 1 and isinstance(args[0], _NativeVar):
+        other = args[0]
+        if other.dtype != self.dtype or other.device != device:
+            raise TypeError("Tensor.new expects a tensor with matching dtype and device")
+    return target.Var(*args, dtype=self.dtype, device=device)
 
 
 def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
@@ -2714,6 +2744,10 @@ def _api_is_sparse(self):
     # Native Var storage is dense; unsupported sparse factories never produce
     # a Var whose storage this capability query could misclassify.
     return False
+
+
+def _api_layout(self):
+    return get_install_context(_owner.jt).target_namespace.strided
 
 
 def _api_retains_grad(self):

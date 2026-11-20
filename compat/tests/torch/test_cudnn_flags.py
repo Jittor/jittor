@@ -28,6 +28,13 @@ class TestCudnnFlags(unittest.TestCase):
     def test_it_exists(self):
         self.assertTrue(callable(self.cudnn.flags))
 
+    def test_is_available_reports_the_native_library(self):
+        capability = jt.capability.library("cudnn", load=True)
+        self.assertFalse(capability.failed, capability.reason)
+        self.assertIs(self.cudnn.is_available(), capability.enabled)
+        with self.cudnn.flags(enabled=False):
+            self.assertIs(self.cudnn.is_available(), capability.enabled)
+
     def test_values_apply_inside_the_block(self):
         with self.cudnn.flags(enabled=False, benchmark=True, deterministic=True):
             self.assertFalse(self.cudnn.enabled)

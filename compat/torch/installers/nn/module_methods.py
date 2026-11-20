@@ -958,10 +958,12 @@ def _module_to_conversion(ds, dev, copy, v):
         is_float = v.dtype.is_float() if hasattr(v.dtype, "is_float") else ("float" in _jittor_dtype_name(v.dtype))
         if is_float:
             out = _module_cast_var_if_needed(out, ds, copy=copy)
+    # A moved view must be rebound instead of assigning through its old storage.
     if _device_is_cpu(dev):
-        out = _make_cpu_resident(out, inplace=(out is v))
+        out = _make_cpu_resident(out, inplace=out is v and v._base is None)
     elif _device_is_cuda(dev):
-        out = _make_cuda_resident(out, force=True, inplace=(out is v))
+        inplace = out is v and v._base is None
+        out = _make_cuda_resident(out, force=True, inplace=inplace)
         # A bare .to("cuda")/.cuda() is the *current* device, as in torch --
         # `model_on_cuda1.cuda()` with current_device()==0 lands on cuda:0.
         # This used to fall back to the parameter's own device, which kept the
@@ -974,7 +976,7 @@ def _module_to_conversion(ds, dev, copy, v):
             cur = getattr(out, "device_id", -1)
             if cur >= 0 and cur != int(idx):
                 moved = out.to_device(int(idx))
-                if out is v:
+                if out is v and inplace:
                     # torch's Module.to is in place: the Parameter
                     # object keeps its identity -- an optimizer or a
                     # state_dict already holding it must keep working
