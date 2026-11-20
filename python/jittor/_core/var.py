@@ -168,7 +168,7 @@ def _amp_array_preference(ret):
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
 
-def random(shape, dtype="float32", type="uniform", generator=None):
+def random(shape, dtype="float32", type="uniform", generator=None, *, _torch_normal=False):
     ''' Constructs a random jittor Var.
 
     :param shape: The shape of the random Var.
@@ -202,7 +202,8 @@ def random(shape, dtype="float32", type="uniform", generator=None):
     # explicit generator's state: only the global stream is captured.
     ret = _captured_draw(shape, draw, type) if generator is None else None
     if ret is None:
-        ret = ops.random(shape, draw, type, generator)
+        ret = (ops.random(shape, draw, type, generator, True) if _torch_normal
+               else ops.random(shape, draw, type, generator))
     if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.

@@ -84,6 +84,8 @@ def _invoke_factory(name, args, kwargs):
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
+    if name == "randn_like" and not args:
+        like = kwargs.get("input", kwargs.get("x"))
     if name == "normal":
         mean = kwargs.get("mean", args[0] if args else None)
         std = kwargs.get("std", args[1] if len(args) > 1 else None)
@@ -402,6 +404,41 @@ def _creates_fresh_leaf(name, args, kwargs):
     return False
 
 
+def _torch_cpu_normal_available(dtype):
+    if _dtype_to_str(dtype) not in ("float32", "float64"):
+        return False
+    placement = jt.core._current_tensor_placement()
+    return placement[0] == 0 if placement is not None else not jt.flags.use_cuda
+
+
+def _implicit_torch_cpu_normal(name, original, args, kwargs, default_dtype):
+    """Use the native compat stream inside the established factory scope."""
+    if name not in ("randn", "randn_like") or original is not getattr(_native_creation, name):
+        return None
+    if name == "randn_like":
+        if not args and set(kwargs) - {"dtype", "input", "x"}:
+            return None
+        if args and (len(args) != 1 or set(kwargs) - {"dtype"}):
+            return None
+        reference = args[0] if args else kwargs.get("input", kwargs.get("x"))
+        if not isinstance(reference, jt.Var):
+            return None
+        shape = reference.shape
+        dtype = kwargs.get("dtype", reference.dtype)
+    else:
+        if set(kwargs) - {"dtype"} or not args:
+            return None
+        shape = _shape_tuple(args[0]) if len(args) == 1 else None
+        if shape is None and all(_is_dim(arg) for arg in args):
+            shape = args
+        if shape is None:
+            return None
+        dtype = kwargs.get("dtype", default_dtype)
+    if not _torch_cpu_normal_available(dtype):
+        return None
+    return jt.random(shape, _dtype_to_str(dtype), "normal", _torch_normal=True)
+
+
 def _draw_inputs_require_grad(args, kwargs):
     values = list(args) + [kwargs.get("mean"), kwargs.get("std"),
                            kwargs.get("input")]
@@ -574,7 +611,11 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     elif _cast_to in _COMPLEX_COMPONENTS and name == "normal":
         _complex_normal_refusal()
     else:
-        out = orig(*args, **kwargs)
+        out = None
+        if name in ("randn", "randn_like"):
+            out = _implicit_torch_cpu_normal(name, orig, args, kwargs, g.get_default_dtype())
+        if out is None:
+            out = orig(*args, **kwargs)
     # Typed factories can already return the requested dtype. A final cast
     # should convert values, rather than repeat frontend dispatch unchanged.
     if (_cast_to is not None and
@@ -789,7 +830,10 @@ def _draw_from_generator(name, generator, args, kwargs):
             t = _complex_random(name, shape, cast_to, generator=native)
         else:
             distribution = "normal" if name.startswith("randn") else "uniform"
-            t = jt.random(shape, cast_to, distribution, generator=native)
+            if distribution == "normal" and _torch_cpu_normal_available(cast_to):
+                t = jt.random(shape, cast_to, distribution, generator=native, _torch_normal=True)
+            else:
+                t = jt.random(shape, cast_to, distribution, generator=native)
     elif name == "normal":
         if cast_to in _COMPLEX_COMPONENTS:
             _complex_normal_refusal()

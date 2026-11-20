@@ -186,6 +186,7 @@ static void apply_global_seed(uint64 seed) {
     rng.global_seed = seed;
     rng.host_seed = seed;
     rng.host_engine.seed(seed);
+    rng.host_torch_normal.reset();
     rng.acl_streams.clear();
     // Legacy callbacks retain their ABI. Seed-aware backends read the full
     // value from the shared owner; callbacks such as dropout reset ignore it.
