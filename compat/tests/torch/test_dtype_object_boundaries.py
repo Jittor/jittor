@@ -55,6 +55,19 @@ def test_dtype_objects_reach_native_overloads_and_numpy_construction(torch, name
     assert jt.core._checked_dtype_name(cast.dtype) == name
 
 
+def test_cpu_bfloat16_data_write_preserves_values_and_storage(torch):
+    values = torch.tensor([[0.25, -0.5, 0.75], [1.0, -2.0, 3.0]], device="cpu")
+    layer = torch.nn.Embedding(2, 3, dtype=torch.bfloat16, device="cpu")
+    alias = layer.weight.data
+    layer.weight.data[:, :] = values
+    np.testing.assert_array_equal(layer.weight.float().numpy(), values.numpy())
+    np.testing.assert_array_equal(alias.float().numpy(), values.numpy())
+    layer.weight.data[0, 0] = -1.25
+    assert alias.float().tolist()[0][0] == -1.25
+    assert layer.weight.device.type == "cpu"
+    assert layer.weight.dtype == torch.bfloat16 and layer.weight.requires_grad
+
+
 def test_placeholder_dtypes_are_metadata_only_at_every_boundary(torch):
     value = torch.tensor([1.0])
     placeholders = [item for name, item in dtype._registry.items()
