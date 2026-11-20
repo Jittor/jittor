@@ -78,7 +78,17 @@ def _write_data_owner_numpy(view, value, slices):
         target = target[_numpy_data_value(index)]
     if not getattr(getattr(target, "flags", None), "writeable", True):
         return _assign_data_owner(view, value, (slices,))
-    target[_numpy_data_value(slices)] = _numpy_data_value(value)
+    if _jittor_dtype_name(owner.dtype) == "bfloat16":
+        # Native DataView exposes bfloat16 storage as uint16. Assign the
+        # converted tensor's bits, not the float values returned by numpy().
+        source = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
+        source = source.to("cpu").cast("bfloat16")
+        payload = _native_data_descriptor.__get__(source, Var)
+        if payload.size == 1:
+            payload = payload.reshape(())[()]
+    else:
+        payload = _numpy_data_value(value)
+    target[_numpy_data_value(slices)] = payload
     return True
 
 
