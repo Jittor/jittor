@@ -86,5 +86,44 @@ class TestModuleFullBackwardHooks:
         with pytest.raises(RuntimeError, match="grad_input"):
             layer(x).backward()
 
+    def test_inplace_forward_and_output_views_preserve_custom_backward(self, device):
+        class Inplace(torch.nn.Module):
+            def forward(self, value):
+                return value.add_(1)
+
+        layer = Inplace()
+        layer.register_full_backward_hook(lambda *args: None)
+        x = torch.tensor([-1., 2.], device=device, requires_grad=True)
+        with pytest.raises(RuntimeError, match="view.*modified inplace"):
+            layer(x * 2)
+
+        layer = torch.nn.Identity()
+        layer.register_full_backward_hook(lambda *args: None)
+        y = layer(x * 2)
+        for view in (y, y.view(2)):
+            with pytest.raises(RuntimeError, match="view.*modified inplace"):
+                view.add_(1)
+        z = y.clone()
+        z.add_(1)
+        z.sum().backward()
+        assert _values(x.grad) == (2., 2.)
+
+    def test_mutation_through_alias_invalidates_saved_hook_view(self, device):
+        layer = torch.nn.Identity()
+        layer.register_full_backward_hook(lambda *args: None)
+        for alias in ("output", "base", "detached"):
+            x = torch.tensor([1., 2.], device=device, requires_grad=True)
+            base = x * 2
+            y = layer(base)
+            if alias == "base":
+                base.add_(1)
+            elif alias == "detached":
+                y.detach().add_(1)
+            else:
+                with torch.no_grad():
+                    y.add_(1)
+            with pytest.raises(RuntimeError, match="view.*modified inplace"):
+                y.sum().backward()
+
 
 instantiate_device_type_tests(TestModuleFullBackwardHooks, globals(), only_for=("cpu", "cuda"))

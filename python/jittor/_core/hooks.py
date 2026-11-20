@@ -54,6 +54,7 @@ class _ModuleBackwardHooks:
 
         wrapped = list(values)
         for index, tensor in zip(indices, grad_hooker(tuple(values[i] for i in indices), unpack)):
+            tensor._mark_custom_backward_view(values[index])
             wrapped[index] = tensor
         if type(values) is tuple:
             return tuple(wrapped)

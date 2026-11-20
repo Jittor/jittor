@@ -33,6 +33,10 @@ void Var::refresh_alias_requires_grad() {
 }
 
 void Var::check_alias_history() const {
+    if (autograd_alias && autograd_alias->custom_backward_view) {
+        USER_CHECK(*autograd_alias->version == autograd_alias->creation_version)
+            << "A custom backward view or another view of its base has been modified inplace.";
+    }
     USER_CHECK(!autograd_alias || !autograd_alias->stale_unrecorded_view())
         << "A view was created in no_grad mode and its base or another view "
            "of its base has been modified inplace. This use of the view is "
