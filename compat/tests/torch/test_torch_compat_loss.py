@@ -207,6 +207,34 @@ class TestCrossEntropy(Base):
                         per_ls.mean(), msg=f"ce soft smoothing {dev}")
         both_devices(body)
 
+    def test_criterion_class_label_smoothing_with_weight_and_ignore_index(self):
+        from torch.nn.modules.loss import CrossEntropyLoss
+
+        self.assertIs(CrossEntropyLoss, nn.CrossEntropyLoss)
+        targets = self.tgt.copy()
+        targets[0] = -100
+        weights = np.array([1.0, 2.0, 0.5, 1.5], dtype="float32")
+        smoothing = 0.2
+        keep = targets != -100
+        logp = self.logp[keep]
+        target_weights = weights[targets[keep]]
+        nll = -logp[np.arange(len(logp)), targets[keep]] * target_weights
+        smooth = -(logp * weights).sum(axis=1)
+        expected = ((1 - smoothing) * nll + smoothing * smooth / len(weights)).sum()
+        expected /= target_weights.sum()
+
+        def body(dev):
+            weight = torch.tensor(weights, device=dev)
+            criterion = CrossEntropyLoss(weight=weight, ignore_index=-100, label_smoothing=smoothing)
+            self.assertIs(criterion._buffers["weight"], weight)
+            logits = torch.tensor(self.logits, device=dev)
+            target = torch.tensor(targets, device=dev)
+            actual = criterion(logits, target)
+            self.assertEqual(actual.device.type, dev)
+            self.scalar(actual.numpy(), expected, places=5, msg=f"smoothed criterion {dev}")
+
+        both_devices(body)
+
     def test_criterion_class_reduction(self):
         # torch.nn.CrossEntropyLoss takes reduction=; it used to be silently dropped.
         logits, tgt, logp = self.logits, self.tgt, self.logp
