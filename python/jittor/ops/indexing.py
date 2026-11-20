@@ -72,10 +72,45 @@ def _is_static_positive_basic_index(index):
     return True
 
 
-def _native_bool_coordinates(slices):
-    jt = _jt if _jt is not None else _jittor()
-    if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
+def _tuple_bool_coordinates(x, slices):
+    """Replace each tuple mask with one index per consumed dimension."""
+    masks = {}
+    for position, item in enumerate(slices):
+        if isinstance(item, Var):
+            dtype = _jittor_dtype_name(item.dtype)
+            if dtype in _MASK_DTYPES:
+                masks[position] = item != 0 if dtype == "uint8" else item
+    if not masks:
+        return slices
+
+    widths = [
+        0 if item is None or item is Ellipsis else 1 for item in slices
+    ]
+    for position, mask in masks.items():
+        widths[position] = mask.ndim
+    remaining = x.ndim - sum(widths)
+    if remaining < 0:
+        raise IndexError("too many indices for tensor of dimension %d" % x.ndim)
+    shape = tuple(x.shape)
+    normalized = []
+    axis = 0
+    for position, (item, width) in enumerate(zip(slices, widths)):
+        if position in masks:
+            mask = masks[position]
+            if tuple(mask.shape) != shape[axis:axis + width]:
+                raise IndexError("boolean mask shape does not match indexed dimensions")
+            normalized.extend(mask.where())
+        else:
+            normalized.append(item)
+        axis += remaining if item is Ellipsis else width
+    return tuple(normalized)
+
+
+def _native_bool_coordinates(x, slices):
+    if isinstance(slices, Var) and _jittor_dtype_name(slices.dtype) == "bool":
         return tuple(slices.where())
+    if isinstance(slices, tuple):
+        return _tuple_bool_coordinates(x, slices)
     return slices
 
 
@@ -87,7 +122,7 @@ def var_getitem(x, slices, return_x=None):
         result = try_dispatch("tensor.getitem", x, slices, return_x)
         if result is not None:
             return result
-    slices = _native_bool_coordinates(slices)
+    slices = _native_bool_coordinates(x, slices)
     if return_x is None:
         return _native_var_getitem(x, slices)
     return _native_var_getitem(x, slices, return_x)
@@ -100,7 +135,7 @@ def var_setitem(x, slices, value, reduce=None):
         result = try_dispatch("tensor.setitem", x, slices, value, reduce)
         if result is not None:
             return result
-    slices = _native_bool_coordinates(slices)
+    slices = _native_bool_coordinates(x, slices)
     if reduce is None:
         return _native_var_setitem(x, slices, value)
     return _native_var_setitem(x, slices, value, reduce)
@@ -279,25 +314,13 @@ def _getitem_result(x, slices):
             return _native_var_getitem(x, slices)
     if isinstance(slices, jt.Var) and _jittor_dtype_name(slices.dtype) == "bool":
         return getitem(x, slices.where())
-    if isinstance(slices, range):
-        slices = jt.array(list(slices))
 
     constant_gather = _maybe_constant_index_gather(x, slices)
     if constant_gather is not None:
         return constant_gather
 
     if isinstance(slices, tuple):
-        normalized = []
-        for item in slices:
-            if isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "uint8":
-                normalized.extend((item != 0).where())
-            elif isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "bool":
-                normalized.extend(item.where())
-            elif isinstance(item, range):
-                normalized.append(jt.array(list(item)))
-            else:
-                normalized.append(item)
-        slices = tuple(normalized)
+        slices = _tuple_bool_coordinates(x, slices)
     return x.getitem(slices)
 
 
@@ -433,15 +456,7 @@ def setitem(x, slices, value):
                 return x.assign(slices.ternary(value, x))
         slices = slices.where()
     elif isinstance(slices, tuple):
-        normalized = []
-        for item in slices:
-            if isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "uint8":
-                normalized.extend((item != 0).where())
-            elif isinstance(item, jt.Var) and _jittor_dtype_name(item.dtype) == "bool":
-                normalized.extend(item.where())
-            else:
-                normalized.append(item)
-        slices = tuple(normalized)
+        slices = _tuple_bool_coordinates(x, slices)
     result = x.setitem(slices, value)
     return x.assign(result)
 
