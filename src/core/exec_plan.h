@@ -146,6 +146,8 @@ struct ExecPlan {
 // pending consumers of a collected node, not only backward into its inputs.
 // Leaves `plan.epoch` held; the caller releases it once the batch is compiled.
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan);
+void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
+                     vector<VarPtr>& planning_hold);
 
 // A batch that failed before running all of its ops leaves the rest pending.
 // Mark every unfinished var so the next sync does not plan and execute them
