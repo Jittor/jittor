@@ -495,7 +495,7 @@ class Module:
         ps = dict(self._named_vars("state", recurse, remove_duplicate=False))
         if keep_vars is False:
             for k, v in ps.items():
-                if isinstance(v, Var):
+                if isinstance(v, Var) and not getattr(type(v), "_torch_uninitialized", False):
                     ps[k] = v.detach()
         if to == "numpy":
             for k,v in ps.items():
