@@ -80,6 +80,7 @@ from .reductions import amax
 from .reductions import amin
 
 from .reductions import count_nonzero
+from .order_statistics import mode
 
 for _reduction_extra in (amax, amin, count_nonzero):
     # ``install_methods`` retrofits an axis->dim adapter onto the Var reduction
@@ -326,6 +327,8 @@ for _reduction_impl, _reduction_api, _reduction_detail in (
         (argmin, "torch.argmin", _ARG_REDUCTION_FIDELITY_DETAIL),
         (max, "torch.max", _MINMAX_FIDELITY_DETAIL),
         (min, "torch.min", _MINMAX_FIDELITY_DETAIL),
+        (mode, "torch.mode", "Modal values and representative indices on the input device"),
+        (mode, "torch.Tensor.mode", "Modal values and representative indices on the input device"),
         (var, "torch.var", _VARIANCE_FIDELITY_DETAIL),
         (std, "torch.std", _VARIANCE_FIDELITY_DETAIL),
         (masked_scatter, "torch.Tensor.masked_scatter",
@@ -376,6 +379,7 @@ def _install_reductions(g):
     g.sort = Var.sort = sort
     g.argsort = Var.argsort = argsort
     g.median = Var.median = median
+    g.mode = Var.mode = mode
 
     # Owned elsewhere: bind the one existing owner rather than a second copy.
     # ``softmax``/``log_softmax`` accept torch's ``dtype=`` (cast before the op),
