@@ -81,6 +81,21 @@ def test_lazy_cpu_factories_views_reductions_and_native_selection():
         np.testing.assert_array_equal(dx.numpy(), [[-2., 4.], [10., -4.]])
 
 
+def test_cuda_kthvalue_uses_input_device_under_cpu_default():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime(), jt.runtime.scope(backend_fallback="error"), torch.device("cpu"):
+        scores = torch.arange(239, -1, -1, dtype=torch.float32, device="cuda")
+        value, index = torch.kthvalue(-scores, 5)
+        assert value.device == index.device == scores.device
+        assert value.item() == -235
+        assert index.item() == 4
+        ambient = torch.zeros(1)
+        ambient.sync()
+        _cpu(ambient)
+
+
 def test_cpu_and_cuda_segments_share_one_submission_without_migration():
     import jittor as jt
     import torch
