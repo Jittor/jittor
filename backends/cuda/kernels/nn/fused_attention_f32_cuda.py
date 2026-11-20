@@ -262,7 +262,7 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
     }
 }
 
-template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT>
+template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT, bool FUSED_MADD = false>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
@@ -319,10 +319,10 @@ __global__ void __launch_bounds__(THREADS) forward(
             const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
             #pragma unroll
             for (int r = 0; r < RPT; r++) {
-                s[r][0] += qv[r] * kv.x;
-                s[r][1] += qv[r] * kv.y;
-                s[r][2] += qv[r] * kv.z;
-                s[r][3] += qv[r] * kv.w;
+                s[r][0] = FUSED_MADD ? fmaf(qv[r], kv.x, s[r][0]) : s[r][0] + qv[r] * kv.x;
+                s[r][1] = FUSED_MADD ? fmaf(qv[r], kv.y, s[r][1]) : s[r][1] + qv[r] * kv.y;
+                s[r][2] = FUSED_MADD ? fmaf(qv[r], kv.z, s[r][2]) : s[r][2] + qv[r] * kv.z;
+                s[r][3] = FUSED_MADD ? fmaf(qv[r], kv.w, s[r][3]) : s[r][3] + qv[r] * kv.w;
             }
         }
         #pragma unroll
@@ -382,7 +382,8 @@ __global__ void __launch_bounds__(THREADS) forward(
                 const int col = tx + c * 16;
                 const float vv = col < D ? skv[j * D + col] : 0.f;
                 #pragma unroll
-                for (int r = 0; r < RPT; r++) acc[r][c] += p[r] * vv;
+                for (int r = 0; r < RPT; r++)
+                    acc[r][c] = FUSED_MADD ? fmaf(p[r], vv, acc[r][c]) : acc[r][c] + p[r] * vv;
             }
         }
     }
@@ -841,7 +842,10 @@ def _forward_view(query, key, value, scale, causal, mask):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
     src = _launch(
-        f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
+        # Explicit FP32 FMA avoids two instructions and two roundings in the
+        # head80 inference dot products even under strict compilation flags.
+        # The default template preserves the training forward/backward pair.
+        f"mea_fwd::forward<{d}, {rpt}, {call.template()}, {str(d == 80).lower()}>",
         f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
         _smem_register_forward(d, rpt),
         f"{', '.join(pointers)}, out0_p, out1_p, {lq}, {lk}, {scale!r}f, "

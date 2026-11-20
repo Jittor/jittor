@@ -210,6 +210,32 @@ class TestLtLinearCuda(unittest.TestCase):
         finally:
             runner.invalidate()
 
+    def test_captured_frozen_linear_reads_live_operands_and_matches_float64(self):
+        with jt.no_grad(), jt.flag_scope(float32_matmul_precision='highest', cuda_allow_tf32=0,
+                                         amp_reg=0, backend_fallback='error'):
+            before = jt.core.backend_fallback_count()
+            for rows, cin, cout, offset in [(128, 256, 512, 0), (96, 1024, 256, 0),
+                                            (192, 384, 1536, 0), (128, 256, 512, 1)]:
+                runner = jt.capture_step(lambda x, w, b: nn.linear(x, w, b))
+                retained = []
+                try:
+                    for iteration in range(8):
+                        arrays = self._arrays((rows, cin), cin, cout)
+                        inputs = [jt.array(np.pad(value.ravel(), (offset, 0)))[offset:]
+                                  .reshape(value.shape).stop_grad() for value in arrays]
+                        result = runner(*inputs)
+                        self.assertFalse(result.requires_grad)
+                        x, w, b = [value.astype('float64') for value in arrays]
+                        retained.append((result, x @ w.T + b))
+                    for result, reference in retained:
+                        np.testing.assert_allclose(result.numpy(), reference,
+                                                   rtol=1e-4, atol=2e-5)
+                        self.assertEqual(result.location(), 'device')
+                    self.assertGreaterEqual(runner.stats['graph'], 3, runner._graph_refused)
+                finally:
+                    runner.invalidate()
+            self.assertEqual(jt.core.backend_fallback_count(), before)
+
     def test_what_it_refuses(self):
         xn, wn, bn = self._arrays((512, 512), 512, 512)
         x, w, b = jt.array(xn), jt.array(wn), jt.array(bn)

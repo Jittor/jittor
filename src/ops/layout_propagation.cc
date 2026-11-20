@@ -157,7 +157,15 @@ bool storage_layout_operands(std::initializer_list<Var*> operands, NanoVector& a
             found[i] = storage_view_transpose(v, back);
             continue;
         }
-        if (!op->is_op(op_ids::broadcast_to())) return false;
+        if (!op->is_op(op_ids::broadcast_to())) {
+            // A pending dense residual can be read in the selected physical
+            // order too. Requiring it to finish first made layout depend on
+            // auto-flush timing and converted every residual block to NCHW.
+            if (!v->is_contiguous()
+                    || storage_layout_records_grad(vector<Var*>(operands))) return false;
+            found[i] = storage_view_transpose(v, back);
+            continue;
+        }
         auto* broadcast = static_cast<BroadcastToOp*>(op);
         if (broadcast->x->num == 1) {
             // A constant: broadcast it to the source's shape directly, so it

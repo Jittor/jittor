@@ -75,6 +75,17 @@ its real strides and physical storage span to CANN; the native contiguous operat
 same-dtype Cast to write a dense output. The index-copy planner still supports dense only and
 **reports that requirement explicitly**.
 
+Gradient-free elementwise expressions can keep a permuted input's physical layout even when
+another dense operand is still pending. Each internal rewrite selects the layout once, avoiding
+recursive conversions. Pending mixed layouts that record gradients retain the existing path.
+Gradient-free FP32 CUDA convolutions can consume existing channels-last inputs directly. A
+convolution with one group keeps its OHWI filter conversion in the graph so subsequent in-place
+weight writes remain visible. Eligible depthwise convolutions use `depthwise_nhwc_cuda.py` to
+reuse inputs across adjacent outputs with FP32 FMA accumulation. AMP, trainable inputs, and
+unsupported filters or layouts use existing implementations. Directed numerical and graph
+replay coverage is in `tests/backends/cuda/test_depthwise_nhwc.py`; model, device, and precision
+performance acceptance is recorded in the PR.
+
 > Changes to ACL descriptors and kernels need **real CANN/NPU validation**; a host-side syntax
 > check alone is not evidence of support for a device or dtype.
 

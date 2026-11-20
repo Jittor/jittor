@@ -190,3 +190,52 @@ def test_finished_dense_and_permuted_operands_do_not_rewrite_recursively(
             assert_device(db)
             np.testing.assert_array_equal(da.numpy(), grad_a)
             np.testing.assert_array_equal(db.numpy(), grad_b)
+
+
+@pytest.mark.parametrize('operation', ['add', 'multiply', 'where'])
+@pytest.mark.parametrize('record_grad', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_pending_dense_residual_keeps_permuted_layout_and_gradients(
+        operation, record_grad, reverse):
+    root_host = np.linspace(-1., 1., 120, dtype='float32').reshape(2, 4, 5, 3)
+    dense_host = np.linspace(.2, 1.4, 120, dtype='float32').reshape(2, 3, 4, 5)
+    with jt.flag_scope(propagate_storage_layout=1, no_grad=not record_grad,
+                       auto_flush_ops=0, auto_flush_bytes=0):
+        root, dense = jt.array(root_host), jt.array(dense_host)
+        assert_device(root)
+        assert_device(dense)
+        view = root._storage_permute((0, 3, 1, 2))
+        residual = dense * dense
+        assert not residual.is_finished
+        x, y = (residual, view) if reverse else (view, residual)
+        logical = root_host.transpose(0, 3, 1, 2)
+        square = dense_host * dense_host
+        if operation == 'add':
+            result = x + y
+            expected = logical + square
+            root_grad = np.ones_like(logical)
+            dense_grad = 2 * dense_host
+        elif operation == 'multiply':
+            result = x * y
+            expected = logical * square
+            root_grad = square
+            dense_grad = 2 * dense_host * logical
+        else:
+            mask_host = dense_host > .8
+            mask = jt.array(mask_host).stop_grad().sync()
+            result = jt.ternary(mask, x, y)
+            expected = np.where(mask_host, square if reverse else logical,
+                                logical if reverse else square)
+            root_grad = (~mask_host if reverse else mask_host).astype('float32')
+            dense_grad = 2 * dense_host * (mask_host if reverse else ~mask_host)
+        if not record_grad:
+            assert tuple(result._storage_strides()) == (60, 1, 15, 3)
+        assert_device(result)
+        np.testing.assert_allclose(result.numpy(), expected, rtol=2e-6, atol=1e-6)
+        if record_grad:
+            dr, dd = jt.grad(result.sum(), [root, dense])
+            assert_device(dr)
+            assert_device(dd)
+            np.testing.assert_allclose(dr.numpy(), root_grad.transpose(0, 2, 3, 1),
+                                       rtol=2e-6, atol=1e-6)
+            np.testing.assert_allclose(dd.numpy(), dense_grad, rtol=2e-6, atol=1e-6)
