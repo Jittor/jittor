@@ -1,4 +1,4 @@
-from jittor.nn.functional.loss import _checked_class_target
+from jittor.nn.functional.loss import _checked_class_target, _legacy_reduction, smooth_l1_loss as _native_smooth_l1
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
@@ -322,6 +322,11 @@ def _api_F_celu(input, alpha=1.0, inplace=False):
     return _activation_result(input, output, inplace)
 
 
+def _smooth_l1_loss(input, target, size_average=None, reduce=None, reduction="mean", beta=1.0):
+    reduction = _legacy_reduction(reduction, size_average, reduce)
+    return _native_smooth_l1(input, target, reduction=reduction, beta=beta)
+
+
 def _install_functional(ctx):
     nn = ctx.target_namespace.nn
     _modules = ctx.registry.module_map
@@ -387,6 +392,7 @@ def _install_functional(ctx):
         ("margin_ranking_loss", _native_margin_ranking),
     ):
         setattr(F, _name, _fn)
+    F.smooth_l1_loss = _smooth_l1_loss
     # CrossEntropyLoss needs Torch's constructor and functional arguments.
     nn.CrossEntropyLoss = _adapt_extra(CrossEntropyLoss, ctx.registry)
     nn.modules.loss.CrossEntropyLoss = nn.CrossEntropyLoss

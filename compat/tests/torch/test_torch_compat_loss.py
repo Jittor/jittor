@@ -435,6 +435,18 @@ class TestSmoothL1Huber(Base):
                         msg=f"smooth_l1 mean {dev}")
             self.scalar(F.smooth_l1_loss(t(a), t(b), reduction="sum").numpy(), per.sum(),
                         places=3, msg=f"smooth_l1 sum {dev}")
+
+    def test_smooth_l1_beta_gradient(self):
+        def body(dev):
+            values = torch.tensor([-2., -0.5, 0., 0.25, 1.5], device=dev, requires_grad=True)
+            target = torch.zeros_like(values)
+            result = F.smooth_l1_loss(values, target, reduction="none", beta=0.5)
+            self.assertEqual(result.device.type, dev)
+            self.ac(result.detach().cpu().numpy(), [1.75, 0.25, 0., 0.0625, 1.25])
+            result.sum().backward()
+            self.ac(values.grad.cpu().numpy(), [-1., -1., 0., 0.5, 1.])
+            self.scalar(F.smooth_l1_loss(values, target, reduction="sum", beta=0.).detach().cpu().numpy(), 4.25)
+        both_devices(body)
         both_devices(body)
 
     def test_huber_delta(self):
