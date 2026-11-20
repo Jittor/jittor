@@ -5,6 +5,9 @@ import warnings
 import contextlib
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from ...context import get_install_context
+from ...tensor_layout import (
+    CHANNELS_LAST_3D, copy_channels_last_3d, is_channels_last_3d, suggests_channels_last_3d,
+)
 from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
@@ -1074,6 +1077,13 @@ def _data_set(self, value):
 
 
 
+def _to_channels_last_3d(source, result, copy):
+    if result is source and not copy and suggests_channels_last_3d(result):
+        return result
+    with _new_scope(result, None):
+        return copy_channels_last_3d(result)
+
+
 def _to(self, *args, **kwargs):
     # A dtype-only no-op is common between model layers. Explicit placement
     # already names this tensor's device, so there is no target to resolve.
@@ -1099,8 +1109,9 @@ def _to(self, *args, **kwargs):
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))
-    if kwargs.get("memory_format") not in (None, "preserve_format", "contiguous_format"):
-        raise NotImplementedError("to supports preserve_format and contiguous_format")
+    memory_format = kwargs.get("memory_format")
+    if memory_format not in (None, "preserve_format", "contiguous_format", CHANNELS_LAST_3D):
+        raise NotImplementedError("to supports preserve_format, contiguous_format and channels_last_3d")
     # device passed as a keyword (torch's .to(device=..., dtype=...))
     if "device" in kwargs:
         dev = kwargs["device"]
@@ -1172,7 +1183,8 @@ def _to(self, *args, **kwargs):
                     stub_result=None)
     if dev is None:
         dev = self.device
-    out = self.clone() if copy else self
+    channels_last = memory_format == CHANNELS_LAST_3D
+    out = self.clone() if copy and not channels_last else self
     if ds is not None:
         out = _cast_if_needed(out, ds)
     # Honor an explicit device= target by migrating residency. device=None
@@ -1181,7 +1193,8 @@ def _to(self, *args, **kwargs):
         out = _owner._make_cpu_resident(out)
     elif _owner._device_is_cuda(dev):
         if out.placement_backend >= 0:
-            return _owner._make_cuda_resident(out, force=True, device=dev)
+            out = _owner._make_cuda_resident(out, force=True, device=dev)
+            return _to_channels_last_3d(self, out, copy) if channels_last else out
         out = _owner._make_cuda_resident(out, force=True)
         # .to("cuda:N") copies across devices when N is not where the Var
         # already is; a bare .to("cuda") names the *current* device, as in
@@ -1193,7 +1206,7 @@ def _to(self, *args, **kwargs):
         out = moved
     if getattr(self, "_torch_0d", False):
         out._torch_0d = True
-    return out
+    return _to_channels_last_3d(self, out, copy) if channels_last else out
 
 
 
@@ -2614,13 +2627,16 @@ def _api_contiguous(self, memory_format="contiguous_format"):
     A Var whose storage already matches its shape is still returned unchanged,
     so the hot ``transpose(...).contiguous()`` path keeps its zero-copy behavior.
 
-    Only the default memory format is supported; ``channels_last`` is rejected
-    rather than silently ignored, which is what torch callers asking for a
-    layout change would otherwise get. The copy is made inside the tensor's own
-    placement scope so it lands on the device the tensor already lives on.
+    Channels-last 3D uses NDHWC storage behind the same NCDHW logical axes.
+    Both copy paths use the tensor's own placement.
     """
+    if memory_format == CHANNELS_LAST_3D:
+        if is_channels_last_3d(self):
+            return self
+        with _new_scope(self, None):
+            return copy_channels_last_3d(self)
     if memory_format not in (None, "contiguous_format"):
-        raise NotImplementedError("contiguous supports contiguous_format")
+        raise NotImplementedError("contiguous supports contiguous_format and channels_last_3d")
     if self._storage_is_contiguous():
         return self
     fast = _FAST_CONTIGUOUS
@@ -2716,6 +2732,8 @@ def _api_is_shared(self):
 
 
 def _api_is_contiguous(self, *a, **k):
+    if k.get("memory_format") == CHANNELS_LAST_3D:
+        return is_channels_last_3d(self)
     return self._storage_is_contiguous()
 
 

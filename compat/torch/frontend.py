@@ -322,21 +322,28 @@ def make_tensor_type(backend):
 def clone(input, *, memory_format=None):
     """Copy Tensor storage through the native copy op, preserving gradients."""
     import jittor as backend
+    from .tensor_layout import CHANNELS_LAST_3D, copy_channels_last_3d
     from .tensor_state import compatibility_owner
     from .types import _var_is_cpu_resident
     if not isinstance(input, backend.Var):
         raise TypeError("clone expects a tensor")
-    if memory_format not in (None, "preserve_format", "contiguous_format"):
-        raise NotImplementedError("clone supports preserve_format and contiguous_format")
+    if memory_format not in (None, "preserve_format", "contiguous_format", CHANNELS_LAST_3D):
+        raise NotImplementedError("clone supports preserve_format, contiguous_format and channels_last_3d")
+
+    def copy_storage():
+        if memory_format == CHANNELS_LAST_3D:
+            return copy_channels_last_3d(input)
+        return backend.Var.copy(input, memory_format != "contiguous_format")
+
     target = compatibility_owner(backend)
     with tensor_frontend(target.Var, like=input):
         if input.placement_backend < 0 and backend.flags.use_cuda and _var_is_cpu_resident(input):
             with backend.flag_scope(use_cuda=0):
-                result = backend.Var.copy(input, memory_format != "contiguous_format")
+                result = copy_storage()
                 result.sync()
                 setattr(result, "_jittor_torch_force_cpu", True)
             return result
-        return backend.Var.copy(input, memory_format != "contiguous_format")
+        return copy_storage()
 
 
 def tensor_make_subclass(cls, data, requires_grad=False):
