@@ -9,6 +9,7 @@ import jittor as _jtm
 import copy as _copy
 import copy as _copy2
 import types as _types_nn_private
+import warnings
 from ...context import get_install_context
 from ...types import _dtype_to_str
 from jittor._runtime.dispatch import try_dispatch as _try_dispatch
@@ -459,6 +460,31 @@ class Softshrink(nn.Module):
 class Hardsigmoid(nn.Module):
     def execute(self, x):
         return _jt.clamp(x + 3, 0, 6) / 6
+
+
+class Hardtanh(nn.Module):
+    def __init__(self, min_val=-1.0, max_val=1.0, inplace=False,
+                 min_value=None, max_value=None):
+        super().__init__()
+        if min_value is not None:
+            warnings.warn("min_value is deprecated; use min_val", FutureWarning, stacklevel=2)
+            min_val = min_value
+        if max_value is not None:
+            warnings.warn("max_value is deprecated; use max_val", FutureWarning, stacklevel=2)
+            max_val = max_value
+        if max_val <= min_val:
+            raise AssertionError(f"max_val ({max_val}) must be greater than min_val ({min_val})")
+        self.min_val = min_val
+        self.max_val = max_val
+        self.inplace = inplace
+
+    def execute(self, input):
+        from .functional import _hardtanh
+        return _hardtanh(input, self.min_val, self.max_val, self.inplace)
+
+    def extra_repr(self):
+        inplace = ", inplace=True" if self.inplace else ""
+        return f"min_val={self.min_val}, max_val={self.max_val}{inplace}"
 
 
 class Identity(nn.Module):
