@@ -11,7 +11,10 @@ TENSOR_PARAMETERS = frozenset({
     "mu", "sigma", "loc", "scale", "low", "high", "concentration",
     "concentration0", "concentration1", "rate", "probs", "logits",
     "p", "temperature", "covariance_matrix",
+    "precision_matrix", "scale_tril",
 })
+
+WISHART_MATRIX_PARAMETERS = ("covariance_matrix", "precision_matrix", "scale_tril")
 
 
 def has_trainable_parameter(value, state, seen=None):
@@ -79,6 +82,8 @@ class DistributionMethod:
             reference = instance.concentration
         elif isinstance(instance, native.Beta):
             reference = instance.concentration1
+        elif isinstance(instance, native.Wishart):
+            reference = instance.scale_tril
         with tensor_frontend(state.tensor_type, like=reference):
             result = _adapter.implementation(*args, **kwargs)
             if (_adapter.implementation.__name__ == "rsample"
@@ -110,8 +115,12 @@ class DistributionConstructor(DistributionMethod):
             kwargs = dict(kwargs)
             if kwargs.pop("validate_args") not in (None, False):
                 raise NotImplementedError("this native distribution does not implement validate_args=True")
-        with tensor_frontend(state.tensor_type):
-            bound = signature.bind(instance, *args, **kwargs)
+        bound = signature.bind(instance, *args, **kwargs)
+        reference = None
+        if original is state.native.Wishart.__init__:
+            matrices = (bound.arguments.get(name) for name in WISHART_MATRIX_PARAMETERS)
+            reference = next((arg for arg in matrices if isinstance(arg, state.tensor_type)), None)
+        with tensor_frontend(state.tensor_type, like=reference):
             if original is state.native.Uniform.__init__:
                 low, high = bound.arguments.get("low"), bound.arguments.get("high")
                 if isinstance(low, (int, float)) and isinstance(high, (int, float)) and high <= low:
