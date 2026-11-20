@@ -122,8 +122,10 @@ class MultivariateNormal(Distribution):
         # dims) -- was: sample_shape alone, which dropped batch dims and produced a
         # matmul/broadcast error for sample_shape != () (and any batched loc).
         import jittor as jt
+        from jittor._core.var import device_scope_like
         shape = _full_shape(sample_shape, self.batch_shape, self.event_shape)
-        eps = jt.randn(shape)
+        with device_scope_like(self.loc):
+            eps = jt.randn(shape, dtype=self.loc.dtype)
         return self.loc + eps.matmul(self._L.transpose(1, 0))
 
     def log_prob(self, value):

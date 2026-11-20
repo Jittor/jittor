@@ -69,11 +69,15 @@ class DistributionMethod:
         return self if instance is None else MethodType(self, instance)
 
     def __call__(_adapter, *args, **kwargs):
-        with tensor_frontend(_adapter.state.tensor_type):
+        state = _adapter.state
+        instance = args[0] if args else kwargs.get("self")
+        multivariate = getattr(state.native, "MultivariateNormal", ())
+        reference = instance.loc if isinstance(instance, multivariate) else None
+        with tensor_frontend(state.tensor_type, like=reference):
             result = _adapter.implementation(*args, **kwargs)
             if (_adapter.implementation.__name__ == "rsample"
-                    and isinstance(result, _adapter.state.tensor_type)
-                    and not has_trainable_parameter(args[0], _adapter.state)):
+                    and isinstance(result, state.tensor_type)
+                    and not has_trainable_parameter(instance, state)):
                 result = result.stop_grad()
             return result
 
