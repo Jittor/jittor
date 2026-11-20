@@ -64,6 +64,7 @@ from .api import (
     _api_cuda_set_rng_state_all,
     _api_cuda_synchronize,
     _api_cudnn_flags,
+    _api_cudnn_is_available,
     _api_cudnn_version,
     _api_functorch_c__add_batch_dim,
     _api_functorch_c__remove_batch_dim,
@@ -410,6 +411,7 @@ def _install_cuda(g, registry=None):
     cudnn.enabled = getattr(cudnn, "enabled", True)
     cudnn.benchmark = getattr(cudnn, "benchmark", False)
     cudnn.deterministic = getattr(cudnn, "deterministic", False)
+    cudnn.is_available = _api_cudnn_is_available
     cudnn.version = getattr(cudnn, "version", _api_cudnn_version)
     if not hasattr(cudnn, "flags"):
         # Bound to this module, so the implementation never has to look

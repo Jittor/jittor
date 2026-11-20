@@ -1624,6 +1624,13 @@ def _api_cudnn_flags(module, enabled=False, benchmark=False, benchmark_limit=10,
                                 "allow_tf32": allow_tf32})
 
 
+def _api_cudnn_is_available():
+    capability = jt.capability.library("cudnn", load=True)
+    if capability.failed:
+        raise RuntimeError(capability.reason)
+    return capability.enabled
+
+
 def _api_cudnn_version():
     return None
 
@@ -1886,6 +1893,7 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",
     _device_name: "Queried per device ordinal from the CUDA driver, cached per ordinal.",
+    _api_cudnn_is_available: "Reports whether the native Jittor cuDNN library is usable.",
     _api_cuda_get_device_capability: "Queried per device ordinal from the CUDA driver; falls back to (8, 0) where the driver query is unavailable.",
     _api_cuda_get_device_properties: "Name, compute capability, total memory, SM count and UUID are real and per ordinal; the remaining fields are class defaults.",
     _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",
