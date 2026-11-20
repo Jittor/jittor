@@ -65,6 +65,11 @@ def module_init(module, *args, **kwargs):
     type(module)._torch_native_module.__init__(module, *args, **kwargs)
 
 
+def register_full_backward_hook(module, hook, prepend=False):
+    """Register a hook receiving this call's positional input and output gradients."""
+    return module._add_hook("_full_backward_hooks", hook, prepend=prepend)
+
+
 def python_module_call(module, *args, **kwargs):
     owner = type(module)._nn_frontend_owner
     # A forward follows its inputs' device; only constructors use the default.
@@ -253,7 +258,7 @@ class NNFrontendOwner:
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
             "_torch_native_module": self.native_module,
             "__setattr__": module_setattr, "__call__": module_call,
-            "__init__": module_init,
+            "__init__": module_init, "register_full_backward_hook": register_full_backward_hook,
         })
         self.adapters = {self.native_module: self.Module}
         self.modules = {}

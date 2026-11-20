@@ -1,5 +1,6 @@
 """Removable hooks and explicit taped-gradient attachment."""
 from jittor_core import Var
+import warnings
 import weakref
 
 
@@ -26,6 +27,87 @@ def grad_hooker(args, hook):
     from .function import GradHooker
     hooker = GradHooker(hook)
     return hooker(*args)
+
+
+class _ModuleBackwardHooks:
+    """Connect the input and output gradient edges for one forward call."""
+
+    def __init__(self, module, hooks):
+        self.module = module
+        self.hooks = hooks
+        self.output_gradients = None
+
+    @staticmethod
+    def _attach(values, indices, hook):
+        if not indices:
+            return values
+        count = len(values)
+
+        def unpack(gradients):
+            slots = [None] * count
+            for index, gradient in zip(indices, gradients):
+                slots[index] = gradient
+            replacements = hook(tuple(slots))
+            if replacements is None:
+                return None
+            return tuple(replacements[index] for index in indices)
+
+        wrapped = list(values)
+        for index, tensor in zip(indices, grad_hooker(tuple(values[i] for i in indices), unpack)):
+            wrapped[index] = tensor
+        if type(values) is tuple:
+            return tuple(wrapped)
+        return type(values)(*wrapped)
+
+    @staticmethod
+    def _differentiable(values):
+        return [i for i, value in enumerate(values)
+                if isinstance(value, Var) and value.requires_grad]
+
+    def wrap_inputs(self, args):
+        self.input_indices = self._differentiable(args)
+        self.input_count = len(args)
+        return self._attach(args, self.input_indices, self._on_inputs)
+
+    def _on_inputs(self, gradients):
+        outputs, self.output_gradients = self.output_gradients, None
+        if outputs is None:
+            return None
+        for hook in self.hooks:
+            replacement = hook(self.module, gradients, outputs)
+            if replacement is None:
+                continue
+            if len(replacement) != self.input_count:
+                raise RuntimeError(
+                    f"Backward hook expected {self.input_count} grad_input entries, "
+                    f"got {len(replacement)}")
+            gradients = replacement
+        return gradients
+
+    def _on_outputs(self, gradients):
+        if self.input_indices:
+            self.output_gradients = gradients
+            return
+
+        warnings.warn("Full backward hook is firing on module outputs because no "
+                      "positional inputs require gradients.", stacklevel=3)
+        inputs = (None,) * self.input_count
+        for hook in self.hooks:
+            replacement = hook(self.module, inputs, gradients)
+            if replacement is not None and not (
+                isinstance(replacement, tuple) and all(item is None for item in replacement)
+            ):
+                raise RuntimeError("Backward hook cannot replace gradients when no "
+                                   "positional input requires gradients")
+
+    def wrap_outputs(self, result):
+        if isinstance(result, Var):
+            return self._attach((result,), self._differentiable((result,)), self._on_outputs)[0]
+        if isinstance(result, tuple):
+            return self._attach(result, self._differentiable(result), self._on_outputs)
+        warnings.warn("Full backward hooks require a Tensor or tuple of Tensors "
+                      "as module output.", stacklevel=3)
+        return result
 
 
 class _TensorGradientHooks:
