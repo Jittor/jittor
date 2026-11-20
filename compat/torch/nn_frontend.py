@@ -126,15 +126,26 @@ def _init_group_norm(native_init, module, num_groups, num_channels, eps=1e-5,
     native_init(module, num_groups, num_channels, eps, affine, is_train)
 
 
+def _init_instance_norm(native_init, module, num_features, eps=1e-5, momentum=0.1,
+                        affine=False, is_train=True, sync=True):
+    native_init(module, num_features, eps, momentum, affine, is_train, sync)
+    if not affine:
+        module.weight = None
+        module.bias = None
+
+
 class LayerInitializer:
     """Descriptor binds one native initializer to one frontend owner."""
     def __init__(self, owner, native):
         self.owner = owner
         self.native = native
         self._group_norm = native is getattr(owner.backend.nn, "GroupNorm", None)
-        self.original = (
-            partial(_init_group_norm, native.__init__) if self._group_norm else native.__init__
-        )
+        if self._group_norm:
+            self.original = partial(_init_group_norm, native.__init__)
+        elif native is getattr(owner.backend.nn, "InstanceNorm", None):
+            self.original = partial(_init_instance_norm, native.__init__)
+        else:
+            self.original = native.__init__
         self.signature = inspect.signature(self.original)
         self.__wrapped__ = self.original
         self.__name__ = "__init__"
