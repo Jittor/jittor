@@ -36,6 +36,7 @@ def test_default_dtype_applies_to_owned_parameters_and_float_buffers(factory, ar
 @pytest.mark.parametrize("factory,args", [
     (torch.nn.Conv2d, (3, 4, 3)),
     (torch.nn.LayerNorm, (4,)),
+    (torch.nn.GroupNorm, (2, 4)),
     (torch.nn.BatchNorm2d, (4,)),
     (torch.nn.MultiheadAttention, (8, 2)),
 ])
@@ -43,6 +44,29 @@ def test_explicit_dtype_overrides_default(factory, args):
     torch.set_default_dtype(torch.float16)
     layer = factory(*args, dtype=torch.float32)
     assert all(value.dtype == torch.float32 for value in layer.parameters())
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_group_norm_constructor_allocates_on_requested_device(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    torch.set_default_dtype(torch.float64)
+    with torch.device("cpu"):
+        layer = torch.nn.GroupNorm(2, 4, device=device, dtype=torch.float32)
+    for parameter in layer.parameters():
+        assert parameter.device.type == device
+        assert parameter.dtype == torch.float32
+        assert parameter.requires_grad
+
+    values = np.arange(8, dtype=np.float32).reshape(1, 4, 2)
+    x = torch.tensor(values, device=device)
+    y = layer(x)
+    assert y.device.type == device and y.dtype == torch.float32
+    groups = values.reshape(1, 2, 4)
+    expected = (groups - groups.mean(-1, keepdims=True)) / np.sqrt(
+        groups.var(-1, keepdims=True) + layer.eps
+    )
+    np.testing.assert_allclose(y.detach().cpu().numpy(), expected.reshape(values.shape), rtol=1e-5)
 
 
 def test_container_constructor_keeps_supplied_modules_and_parameter_identity():
