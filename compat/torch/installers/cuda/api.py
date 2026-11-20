@@ -1016,10 +1016,19 @@ class TorchFunctionMode:
         return func(*args, **(kwargs or {}))
 
 
-#: Per-thread depth of active `torch._C._disabled_torch_function_impl`
-#: calls. While it is positive, no `__torch_function__` override is
-#: consulted, as under torch's `DisableTorchFunctionSubclass`.
+#: Per-thread nesting of disabled subclass overrides.
 _TORCH_FUNCTION_STATE = threading.local()
+
+
+class DisableTorchFunctionSubclass:
+    """Temporarily suppress subclass __torch_function__ overrides."""
+
+    def __enter__(self):
+        state = _TORCH_FUNCTION_STATE
+        state.depth = getattr(state, "depth", 0) + 1
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        _TORCH_FUNCTION_STATE.depth -= 1
 
 
 def _torch_function_override(tp):
@@ -1818,12 +1827,8 @@ def _api_c_mod__disabled_torch_function_impl(func, types, args=(), kwargs=None):
         args = tuple(args)
     elif not isinstance(args, tuple):
         raise TypeError("expected List or Tuple (got %s)" % type(args).__name__)
-    state = _TORCH_FUNCTION_STATE
-    state.depth = getattr(state, "depth", 0) + 1
-    try:
+    with DisableTorchFunctionSubclass():
         return func(*args, **({} if kwargs is None else kwargs))
-    finally:
-        state.depth -= 1
 
 
 def _api_functorch_c_get_unwrapped(x):

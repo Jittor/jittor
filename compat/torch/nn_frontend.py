@@ -338,7 +338,7 @@ def prepare_nn_namespace(context):
     setattr(parameter_module, "ParameterDict", ParameterDict)
     source_parameter_module = getattr(backend.nn, "parameter", None)
     if source_parameter_module is not None:
-        for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer"):
+        for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer", "is_lazy"):
             if name in vars(source_parameter_module):
                 setattr(parameter_module, name, vars(source_parameter_module)[name])
     namespace.parameter = parameter_module
