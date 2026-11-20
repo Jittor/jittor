@@ -2726,6 +2726,10 @@ def _api_is_sparse(self):
     return False
 
 
+def _api_layout(self):
+    return get_install_context(_owner.jt).target_namespace.strided
+
+
 def _api_retains_grad(self):
     return bool(getattr(self, '_torch_retains_grad', False))
 

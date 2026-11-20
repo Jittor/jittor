@@ -50,6 +50,7 @@ from .method_api import (
     _api_is_leaf,
     _api_version,
     _api_is_sparse,
+    _api_layout,
     _api_is_quantized,
     _api_retains_grad,
     _api_is_cpu,
@@ -531,11 +532,14 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     register_api_bindings(Var, 'torch.Tensor', ('_version',), Fidelity.EXACT,
                           'Read the native shared logical-write counter without a Python cache.')
     Var.is_sparse = property(_api_is_sparse)
+    Var.layout = property(_api_layout)
     Var.is_quantized = property(_api_is_quantized)
     register_api_bindings(Var, 'torch.Tensor', ('is_quantized',), Fidelity.EXACT,
                           'Native Var has no quantized tensor storage.')
     register_api_bindings(Var, 'torch.Tensor', ('is_sparse',), Fidelity.EXACT,
                           'Native Var has dense storage; sparse construction is unsupported.')
+    register_api_bindings(Var, 'torch.Tensor', ('layout',), Fidelity.APPROXIMATE,
+                          'Native Var reports the frontend strided layout for dense storage and views.')
     # torch's nested-tensor flag; jittor has no nested tensors -> always False.
     if not hasattr(Var, "is_nested"):
         Var.is_nested = property(_api_is_nested)
