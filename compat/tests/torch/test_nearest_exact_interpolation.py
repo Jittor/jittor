@@ -47,6 +47,20 @@ def test_nearest_exact_differs_from_legacy_nearest_on_an_odd_output_size():
         np.testing.assert_array_equal(legacy.numpy().reshape(-1), [0, 0, 1, 1, 2])
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_legacy_nearest_accepts_per_axis_integer_factors(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    values = np.arange(12, dtype=np.float32).reshape(1, 1, 3, 4)
+    expected = np.repeat(np.repeat(values, 2, axis=2), 3, axis=3)
+    x = torch.tensor(values, device=device, requires_grad=True)
+    result = torch.nn.functional.interpolate(x, scale_factor=(2, 3), mode="nearest")
+    result.sum().backward()
+    assert result.device.type == x.grad.device.type == device
+    np.testing.assert_array_equal(result.detach().cpu().numpy(), expected)
+    np.testing.assert_array_equal(x.grad.cpu().numpy(), np.full(values.shape, 6))
+
+
 def test_half_pixel_index_product_does_not_overflow_for_a_long_skinny_image():
     values = np.arange(65536, dtype=np.float32).reshape(1, 1, 65536, 1)
     with jt.flag_scope(use_cuda=0, use_acl=0), torch.no_grad():
