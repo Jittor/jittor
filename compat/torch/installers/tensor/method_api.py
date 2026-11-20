@@ -599,6 +599,18 @@ def _new_scope(self, device):
     return tensor_frontend(context.target_namespace.Var, device=device, like=self)
 
 
+def _new(self, *args, device=None):
+    target = get_install_context(_owner.jt).target_namespace
+    device = self.device if device is None else target.device(device)
+    if device.type != self.device.type:
+        raise RuntimeError(f"Expected a {self.device.type} device for Tensor.new, got {device}")
+    if len(args) == 1 and isinstance(args[0], _NativeVar):
+        other = args[0]
+        if other.dtype != self.dtype or other.device != device:
+            raise TypeError("Tensor.new expects a tensor with matching dtype and device")
+    return target.Var(*args, dtype=self.dtype, device=device)
+
+
 def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
     dt = _owner._dtype_to_str(dtype) if dtype is not None else _jittor_dtype_name(self.dtype)
     with _new_scope(self, device):
