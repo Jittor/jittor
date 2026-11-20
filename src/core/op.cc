@@ -607,38 +607,48 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // readers count too: an output still asking to share its storage
     // (`share_src`) or one already in its share ring -- a broadcast's expand
     // that has run and left the graph, whose consumer has not.
-    vector<Var*> aliases;
-    unordered_set<Var*> alias_members;
-    auto alias = [&](Var* v) {
-        if (alias_members.insert(v).second) aliases.push_back(v);
-    };
-    for (Var* v : written) alias(v);
     vector<Node*> after;
     unordered_set<Node*> after_members;
     auto push_after = [&](Node* node) {
         if (after_members.insert(node).second) after.push_back(node);
     };
-    for (size_t k = 0; k < aliases.size(); k++) {
-        Var* v = aliases[k];
-        if (v->share_next)
-            for (Var* member = v->share_next; member != v; member = member->share_next)
-                alias(member);
-        for (Op* reader : v->outputs()) {
-            if (reader == op) continue;
-            bool stands_for_reader = false;
-            for (Var* out : reader->outputs()) {
-                if (out->share_src == v) {
-                    alias(out);
-                    continue;
+    {
+        vector<Var*> aliases;
+        TraversalQueueMarks marks("order_after_readers");
+        auto alias = [&](Var* value) {
+            if (marks.contains(value)) return;
+            marks.mark_queued(value);
+            aliases.push_back(value);
+        };
+        for (Var* value : written) alias(value);
+        for (size_t k = 0; k < aliases.size(); ++k) {
+            Var* v = aliases[k];
+            if (v->share_next && !marks.expanded(v)) {
+                // Every member leads to the same ring. Queue it only once,
+                // then visit each member's readers in the original order.
+                for (Var* member = v->share_next; member != v; member = member->share_next) {
+                    alias(member);
+                    marks.mark_expanded(member);
                 }
-                // Kept graphs run only when their replay owner requests them.
-                // Ordering a new write after one would replay an old training
-                // step, including its optimizer update, merely because both
-                // captures share parameters. Still follow storage aliases
-                // above: a new ordinary reader of an alias must be preserved.
-                if (stands_for_reader || out->is_finished() || out->flag(VarFlags::_kept)) continue;
-                stands_for_reader = true;
-                push_after(out);
+                marks.mark_expanded(v);
+            }
+            for (Op* reader : v->outputs()) {
+                if (reader == op) continue;
+                bool stands_for_reader = false;
+                for (Var* out : reader->outputs()) {
+                    if (out->share_src == v) {
+                        alias(out);
+                        continue;
+                    }
+                    // Kept graphs run only when their replay owner requests them.
+                    // Ordering a new write after one would replay an old training
+                    // step, including its optimizer update, merely because both
+                    // captures share parameters. Still follow storage aliases
+                    // above: a new ordinary reader of an alias must be preserved.
+                    if (stands_for_reader || out->is_finished() || out->flag(VarFlags::_kept)) continue;
+                    stands_for_reader = true;
+                    push_after(out);
+                }
             }
         }
     }
