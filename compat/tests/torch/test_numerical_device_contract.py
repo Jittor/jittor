@@ -54,3 +54,15 @@ def test_cdist_shared_embedding_gradient_at_coincident_pairs(device):
         require_residency(tensor, device)
     np.testing.assert_array_equal(distance.detach().cpu().numpy(), [[0., 5., 5.], [5., 0., 0.], [5., 0., 0.]])
     np.testing.assert_allclose(x.grad.cpu().numpy(), [[-2.4, -3.2], [1.2, 1.6], [1.2, 1.6]], rtol=1e-6)
+
+
+@pytest.mark.parametrize("dim", [None, 0, (0,)])
+def test_clamped_l2_norm_has_finite_gradient_at_zero(dim, device):
+    value = torch.zeros((2, 3), device=device, dtype=torch.float32, requires_grad=True)
+    norm = value.norm(dim=dim)
+    (value / norm.clamp(min=1e-4)).sum().backward()
+
+    for tensor in (value, norm, value.grad):
+        require_residency(tensor, device)
+    np.testing.assert_array_equal(norm.detach().cpu().numpy(), np.zeros(tuple(norm.shape)))
+    np.testing.assert_array_equal(value.grad.cpu().numpy(), np.full((2, 3), 1e4))
