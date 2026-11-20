@@ -180,6 +180,36 @@ def test_data_alias_keeps_an_independent_version_counter(device, materialized):
     np.testing.assert_array_equal(values(gradient), [6., 8.])
 
 
+@pytest.mark.parametrize("augmented_assignment", [False, True])
+def test_differentiable_data_alias_update_keeps_parameter_a_leaf(device, augmented_assignment):
+    parameter = torch.nn.Parameter(torch.tensor([6., 10.], device=device))
+    update = torch.tensor([1., 2.], device=device, requires_grad=True)
+    version = parameter._version
+    pointer = parameter.data_ptr()
+    alias = parameter.data
+    with torch.no_grad():
+        earlier = parameter + 1
+    if augmented_assignment:
+        parameter.data -= 2 * update
+    else:
+        alias.sub_(update, alpha=2)
+        assert alias.requires_grad and not alias.is_leaf
+        gradient, = torch.autograd.grad(alias.sum(), update)
+        np.testing.assert_array_equal(values(gradient), [-2., -2.])
+
+    assert parameter.is_leaf and parameter.requires_grad
+    assert parameter._version == version
+    assert alias.data_ptr() == parameter.data_ptr() == pointer
+    np.testing.assert_array_equal(values(parameter), [4., 6.])
+    np.testing.assert_array_equal(values(alias), [4., 6.])
+    np.testing.assert_array_equal(values(earlier), [7., 11.])
+    parameter.requires_grad_(False)
+    parameter.requires_grad_(True)
+    parameter.sum().backward()
+    np.testing.assert_array_equal(values(parameter.grad), [1., 1.])
+    assert update.grad is None
+
+
 def test_data_replacement_preserves_saved_version(device):
     source = torch.tensor([2., 3.], device=device, requires_grad=True)
     loss = (source * source).sum()
