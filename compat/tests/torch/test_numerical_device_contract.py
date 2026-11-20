@@ -43,3 +43,14 @@ def test_cdist_zero_and_infinity_backward_on_device(p, device):
     np.testing.assert_array_equal(result.detach().cpu().numpy(), [[2. if p == 0 else 1.]])
     np.testing.assert_array_equal(left.grad.cpu().numpy(), expected)
     np.testing.assert_array_equal(right.grad.cpu().numpy(), -expected)
+
+
+def test_cdist_shared_embedding_gradient_at_coincident_pairs(device):
+    x = torch.tensor([[0., 0.], [3., 4.], [3., 4.]], device=device, requires_grad=True)
+    distance = torch.cdist(x, x, p=2.)
+    distance.sum().backward()
+
+    for tensor in (distance, x.grad):
+        require_residency(tensor, device)
+    np.testing.assert_array_equal(distance.detach().cpu().numpy(), [[0., 5., 5.], [5., 0., 0.], [5., 0., 0.]])
+    np.testing.assert_allclose(x.grad.cpu().numpy(), [[-2.4, -3.2], [1.2, 1.6], [1.2, 1.6]], rtol=1e-6)
