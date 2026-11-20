@@ -1101,9 +1101,11 @@ def _to(self, *args, **kwargs):
     copy = bool(kwargs.get("copy", False))
     if kwargs.get("memory_format") not in (None, "preserve_format", "contiguous_format"):
         raise NotImplementedError("to supports preserve_format and contiguous_format")
-    # device passed as a keyword (torch's .to(device=..., dtype=...))
+    # The keyword form accepts accelerator indices as well as device objects.
     if "device" in kwargs:
         dev = kwargs["device"]
+        if _owner._is_index(dev):
+            dev = _owner.device(dev)
     # Only the two keywords that can *carry* a device or a dtype join the
     # positional scan. Sweeping every keyword value into it dragged
     # `memory_format="contiguous_format"` through the string branch below,
