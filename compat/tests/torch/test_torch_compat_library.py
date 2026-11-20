@@ -76,7 +76,7 @@ class TestInferSchema(unittest.TestCase):
 
         self.assertIs(_device, torch.device)
         self.assertIs(_dtype, torch.dtype)
-        self.assertEqual(set(get_args(_size)), {torch.Size, list[int], tuple[int, ...]})
+        self.assertEqual(set(get_args(_size)), {torch.Size, List[int], Tuple[int, ...]})
 
     def test_tag_enum_matches_public_torch_contract(self):
         expected = {

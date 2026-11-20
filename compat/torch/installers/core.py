@@ -5,6 +5,8 @@ changing the compatibility semantics.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from typing import List, Tuple, Union
+
 import jittor as jt
 import types as _types_misc
 import numpy as _np
@@ -107,7 +109,7 @@ def install(ctx):
     types_module = make_torch_types_module()
     types_module._device = device
     types_module._dtype = dtype
-    types_module._size = _TorchSize | list[int] | tuple[int, ...]
+    types_module._size = Union[_TorchSize, List[int], Tuple[int, ...]]
     ctx.registry.publish("torch.types", types_module)
 
     # Escape hatch for the APIs this layer refuses to fake.  See
