@@ -34,6 +34,29 @@ def test_str_enum_device_uses_its_public_value():
     np.testing.assert_array_equal(value.numpy(), [1.0, 2.0])
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_tensor_new_preserves_torch_frontend_for_writable_views(device):
+    import torch
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    source = torch.tensor([[1, 2], [3, 4]], dtype=torch.int64, device=device)
+    batch = source.new(torch.Size([2, 3, 4])).fill_(255)
+    assert isinstance(batch, torch.Tensor) and batch.device == source.device
+    assert batch.dtype == source.dtype and not batch.requires_grad
+    first, _ = batch
+    first[..., :2, :2].copy_(source)
+    expected = np.full((2, 3, 4), 255, dtype=np.int64)
+    expected[0, :2, :2] = [[1, 2], [3, 4]]
+    np.testing.assert_array_equal(batch.cpu().numpy(), expected)
+    assert source.new(2, 3).shape == (2, 3)
+    assert source.new().shape == (0,)
+    np.testing.assert_array_equal(source.new((5, 6)).cpu().numpy(), [5, 6])
+    assert source.new(source).data_ptr() == source.data_ptr()
+    with pytest.raises(TypeError, match="matching dtype and device"):
+        source.new(source.float())
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
