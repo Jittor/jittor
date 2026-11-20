@@ -1036,6 +1036,16 @@ Var.transpose = Var.permute = permute = transpose
 def _flatten_cpu(input, start_dim=0, end_dim=-1):
     '''flatten dimentions by reshape'''
     in_shape = input.shape
+    if not in_shape:
+        if start_dim not in (-1, 0):
+            raise IndexError(
+                "Dimension out of range (expected to be in range of [-1, 0], "
+                f"but got {start_dim})")
+        if end_dim not in (-1, 0):
+            raise IndexError(
+                "Dimension out of range (expected to be in range of [-1, 0], "
+                f"but got {end_dim})")
+        return input.reshape([1])
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
     if end_dim < start_dim:

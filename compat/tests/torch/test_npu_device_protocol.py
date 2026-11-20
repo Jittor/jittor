@@ -11,7 +11,9 @@ the device that was selected.
 """
 
 import os
+import random
 
+import numpy as np
 import pytest
 import torch
 
@@ -27,6 +29,8 @@ def test_npu_namespace_refuses_rather_than_inventing_a_device():
         pytest.skip("this is the CPU half; the ACL half is the next case")
     assert torch.npu.is_available() is False
     assert torch.npu.device_count() == 0
+    assert torch.npu.manual_seed(1729) is None
+    assert torch.npu.manual_seed_all(1729) is None
     for operation in (torch.npu.current_device,
                       lambda: torch.npu.set_device(0),
                       torch.npu.synchronize,
@@ -111,6 +115,39 @@ def test_torch_npu_primitives_match_their_definitions():
     # Fused attention is refused, not quietly replaced with an unfused stand-in.
     with pytest.raises(NotImplementedError):
         torch_npu.npu_fusion_attention()
+
+
+@pytest.mark.skipif(os.environ.get("JITTOR_TEST_DEVICES") != "npu",
+                    reason="requires a selected ACL device")
+@pytest.mark.parametrize("api", ["manual_seed", "manual_seed_all"])
+def test_npu_seed_spelling_reseeds_acl_random_ops(api):
+    cpu_state = torch.get_rng_state().numpy().copy()
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    getattr(torch.npu, api)(1729)
+    first = torch.rand(16, device="npu")
+    torch.npu.synchronize()
+    assert first.location() == "device"
+    getattr(torch.npu, api)(1729)
+    second = torch.rand(16, device="npu")
+    torch.npu.synchronize()
+    assert torch.equal(first, second)
+    np.testing.assert_array_equal(torch.get_rng_state().numpy(), cpu_state)
+    assert random.getstate() == python_state
+    after = np.random.get_state()
+    assert after[0] == numpy_state[0] and after[2:] == numpy_state[2:]
+    np.testing.assert_array_equal(after[1], numpy_state[1])
+
+
+@pytest.mark.skipif(os.environ.get("JITTOR_TEST_DEVICES") != "npu",
+                    reason="requires a selected ACL device")
+def test_scalar_flatten_stays_on_acl():
+    scalar = torch.tensor(3, dtype=torch.int32, device="npu")
+    result = scalar.flatten()
+    result.sync()
+    assert tuple(result.shape) == (1,)
+    assert result.location() == "device"
+    assert result.item() == 3
 
 
 @pytest.mark.skipif(os.environ.get("JITTOR_TEST_DEVICES") != "npu",

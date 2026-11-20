@@ -70,6 +70,16 @@ class TestReshapeOp(unittest.TestCase):
         assert a.flatten(1).shape == [2,12]
         assert a.flatten(0,-2).shape == [6,4]
 
+    def test_flatten_scalar_matches_torch_dimension_rules(self):
+        scalar = jt.array(3)
+        for start_dim, end_dim in ((0, -1), (-1, -1), (0, 0), (-1, 0)):
+            flattened = scalar.flatten(start_dim, end_dim)
+            assert flattened.shape == [1]
+            assert flattened.item() == 3
+        for start_dim, end_dim in ((1, -1), (0, 1), (-2, -1)):
+            with self.assertRaises(IndexError):
+                scalar.flatten(start_dim, end_dim)
+
     def test_reshape_var(self):
         a = jt.zeros(10)
         b = a.reshape(a.shape)
