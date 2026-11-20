@@ -190,7 +190,7 @@ std::map<std::tuple<int64, double, bool>, string> layer_norm_sources;
 
 // Keep fixed dictionary keys, never the values: hooks and module attributes
 // may change between calls and must be read from the live dictionary.
-PyObject* hook_keys[4] = {};
+PyObject* hook_keys[5] = {};
 PyObject* fsdp_state_key = nullptr;
 PyObject* threshold_key = nullptr;
 PyObject* call_depth_key = nullptr;
@@ -296,8 +296,9 @@ bool shortcut(PyObject* module, const TypeInfo& info) {
     if (!dict) { PyErr_Clear(); return false; }
     PyObjHolder dict_holder(dict);
     const char* hooks[] = {"_forward_pre_hooks", "_forward_hooks",
-                          "_input_backward_hooks", "_output_backward_hooks"};
-    for (int i = 0; i < 4; ++i) {
+                          "_input_backward_hooks", "_output_backward_hooks",
+                          "_full_backward_hooks"};
+    for (size_t i = 0; i < sizeof(hooks) / sizeof(hooks[0]); ++i) {
         PyObject* table = PyDict_GetItem(dict, interned(hook_keys[i], hooks[i]));
         if (table && PyObject_IsTrue(table)) return false;
     }
