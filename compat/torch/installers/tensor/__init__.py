@@ -1115,6 +1115,8 @@ def install(ctx):
     g._check_tensor_all = _check_tensor_all
     g._check_with = _check_with
     g._assert = _assert
+    from ...fx.node import _side_effectful_functions
+    _side_effectful_functions.add(_assert)
     g._assert_async = _assert_async
     register_api_bindings(g, "torch", ("_assert",), Fidelity.APPROXIMATE,
                           "Eager scalar assertions and TorchFunction dispatch")
