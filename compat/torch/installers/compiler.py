@@ -7,6 +7,7 @@ import jittor as jt
 from ...permissive import install_permissive_package
 from ...transaction import active_transaction
 from ..fidelity import Fidelity, register_fidelity
+from ..library import infer_schema as _api_library_infer_schema
 from ..library import install_torch_library
 from ..context import get_install_context
 from ..context import TransformGetItemToIndex as _TransformGetItemToIndex
@@ -601,6 +602,30 @@ def _api_onnx_is_in_onnx_export():
     return False
 
 
+def _api_onnx_parse_args(*arg_descriptors, **kwargs):
+    return _identity
+
+
+def _api_onnx_parse_arg(value, desc):
+    return value
+
+
+def _api_onnx_register_custom_op_symbolic(symbolic_name, symbolic_fn, opset_version):
+    onnx = _compiler_context().target_namespace.onnx
+    onnx._jittor_custom_symbolics[(symbolic_name, opset_version)] = symbolic_fn
+
+
+class _TensorProtoDataType:
+    FLOAT = 1
+    UINT8 = 2
+    INT8 = 3
+    INT16 = 5
+    INT32 = 6
+    INT64 = 7
+    BOOL = 9
+    DOUBLE = 11
+
+
 def _register_fx_fidelity(graph_module_cls):
     """Record what the FX surface does and does not promise.
 
@@ -721,6 +746,9 @@ def install(ctx):
     # or `import torch._inductor.config` fails outright.
     _inductor_config = _types2.ModuleType("torch._inductor.config")
     _inductor_config.custom_should_partition_ops = []
+    # torchao reads this at module scope and only treats "EXHAUSTIVE" as the
+    # opt-in tuning mode; upstream's default is "DEFAULT".
+    _inductor_config.max_autotune_gemm_search_space = "DEFAULT"
     _inductor_config._config = {}
     _inductor_config.triton = _types2.SimpleNamespace(cudagraphs=False)
     _inductor.config = _inductor_config
@@ -730,6 +758,20 @@ def install(ctx):
     _inductor_utils = _types2.ModuleType("torch._inductor.utils")
     _inductor_utils.fresh_cache = _api_inductor_fresh_cache
     _inductor.utils = _inductor_utils
+    # torch._inductor.decomposition: import-time registration hook for custom
+    # ops whose decompositions inductor would use. No inductor runs behind this
+    # shim, so registering one records nothing and the decorator hands the
+    # function back; torchao calls it while defining its custom ops.
+    _inductor_decomposition = _types2.ModuleType("torch._inductor.decomposition")
+
+    def _inductor_register_decomposition(fn=None, *args, **kwargs):
+        def decorator(function):
+            return function
+        return decorator(fn) if callable(fn) else decorator
+
+    _inductor_decomposition.register_decomposition = _inductor_register_decomposition
+    _inductor.decomposition = _inductor_decomposition
+    _modules["torch._inductor.decomposition"] = _inductor_decomposition
     _modules["torch._inductor.utils"] = _inductor_utils
     _modules["torch._inductor"] = _inductor
     _modules["torch._inductor.custom_graph_pass"] = _custom_graph_pass
@@ -780,6 +822,71 @@ def install(ctx):
         install_permissive_package(_internal, _sys.meta_path,
                                    transaction=transaction,
                                    allow=(_internal + ".*",))
+    # torch.onnx: torchvision's ONNX registration module imports
+    # `symbolic_opset11` (and friends) at module scope. There is no ONNX graph
+    # here; the names are answered so the import completes and registration is
+    # recorded as unsupported.
+    install_permissive_package("torch.onnx", _sys.meta_path,
+                               transaction=transaction,
+                               allow=("torch.onnx.*",))
+    # `torch._library.infer_schema` would otherwise be answered by the
+    # permissive finder above with a stub whose call returns a stub. torchao
+    # calls it at module scope and concatenates the result onto a string, so
+    # publish the parent namespace and give that name its real implementation
+    # from torch.library. The finder still answers every other
+    # `torch._library.*` import.
+    _library_module = _types2.ModuleType("torch._library")
+    _library_module.__path__ = []
+    _modules["torch._library"] = _library_module
+    _library_infer_schema = _types2.ModuleType("torch._library.infer_schema")
+    _library_infer_schema.infer_schema = _api_library_infer_schema
+    _library_module.infer_schema = _library_infer_schema
+    _modules["torch._library.infer_schema"] = _library_infer_schema
+    # torch._prims_common: reference/prim metadata helpers. Libraries import
+    # `suggest_memory_format`, `make_contiguous_strides_for` and the wrapper
+    # `_maybe_convert_to_dtype` at module scope; the answers are layout
+    # arithmetic and do not need a prims interpreter.
+    _prims_common = _types2.ModuleType("torch._prims_common")
+
+    def _prims_suggest_memory_format(tensor):
+        # Decide from the strides: Jittor's is_contiguous ignores the
+        # memory_format argument, so asking it reported channels_last for every
+        # contiguous 4D tensor. The channels-last stride tuple for (N, C, H, W)
+        # is (H*W*C, 1, W*C, C).
+        try:
+            shape = tuple(int(size) for size in tensor.shape)
+            if len(shape) == 4:
+                n, c, h, w = shape
+                strides = tuple(int(step) for step in tensor.stride())
+                if strides == (h * w * c, 1, w * c, c):
+                    return g.channels_last
+        except Exception:
+            pass
+        return g.contiguous_format
+
+    def _prims_make_contiguous_strides_for(shape, memory_format=None):
+        strides = []
+        acc = 1
+        for size in reversed(tuple(shape)):
+            strides.append(acc)
+            acc *= int(size)
+        return tuple(reversed(strides))
+
+    _prims_common.suggest_memory_format = _prims_suggest_memory_format
+    _prims_common.make_contiguous_strides_for = _prims_make_contiguous_strides_for
+    _prims_wrappers = _types2.ModuleType("torch._prims_common.wrappers")
+
+    def _prims_maybe_convert_to_dtype(value, dtype):
+        current = getattr(value, "dtype", None)
+        if current is not None and dtype is not None and current != dtype:
+            return value.to(dtype)
+        return value
+
+    _prims_wrappers._maybe_convert_to_dtype = _prims_maybe_convert_to_dtype
+    _prims_common.wrappers = _prims_wrappers
+    _modules["torch._prims_common"] = _prims_common
+    _modules["torch._prims_common.wrappers"] = _prims_wrappers
+    g._prims_common = _prims_common
     # torch.fx is NOT one of them. Underneath it live real graph analyses and
     # rewrite passes (shape propagation, partitioning, the pass manager); a
     # fabricated one constructs, runs and returns None, which reads as "the
@@ -821,6 +928,11 @@ def install(ctx):
         "torch.jit.trace", trace, Fidelity.APPROXIMATE,
         "Jittor returns the eager callable instead of a traced artifact.")
     _jit.script_if_tracing = _api_jit_script_if_tracing
+    # The private spelling torchvision applies at module scope.
+    _jit._script_if_tracing = _api_jit_script_if_tracing
+    # Script overload decorators are registration-only in eager execution.
+    _jit._overload = lambda fn: fn
+    _jit._overload_method = lambda fn: fn
     _jit.ignore = _api_jit_ignore
     _jit.unused = _api_jit_unused
     _jit.export = _api_jit_export
@@ -1031,8 +1143,20 @@ def install_parity(ctx):
 
     onnx = module("torch.onnx")
     onnx.is_in_onnx_export = _api_onnx_is_in_onnx_export
-
-
+    # These names let libraries register export metadata during import.
+    symbolic_helper = module("torch.onnx.symbolic_helper")
+    symbolic_helper.parse_args = _api_onnx_parse_args
+    symbolic_helper._parse_arg = _api_onnx_parse_arg
+    symbolic_opset11 = module("torch.onnx.symbolic_opset11")
+    symbolic_opset11.unsqueeze = None
+    symbolic_opset11.squeeze = None
+    symbolic_opset11.select = None
+    onnx.symbolic_helper = symbolic_helper
+    onnx.symbolic_opset11 = symbolic_opset11
+    if not hasattr(onnx, "register_custom_op_symbolic"):
+        onnx._jittor_custom_symbolics = {}
+        onnx.register_custom_op_symbolic = _api_onnx_register_custom_op_symbolic
+    _bind_missing(onnx, "TensorProtoDataType", _TensorProtoDataType)
     onnx.export = onnx_export
     onnx.OperatorExportTypes = getattr(
         onnx,

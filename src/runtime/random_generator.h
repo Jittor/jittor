@@ -35,10 +35,13 @@
 
 namespace jittor {
 
+struct TorchCpuNormal;
+
 struct RandomGeneratorState {
     int64 seed_;
     int device_id; // -1 = cpu, >=0 = cuda device ordinal
     std::default_random_engine cpu_engine;
+    shared_ptr<TorchCpuNormal> cpu_torch_normal;
     // Next unreserved position in this generator's CUDA Philox stream, in
     // 32-bit raw values. Advanced by reserve_cuda() at op construction.
     int64 cuda_offset = 0;

@@ -290,6 +290,39 @@ class _RegisteredOp:
         return "%s.%s" % (self.namespace, self.name)
 
 
+class _AtenOpProxy:
+    """An unregistered `torch.ops.aten.<name>` answered by `torch.<name>`.
+
+    Libraries reference aten overloads (`aten.empty_like.default`) while
+    defining wrapper subclasses, and only ever call them; the eager function
+    of the same name is the implementation. Overload attribute access returns
+    this proxy itself, so `.default`, `.Tensor` and `.out` all dispatch to the
+    same function. Method-style ops (`aten.new_zeros.default(t, size)`) have no
+    module-level counterpart and dispatch through the first tensor instead.
+    """
+
+    def __init__(self, name, function):
+        object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_function", function)
+
+    def __call__(self, *args, **kwargs):
+        function = object.__getattribute__(self, "_function")
+        if function is not None:
+            return function(*args, **kwargs)
+        name = object.__getattribute__(self, "_name")
+        if not args or not hasattr(args[0], name):
+            raise AttributeError(
+                "torch.ops.aten.%s has no eager function and no method on its "
+                "first argument" % name)
+        return getattr(args[0], name)(*args[1:], **kwargs)
+
+    def __getattr__(self, overload):
+        return self
+
+    def __repr__(self):
+        return "torch.ops.aten.%s" % object.__getattribute__(self, "_name")
+
+
 class _OpNamespace:
     def __init__(self, namespace):
         object.__setattr__(self, "_namespace", namespace)
@@ -307,6 +340,10 @@ class _OpNamespace:
         ops = object.__getattribute__(self, "_ops")
         if name in ops:
             return ops[name]
+        if object.__getattribute__(self, "_namespace") == "aten":
+            torch_module = _library_state()["torch_module"]
+            function = getattr(torch_module, name, None)
+            return _AtenOpProxy(name, function if callable(function) else None)
         raise AttributeError(
             "torch.ops.%s has no op '%s'" % (object.__getattribute__(self, "_namespace"), name)
         )
@@ -323,6 +360,30 @@ class _OpsDispatcher:
             if namespace not in namespaces:
                 _set_item(namespaces, namespace, _OpNamespace(namespace))
             return namespaces[namespace].get_or_create(name)
+
+    def load_library(self, path, *args, **kwargs):
+        """Report a missing compiled extension the way torch does: ImportError.
+
+        `torch.ops.load_library` loads a libtorch C++ extension, an ABI this
+        compat layer does not implement. It used to fall through `__getattr__`
+        to an empty `_OpNamespace`, so calling it raised `TypeError: object is
+        not callable`; libraries that treat a compiled extension as optional
+        only recover from ImportError/OSError. torchvision's `extension.py`
+        is the case that matters: its `try` block catches those two and falls
+        back to the pure-Python implementation instead of failing the whole
+        import.
+        """
+        base = object.__getattribute__(self, "_base")
+        if base is not None:
+            loader = getattr(base, "load_library", None)
+            if loader is not None:
+                return loader(path, *args, **kwargs)
+        raise ImportError(
+            "torch.ops.load_library(%r): jittor-compat has no libtorch C++ "
+            "extension ABI, so a compiled PyTorch extension cannot be loaded. "
+            "Libraries that keep a pure-Python fallback treat this as an "
+            "optional extension and continue without their compiled ops."
+            % (path,))
 
     def __getattr__(self, name):
         namespaces = object.__getattribute__(self, "_namespaces")
@@ -424,6 +485,7 @@ def custom_op(name=None, fn=None, *args, **kwargs):
     recorded on the operator as ``_overridden_by_integration``.
     """
     def decorator(implementation):
+        namespace = op_name = None
         if isinstance(name, str) and "::" in name:
             namespace, op_name = name.split("::", 1)
             override = _integration_custom_op_overrides().get(name)
@@ -434,9 +496,61 @@ def custom_op(name=None, fn=None, *args, **kwargs):
                 "CompositeExplicitAutograd", override or implementation,
                 allow_override=True
             )
-        return implementation
+        # torch 2.6+ returns a definition object whose methods register the
+        # fake/kernel/autograd parts (`@op.register_fake`). Callers still call
+        # the definition as the eager implementation.
+        return _CustomOpDef(implementation, namespace, op_name)
 
     return decorator(fn) if fn is not None else decorator
+
+
+class _CustomOpDef:
+    """The object `torch.library.custom_op` returns from torch 2.6 on."""
+
+    def __init__(self, implementation, namespace=None, name=None):
+        object.__setattr__(self, "_implementation", implementation)
+        object.__setattr__(self, "_namespace", namespace)
+        object.__setattr__(self, "_name", name)
+
+    def __call__(self, *args, **kwargs):
+        return object.__getattribute__(self, "_implementation")(*args, **kwargs)
+
+    def __getattr__(self, attribute):
+        return getattr(object.__getattribute__(self, "_implementation"), attribute)
+
+    def _qualname(self):
+        namespace = object.__getattribute__(self, "_namespace")
+        name = object.__getattribute__(self, "_name")
+        return "%s::%s" % (namespace, name) if namespace and name else None
+
+    def register_fake(self, fn):
+        qualname = self._qualname()
+        if qualname is not None:
+            register_fake(qualname, fn)
+        return fn
+
+    def register_kernel(self, *args, **kwargs):
+        # register_kernel(dispatch_key) -> decorator, or (dispatch_key, fn).
+        fn = args[-1] if args and callable(args[-1]) else None
+        if fn is not None and len(args) >= 2:
+            qualname = self._qualname()
+            if qualname is not None:
+                impl(qualname, args[0], fn)
+            return fn
+
+        def decorator(function):
+            qualname = self._qualname()
+            if qualname is not None:
+                impl(qualname, args[0], function)
+            return function
+
+        return decorator
+
+    def register_autograd(self, fn):
+        qualname = self._qualname()
+        if qualname is not None:
+            register_autograd(qualname, fn)
+        return fn
 
 
 def register_fake(op, func=None, *, lib=None, **kwargs):
@@ -453,11 +567,22 @@ def register_fake(op, func=None, *, lib=None, **kwargs):
 
 
 def impl(qualname, dispatch_types, func=None, *, lib=None):
+    if not isinstance(qualname, str):
+        # torch 2.6+ call form: `torch.library.impl(lib, name, dispatch_key)`,
+        # used as a decorator. The older form names the library inside the
+        # qualname; torchao registers Meta kernels with the newer one.
+        target_lib, qualname, dispatch_types, func = qualname, dispatch_types, func, None
+        lib = target_lib
+
     def decorator(function):
-        if "::" not in qualname:
+        if "::" in qualname:
+            namespace, name = qualname.split("::", 1)
+            target = lib or Library(namespace, "FRAGMENT")
+        elif lib is not None:
+            target = lib
+            name = qualname
+        else:
             raise ValueError("operator name must have the form namespace::name")
-        namespace, name = qualname.split("::", 1)
-        target = lib or Library(namespace, "FRAGMENT")
         keys = (dispatch_types,) if isinstance(dispatch_types, str) else tuple(dispatch_types)
         for key in keys:
             target.impl(name, function, dispatch_key=key)
@@ -524,8 +649,102 @@ def infer_schema(prototype_function, *, mutates_args, op_name=None):
 register_kernel = impl
 
 
+def wrap_triton(tensor):
+    """torch.library.wrap_triton returns its argument in eager execution.
+
+    The wrapper exists so the compiler can see a triton kernel's tensor
+    arguments; there is no tracing here, so the value is already the answer.
+    """
+    return tensor
+
+
+def _install_dispatch_key_surface(torch_c):
+    """Give `torch._C` the dispatch-key names libraries import.
+
+    torchvision builds the autocast key set at import time and guards a
+    registration with it. Dispatch here is eager and per-operator, so the set
+    only has to support construction, union, iteration and membership, and the
+    guard is a no-op scope.
+    """
+    if hasattr(torch_c, "DispatchKeySet"):
+        return
+
+    class _DispatchKeyValue:
+        def __init__(self, name):
+            self.name = name
+
+        def __repr__(self):
+            return "DispatchKey.%s" % self.name
+
+        def __hash__(self):
+            return hash(("DispatchKey", self.name))
+
+        def __eq__(self, other):
+            return isinstance(other, _DispatchKeyValue) and other.name == self.name
+
+    class DispatchKey:
+        pass
+
+    for _name in ("CPU", "CUDA", "XPU", "HIP", "MPS", "Meta", "Autograd",
+                  "AutogradCPU", "AutogradCUDA", "AutogradXPU", "AutogradOther",
+                  "AutocastCPU", "AutocastCUDA", "AutocastXPU", "Autocast",
+                  "CompositeExplicitAutograd", "CompositeImplicitAutograd",
+                  "BackendSelect", "Python", "FuncTorchBatched", "SparseCPU",
+                  "SparseCUDA", "NestedTensorCPU", "NestedTensorCUDA"):
+        setattr(DispatchKey, _name, _DispatchKeyValue(_name))
+
+    class DispatchKeySet:
+        def __init__(self, *keys):
+            flat = []
+            for key in keys:
+                if isinstance(key, DispatchKeySet):
+                    flat.extend(key._keys)
+                elif key is not None:
+                    flat.append(key)
+            object.__setattr__(self, "_keys", tuple(flat))
+
+        def __or__(self, other):
+            return DispatchKeySet(*(self._keys + tuple(other._keys)))
+
+        def __ror__(self, other):
+            return DispatchKeySet(*(tuple(other._keys) + self._keys))
+
+        def __iter__(self):
+            return iter(self._keys)
+
+        def __contains__(self, key):
+            return key in self._keys
+
+        def __len__(self):
+            return len(self._keys)
+
+        def __bool__(self):
+            return bool(self._keys)
+
+        def __hash__(self):
+            return hash(self._keys)
+
+        def __repr__(self):
+            return "DispatchKeySet(%s)" % ", ".join(repr(k) for k in self._keys)
+
+    class _ExcludeDispatchKeyGuard:
+        def __init__(self, keys=None):
+            self.keys = keys
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    torch_c.DispatchKey = DispatchKey
+    torch_c.DispatchKeySet = DispatchKeySet
+    torch_c._ExcludeDispatchKeyGuard = _ExcludeDispatchKeyGuard
+
+
 def install_torch_library(torch_module, modules):
     """Publish stable API objects and the installation-owned dispatcher."""
+    from ..functional_collectives import install_dispatcher as install_collective_dispatcher
     from .context import get_install_context
     from .fidelity import Fidelity, register_api_bindings
     from ..stub_policy import record_unimplemented
@@ -541,7 +760,8 @@ def install_torch_library(torch_module, modules):
     library_module = ctx.registry.ensure("torch.library")
     for name in ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
                  "register_kernel", "impl", "register_autograd",
-                 "register_torch_dispatch", "register_vmap", "opcheck", "get_ctx"):
+                 "register_torch_dispatch", "register_vmap", "opcheck", "get_ctx",
+                 "wrap_triton"):
         setattr(library_module, name, globals()[name])
     ops_module = ctx.registry.ensure("torch._ops")
     ops_module.OpOverload = _RegisteredOp
@@ -553,10 +773,21 @@ def install_torch_library(torch_module, modules):
     torch_module.library = library_module
     torch_module._ops = ops_module
     torch_module.ops = state["dispatcher"]
+    install_collective_dispatcher(state["dispatcher"])
     torch_module.Tag = Tag
     torch_c = modules.get("torch._C")
-    if torch_c is not None:
-        torch_c.Tag = Tag
+    if torch_c is None:
+        torch_c = ctx.registry.ensure("torch._C")
+        torch_module._C = torch_c
+    torch_c.Tag = Tag
+    _install_dispatch_key_surface(torch_c)
+    # torch._custom_ops: torchvision's meta registrations call `get_ctx()` from
+    # this module. The names map to the library API above.
+    custom_ops_module = ctx.registry.ensure("torch._custom_ops")
+    for _name in ("get_ctx", "infer_schema", "custom_op", "register_fake", "impl"):
+        setattr(custom_ops_module, _name, globals()[_name])
+    torch_module._custom_ops = custom_ops_module
+    modules["torch._custom_ops"] = custom_ops_module
     register_api_bindings(library_module, "torch.library",
                           ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
                            "register_kernel", "impl", "register_autograd"),
@@ -643,9 +874,11 @@ def _schema_type(annotation, function, torch_module, error):
     args = _typing_args(annotation)
     if _is_union(origin):
         number_members = set((int, float, bool))
-        if set(args) == number_members:
-            return "Scalar"
         non_none = tuple(arg for arg in args if arg is not type(None))
+        if set(non_none) == number_members:
+            # `Union[int, float, bool, None]` is `Scalar?`, the optional form of
+            # the plain Scalar union. torchao annotates quant bounds this way.
+            return "Scalar" if len(non_none) == len(args) else "Scalar?"
         if len(non_none) == 1 and len(non_none) != len(args):
             return _schema_type(non_none[0], function, torch_module, error) + "?"
         error("Unsupported type annotation %s." % (annotation,))

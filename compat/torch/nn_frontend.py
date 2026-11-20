@@ -1,6 +1,7 @@
 """Installation-owned NN types; implementation lives outside type factories."""
 import types
 import inspect
+from functools import partial
 
 from jittor._core.dtypes import dtype_name
 from .frontend import _default_tensor_dtype, make_parameter_type, tensor_frontend
@@ -119,12 +120,21 @@ def _first_tensor(owner, args, kwargs):
     return None
 
 
+def _init_group_norm(native_init, module, num_groups, num_channels, eps=1e-5,
+                     affine=True, device=None, dtype=None, *, is_train=True):
+    # The frontend applies device and dtype around the native initializer.
+    native_init(module, num_groups, num_channels, eps, affine, is_train)
+
+
 class LayerInitializer:
     """Descriptor binds one native initializer to one frontend owner."""
     def __init__(self, owner, native):
         self.owner = owner
         self.native = native
-        self.original = native.__init__
+        self._group_norm = native is getattr(owner.backend.nn, "GroupNorm", None)
+        self.original = (
+            partial(_init_group_norm, native.__init__) if self._group_norm else native.__init__
+        )
         self.signature = inspect.signature(self.original)
         self.__wrapped__ = self.original
         self.__name__ = "__init__"
@@ -137,12 +147,13 @@ class LayerInitializer:
         padding_mode = self._take_torch_only_kwargs(kwargs)
         arguments = self.signature.bind_partial(module, *args, **kwargs)
         requested_dtype = arguments.arguments.get("dtype")
+        requested_device = arguments.arguments.get("device") if self._group_norm else None
         external = owner.external_objects(args, kwargs)
         frozen = False
         if self.native.__name__ == "Embedding":
             arguments = inspect.signature(self.original).bind_partial(module, *args, **kwargs)
             frozen = bool(arguments.arguments.get("_freeze", False))
-        with tensor_frontend(owner.tensor_type):
+        with tensor_frontend(owner.tensor_type, device=requested_device):
             previous = vars(module).get("_native_parameter_construction")
             object.__setattr__(module, "_native_parameter_construction", True)
             try:
@@ -338,7 +349,7 @@ def prepare_nn_namespace(context):
     setattr(parameter_module, "ParameterDict", ParameterDict)
     source_parameter_module = getattr(backend.nn, "parameter", None)
     if source_parameter_module is not None:
-        for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer"):
+        for name in ("UninitializedTensorMixin", "UninitializedParameter", "UninitializedBuffer", "is_lazy"):
             if name in vars(source_parameter_module):
                 setattr(parameter_module, name, vars(source_parameter_module)[name])
     namespace.parameter = parameter_module

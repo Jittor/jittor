@@ -758,6 +758,31 @@ class TestOverridesAndDefaults(StubPolicyBase):
 
         self.assertTrue(overrides.has_torch_function((_Sub(),)))
 
+    def test_disable_torch_function_subclass_restores_dispatch(self):
+        from torch._C import DisableTorchFunctionSubclass
+        from torch import overrides
+
+        class _Sub:
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return "intercepted"
+
+        args = (_Sub(),)
+
+        def plain(*args):
+            return "plain"
+
+        self.assertTrue(overrides.has_torch_function(args))
+        with self.assertRaisesRegex(ValueError, "probe"):
+            with DisableTorchFunctionSubclass() as entered:
+                self.assertIsNone(entered)
+                self.assertFalse(overrides.has_torch_function(args))
+                with DisableTorchFunctionSubclass():
+                    self.assertEqual(overrides.handle_torch_function(plain, args, *args), "plain")
+                self.assertFalse(overrides.has_torch_function(args))
+                raise ValueError("probe")
+        self.assertEqual(overrides.handle_torch_function(plain, args, *args), "intercepted")
+
     def test_handle_torch_function_calls_the_override(self):
         import sys
         overrides = sys.modules["torch.overrides"]
@@ -769,6 +794,30 @@ class TestOverridesAndDefaults(StubPolicyBase):
 
         got = overrides.handle_torch_function(lambda *a, **k: "plain", [_Sub()])
         self.assertEqual(got, "intercepted")
+
+    def test_assert_scalar_conditions_and_exception_message(self):
+        self.assertIsNone(torch._assert(True, "success"))
+        with self.assertRaisesRegex(AssertionError, "expected failure"):
+            torch._assert(False, "expected failure")
+
+        devices = ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"]
+        for device in devices:
+            with self.subTest(device=device):
+                condition = torch.tensor(True, device=device)
+                self.assertEqual(condition.device.type, device)
+                self.assertIsNone(torch._assert(condition, "success"))
+                with self.assertRaisesRegex(AssertionError, "tensor condition"):
+                    torch._assert(torch.tensor(False, device=device), "tensor condition")
+
+    def test_assert_delegates_to_torch_function(self):
+        class Condition:
+            @classmethod
+            def __torch_function__(cls, func, types, args=(), kwargs=None):
+                return func, args
+
+        condition = Condition()
+        self.assertEqual(torch._assert(condition, "message"),
+                         (torch._assert, (condition, "message")))
 
     def test_torch_function_mode_is_refused(self):
         import sys
@@ -1134,6 +1183,17 @@ class TestGeneratedUnimplementedList(StubPolicyBase):
         rendered = "\n".join(lines)
         print("\n" + rendered)
         self.assertIn("| API |", rendered)
+
+
+class TestLazyParameterQuery(unittest.TestCase):
+    def test_is_lazy_only_reports_uninitialized_tensors(self):
+        from torch.nn.parameter import Parameter, UninitializedBuffer, UninitializedParameter, is_lazy
+
+        tensor = torch.empty(0)
+        self.assertFalse(is_lazy(tensor))
+        self.assertFalse(is_lazy(Parameter(tensor)))
+        self.assertTrue(is_lazy(UninitializedParameter()))
+        self.assertTrue(is_lazy(UninitializedBuffer()))
 
 
 if __name__ == "__main__":

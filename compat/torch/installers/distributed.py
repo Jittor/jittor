@@ -1014,10 +1014,100 @@ class _Accel:
     type = "cuda" if getattr(jt.compiler, "has_cuda", 0) else "cpu"
 
 
+class _DispatchKeyValue:
+    def __init__(self, name):
+        self.name = name
+
+    def __repr__(self):
+        return "DispatchKey.%s" % self.name
+
+    def __hash__(self):
+        return hash(("DispatchKey", self.name))
+
+    def __eq__(self, other):
+        return isinstance(other, _DispatchKeyValue) and other.name == self.name
+
+
+class _DispatchKey:
+    pass
+
+
+for _dk_name in ("CPU", "CUDA", "XPU", "HIP", "MPS", "Meta", "Autograd",
+                 "AutogradCPU", "AutogradCUDA", "AutogradXPU", "AutogradOther",
+                 "AutocastCPU", "AutocastCUDA", "AutocastXPU", "Autocast",
+                 "CompositeExplicitAutograd", "CompositeImplicitAutograd",
+                 "BackendSelect", "Python", "FuncTorchBatched", "SparseCPU",
+                 "SparseCUDA", "NestedTensorCPU", "NestedTensorCUDA"):
+    setattr(_DispatchKey, _dk_name, _DispatchKeyValue(_dk_name))
+
+
+class _DispatchKeySet:
+    """A set of dispatch keys.
+
+    torchvision builds the autocast key set at import time and guards a
+    registration with it; the compat layer dispatches eagerly, so the set only
+    has to support construction, union, iteration and membership.
+    """
+
+    def __init__(self, *keys):
+        flat = []
+        for key in keys:
+            if isinstance(key, _DispatchKeySet):
+                flat.extend(key._keys)
+            elif key is not None:
+                flat.append(key)
+        object.__setattr__(self, "_keys", tuple(flat))
+
+    def __or__(self, other):
+        return _DispatchKeySet(*(self._keys + tuple(other._keys)))
+
+    def __ror__(self, other):
+        return _DispatchKeySet(*(tuple(other._keys) + self._keys))
+
+    def __iter__(self):
+        return iter(self._keys)
+
+    def __contains__(self, key):
+        return key in self._keys
+
+    def __len__(self):
+        return len(self._keys)
+
+    def __bool__(self):
+        return bool(self._keys)
+
+    def __hash__(self):
+        return hash(self._keys)
+
+    def __repr__(self):
+        return "DispatchKeySet(%s)" % ", ".join(repr(k) for k in self._keys)
+
+
+class _ExcludeDispatchKeyGuard:
+    """Context manager that would exclude keys from dispatch.
+
+    Dispatch here is eager and per-operator; nothing consults a key set, so
+    the guard is a no-op scope.
+    """
+
+    def __init__(self, keys=None):
+        self.keys = keys
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
 class _CNS:
     @staticmethod
     def _get_accelerator():
         return _Accel()
+
+    DispatchKey = _DispatchKey
+    DispatchKeySet = _DispatchKeySet
+    _ExcludeDispatchKeyGuard = _ExcludeDispatchKeyGuard
 
 
 def _api_dist_is_available(*a, **k):

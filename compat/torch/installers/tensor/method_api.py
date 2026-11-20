@@ -78,7 +78,17 @@ def _write_data_owner_numpy(view, value, slices):
         target = target[_numpy_data_value(index)]
     if not getattr(getattr(target, "flags", None), "writeable", True):
         return _assign_data_owner(view, value, (slices,))
-    target[_numpy_data_value(slices)] = _numpy_data_value(value)
+    if _jittor_dtype_name(owner.dtype) == "bfloat16":
+        # Native DataView exposes bfloat16 storage as uint16. Assign the
+        # converted tensor's bits, not the float values returned by numpy().
+        source = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
+        source = source.to("cpu").cast("bfloat16")
+        payload = _native_data_descriptor.__get__(source, Var)
+        if payload.size == 1:
+            payload = payload.reshape(())[()]
+    else:
+        payload = _numpy_data_value(value)
+    target[_numpy_data_value(slices)] = payload
     return True
 
 
@@ -135,6 +145,10 @@ def _assign_data_owner(view, value, extra_path=()):
         target = _orig_getitem(target, index)
 
     updated = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
+    # A basic .data slice write follows the parameter's placement. Weight
+    # loaders often supply CPU checkpoint tensors to accelerator parameters.
+    if _var_is_cpu_resident(updated) and _data_owner_uses_device(owner):
+        updated = _make_cuda_resident(updated, device=owner.device)
     if updated.numel() == 1 and target.numel() != 1:
         updated = updated.broadcast(target.shape)
     for base, index in reversed(bases):
@@ -172,7 +186,25 @@ def _set_data_owner(view, slices, value):
     return _write_data_owner_numpy(view, value, slices)
 
 
+def _try_captured_indexed_store(self, slices, value):
+    if not _owner.jt.core._state_capture_active() or not isinstance(value, _NativeVar):
+        return False
+    if getattr(self, '_torch_data_owner', None) is not None:
+        return False
+    parts = slices if isinstance(slices, tuple) else (slices,)
+    indices, axes = [], []
+    for axis, part in enumerate(parts):
+        if isinstance(part, _NativeVar):
+            indices.append(part)
+            axes.append(axis)
+        elif not (isinstance(part, slice) and part == slice(None)):
+            return False
+    return self._try_indexed_storage_write(value, indices, axes)
+
+
 def _torch_setitem(self, slices, value):
+    if _try_captured_indexed_store(self, slices, value):
+        return self
     slices = _normalize_index_sequence(slices)
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
@@ -321,15 +353,10 @@ def _copy_detached_storage(self, value):
         if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
                 and _owner.jt.core._try_ordered_unaliased_inplace(self, value)):
             return True
-        # Resolve pending readers (including clone snapshots) before changing
-        # bytes. _copy_into owns placement, stream ordering and dense copies.
-        # An optimizer group resolves them once for every parameter instead
-        # (see `_optimizer_write_scope`), and here only materializes the value
-        # whose graph contains this tensor's readers.
-        if _OPTIMIZER_WRITES[0]:
-            value.sync()
-        else:
-            _owner.jt.sync_all()
+        # Native storage writes preserve their own pending readers, including
+        # those of materialized logical views. Publish only this RHS rather
+        # than sweeping unrelated sinks and breaking asynchronous overlap.
+        value.sync(False, False)
         if not self._mem_ptr_now or not value._mem_ptr_now:
             # Still unbuilt after the sync: a call being captured for replay,
             # where the sync runs nothing. Such a tensor has no storage an
@@ -351,7 +378,15 @@ def _copy_detached_storage(self, value):
 
 def _ip(self, value, preserve_storage=False):
     self._check_inplace_autograd()
-    if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
+    data_owner = getattr(self, "_torch_data_owner", None)
+    if (data_owner is not None and not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
+            and (self.requires_grad or value.requires_grad)):
+        # Store into the shared allocation and give the history to the data alias.
+        # Rebinding its owner would attach this history to the parameter.
+        data_owner.sync(False, False)
+        _owner.jt.core._preserve_step_readers([data_owner])
+        return _copy_(self, value)
+    if preserve_storage or data_owner is not None:
         if self.requires_grad and not _owner.jt.flags.no_grad:
             if self.is_leaf:
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
@@ -562,6 +597,18 @@ def _new_scope(self, device):
     from ...frontend import tensor_frontend
     context = get_install_context(_owner.jt)
     return tensor_frontend(context.target_namespace.Var, device=device, like=self)
+
+
+def _new(self, *args, device=None):
+    target = get_install_context(_owner.jt).target_namespace
+    device = self.device if device is None else target.device(device)
+    if device.type != self.device.type:
+        raise RuntimeError(f"Expected a {self.device.type} device for Tensor.new, got {device}")
+    if len(args) == 1 and isinstance(args[0], _NativeVar):
+        other = args[0]
+        if other.dtype != self.dtype or other.device != device:
+            raise TypeError("Tensor.new expects a tensor with matching dtype and device")
+    return target.Var(*args, dtype=self.dtype, device=device)
 
 
 def _new_ones(self, *size, dtype=None, device=None, requires_grad=False, **kw):
@@ -854,6 +901,8 @@ def _drop_trailing_full_slices(data, index):
     if not isinstance(index, tuple) or len(index) < 2:
         return index
     first, rest = index[0], index[1:]
+    if isinstance(first, _NativeVar) and rest[-1] is Ellipsis:
+        rest = rest[:-1]
     if not all(isinstance(item, slice) and item.start is None
                and item.stop is None and item.step is None for item in rest):
         return index
@@ -2695,6 +2744,10 @@ def _api_is_sparse(self):
     # Native Var storage is dense; unsupported sparse factories never produce
     # a Var whose storage this capability query could misclassify.
     return False
+
+
+def _api_layout(self):
+    return get_install_context(_owner.jt).target_namespace.strided
 
 
 def _api_retains_grad(self):

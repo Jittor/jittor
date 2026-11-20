@@ -81,6 +81,7 @@ int main() {
     static_assert(!std::is_copy_constructible<BackendRegistry>::value, "owner");
     auto bad = complete(); bad.abi_version = 0; reject(bad);
     bad = complete(); bad.abi_version = 1; reject(bad);
+    bad = complete(); bad.abi_version = 4; reject(bad);
     bad = complete(); bad.struct_size = 0; reject(bad);
     bad = complete(); bad.struct_size = offsetof(BackendOps, execution); reject(bad);
     bad = complete(); bad.name = nullptr; reject(bad);

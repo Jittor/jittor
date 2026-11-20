@@ -89,6 +89,29 @@ class TestActivations(Base):
                     msg=f"relu6 {dev}")
         both_devices(body)
 
+    def test_hardtanh(self):
+        def body(dev):
+            layer = nn.Hardtanh(-0.5, 1.5)
+            x = torch.tensor([-2.0, -0.5, 0.0, 1.5, 2.0], device=dev, requires_grad=True)
+            y = layer(x)
+            self.assertEqual(y.device.type, dev)
+            self.ac(y.numpy(), [-0.5, -0.5, 0.0, 1.5, 1.5])
+            y.sum().backward()
+            self.ac(x.grad.numpy(), [0.0, 0.0, 1.0, 0.0, 0.0])
+
+            half = torch.tensor([0.5, 0.501], dtype=torch.float16, device=dev, requires_grad=True)
+            F.hardtanh(half, -0.5, 0.5001).sum().backward()
+            self.ac(half.grad.numpy(), [1.0, 0.0])
+
+            integer = torch.tensor([-2, 0, 1, 2], dtype=torch.int8, device=dev)
+            self.assertIs(nn.Hardtanh(-0.5, 1.5, inplace=True)(integer), integer)
+            self.assertEqual(integer.dtype, torch.int8)
+            self.ac(integer.numpy(), [0, 0, 1, 1])
+
+        both_devices(body)
+        with self.assertRaises(AssertionError):
+            nn.Hardtanh(1.0, 1.0)
+
     def test_sigmoid(self):
         x = self.x
         def body(dev):

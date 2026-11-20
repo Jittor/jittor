@@ -71,6 +71,13 @@ class TestInferSchema(unittest.TestCase):
         self.assertIs(torch.SymBool, bool)
         self.assertEqual(torch.types.py_sym_types, (int, float, bool))
 
+    def test_torch_types_tensor_annotation_aliases(self):
+        from torch.types import _device, _dtype, _size
+
+        self.assertIs(_device, torch.device)
+        self.assertIs(_dtype, torch.dtype)
+        self.assertEqual(set(get_args(_size)), {torch.Size, List[int], Tuple[int, ...]})
+
     def test_tag_enum_matches_public_torch_contract(self):
         expected = {
             "core": 0,

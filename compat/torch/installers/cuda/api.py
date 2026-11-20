@@ -1016,10 +1016,19 @@ class TorchFunctionMode:
         return func(*args, **(kwargs or {}))
 
 
-#: Per-thread depth of active `torch._C._disabled_torch_function_impl`
-#: calls. While it is positive, no `__torch_function__` override is
-#: consulted, as under torch's `DisableTorchFunctionSubclass`.
+#: Per-thread nesting of disabled subclass overrides.
 _TORCH_FUNCTION_STATE = threading.local()
+
+
+class DisableTorchFunctionSubclass:
+    """Temporarily suppress subclass __torch_function__ overrides."""
+
+    def __enter__(self):
+        state = _TORCH_FUNCTION_STATE
+        state.depth = getattr(state, "depth", 0) + 1
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        _TORCH_FUNCTION_STATE.depth -= 1
 
 
 def _torch_function_override(tp):
@@ -1624,6 +1633,13 @@ def _api_cudnn_flags(module, enabled=False, benchmark=False, benchmark_limit=10,
                                 "allow_tf32": allow_tf32})
 
 
+def _api_cudnn_is_available():
+    capability = jt.capability.library("cudnn", load=True)
+    if capability.failed:
+        raise RuntimeError(capability.reason)
+    return capability.enabled
+
+
 def _api_cudnn_version():
     return None
 
@@ -1811,12 +1827,8 @@ def _api_c_mod__disabled_torch_function_impl(func, types, args=(), kwargs=None):
         args = tuple(args)
     elif not isinstance(args, tuple):
         raise TypeError("expected List or Tuple (got %s)" % type(args).__name__)
-    state = _TORCH_FUNCTION_STATE
-    state.depth = getattr(state, "depth", 0) + 1
-    try:
+    with DisableTorchFunctionSubclass():
         return func(*args, **({} if kwargs is None else kwargs))
-    finally:
-        state.depth -= 1
 
 
 def _api_functorch_c_get_unwrapped(x):
@@ -1886,6 +1898,7 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cuda_synchronize: "Waits for every device this run touched, which is stronger than torch's per-device synchronize.",
     _api_cuda_can_device_access_peer: "Answered by the CUDA driver for the named pair; raises where the driver cannot be loaded rather than guessing.",
     _device_name: "Queried per device ordinal from the CUDA driver, cached per ordinal.",
+    _api_cudnn_is_available: "Reports whether the native Jittor cuDNN library is usable.",
     _api_cuda_get_device_capability: "Queried per device ordinal from the CUDA driver; falls back to (8, 0) where the driver query is unavailable.",
     _api_cuda_get_device_properties: "Name, compute capability, total memory, SM count and UUID are real and per ordinal; the remaining fields are class defaults.",
     _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",

@@ -13,13 +13,19 @@
 #include "ops/op_register.h"
 #include "ops/composite/op_capability.h"
 #include "runtime/rematerialization_scope.h"
+#include "runtime/rng_state.h"
 
 namespace jittor {
 
 #ifndef JIT
-RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type, RandomGenerator* generator) {
-    #ifdef HAS_ACCELERATOR
+RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type,
+                   RandomGenerator* generator, bool torch_normal) : torch_normal(torch_normal) {
     const auto backend = construction_target_backend();
+    if (torch_normal)
+        USER_CHECK(backend == BackendId::Cpu && type == ns_normal
+                   && (dtype == ns_float32 || dtype == ns_float64))
+            << "Torch CPU normal generation requires a CPU float32 or float64 output";
+    #ifdef HAS_ACCELERATOR
     if (backend != BackendId::Cpu) {
         auto accelerated_random = find_op_capability<VarPtr, NanoVector, NanoString, NanoString, RandomGenerator*>(
             backend, OpCapability::Random, shape, dtype, type, generator);
@@ -53,6 +59,22 @@ void RandomOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void RandomOp::jit_run() {
+    if (torch_normal) {
+        if (!output->num) return;
+        auto& owner = runtime_rng_state();
+        auto& normal = gen ? gen->cpu_torch_normal : owner.host_torch_normal;
+        const uint64 seed = gen ? uint64(gen->seed_) : owner.host_seed;
+        if (rematerialization_preserve_rng && rematerialization_torch_rng) {
+            auto replay = *rematerialization_torch_rng;
+            fill_torch_cpu_normal(replay, output->mem_ptr, output->num, output->dtype() == ns_float64);
+        } else {
+            if (!normal) normal = std::make_shared<TorchCpuNormal>(seed);
+            if (rematerialization_preserve_rng)
+                rematerialization_torch_rng = std::make_shared<TorchCpuNormal>(*normal);
+            fill_torch_cpu_normal(*normal, output->mem_ptr, output->num, output->dtype() == ns_float64);
+        }
+        return;
+    }
     auto* generator = gen ? &gen->cpu_engine : get_random_engine();
     std::default_random_engine replay_engine;
     if (rematerialization_preserve_rng) {

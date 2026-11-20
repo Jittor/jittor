@@ -19,6 +19,7 @@ import numpy as _numpy
 
 from ...functional import _diff, _torch_norm_impl, _torch_where_select, _trapz
 from ...generator import Generator
+from ...context import get_install_context
 
 from ...grad import _GradDecoratorCtx
 
@@ -666,10 +667,9 @@ def from_numpy(arr, *, device=None):
                 and arr.dtype.itemsize <= 8 and arr.dtype.isnative
                 and arr.flags.writeable and arr.flags.c_contiguous
                 and hasattr(arr, '__dlpack__')):
-            # NumPy owns this CPU allocation. DLPack retains that owner, so
-            # both mutation directions and escaped tensor lifetimes work
-            # without copying every image in a DataLoader worker.
-            v = g.Tensor(jt.from_dlpack(arr, copy=False).stop_grad())
+            # A contiguous NumPy CPU array can supply its capsule directly.
+            # The native importer validates it and retains the storage owner.
+            v = jt.core.from_dlpack_capsule(arr.__dlpack__()).stop_grad()
         else:
             v = _array_keep_dtype(arr)
         v.requires_grad_(False)
@@ -1005,6 +1005,14 @@ def _assert_async(t, *args, **kwargs):
     return _check(_check_to_pybool(t), "torch._assert_async failed")
 
 
+def _assert(condition, message):
+    target = get_install_context(jt).target_namespace
+    if type(condition) is not target.Tensor and target.overrides.has_torch_function((condition,)):
+        return target.overrides.handle_torch_function(_assert, (condition,), condition, message)
+    if not condition:
+        raise AssertionError(message)
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -1106,7 +1114,10 @@ def install(ctx):
     g._check_not_implemented = _check_not_implemented
     g._check_tensor_all = _check_tensor_all
     g._check_with = _check_with
+    g._assert = _assert
     g._assert_async = _assert_async
+    register_api_bindings(g, "torch", ("_assert",), Fidelity.APPROXIMATE,
+                          "Eager scalar assertions and TorchFunction dispatch")
 
     # torch.cat: tolerate empty tensors (skip zero-numel inputs) like torch,
     # accept `dim=`/`out=`. jittor's concat trips on an empty leading tensor.

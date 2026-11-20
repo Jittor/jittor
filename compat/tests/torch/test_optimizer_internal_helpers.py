@@ -6,9 +6,19 @@ from torch.optim.optimizer import (
     _disable_dynamo_if_unsupported,
     _get_capturable_supported_devices,
     _get_value,
+    required,
     _stack_if_compiling,
     _view_as_real,
 )
+
+
+def test_required_optimizer_parameter_sentinel_is_importable():
+    assert repr(required) == "<required parameter>"
+
+    def legacy_optimizer_default(lr=required):
+        return lr
+
+    assert legacy_optimizer_default() is required
 
 
 def test_optimizer_internal_helpers_select_supported_eager_path():

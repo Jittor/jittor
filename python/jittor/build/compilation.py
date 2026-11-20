@@ -157,7 +157,9 @@ def compile_custom_ops(
     return_module=False,
     dlopen_flags=None,
     gen_name_ = "",
-    backend=None):
+    backend=None,
+    *,
+    cuda_flags=""):
     """Compile custom ops
     filenames: path of op source files, filenames must be
         pairs of xxx_xxx_op.cc and xxx_xxx_op.h, and the
@@ -165,6 +167,7 @@ def compile_custom_ops(
         beside the header supplies the kernel template; it can also be
         included in filenames, but is never compiled as a host source.
     extra_flags: extra compile flags
+    cuda_flags: additional flags for CUDA source compilation only
     return_module: return module rather than ops(default: False)
     backend: None uses the op class declaration; cpu, accelerator, or both
         explicitly selects the registered backend family for this library.
@@ -246,6 +249,8 @@ def compile_custom_ops(
     }
     stamp_ingredients = _compiler_state.custom_op_build_ingredients(
         gen_name, extra_flags, includes, backend)
+    if cuda_flags:
+        stamp_ingredients["cuda_flags"] = cuda_flags
     if _compiler_state.product_build_is_current(gen_lib, stamp_sources, stamp_ingredients):
         _compiler_state.LOG.v(f"custom op lib {gen_name} is current, skipping build")
         return _compiler_state._import_custom_op_lib(gen_name, dlopen_flags, return_module)
@@ -280,7 +285,10 @@ def compile_custom_ops(
 
     _compiler_state.LOG.vvv(f"Build custum ops lib:{gen_lib}")
     _compiler_state.LOG.vvvv(f"Build sources:{builds}")
-    _compiler_state.compile(_compiler_state.cc_path, extra_flags+_compiler_state.cc_flags+_compiler_state.opt_flags+include_flags, builds, gen_lib)
+    _compiler_state.compile(
+        _compiler_state.cc_path,
+        extra_flags + _compiler_state.cc_flags + _compiler_state.opt_flags + include_flags,
+        builds, gen_lib, cuda_flags=cuda_flags)
 
     # After the compile, so the stamp records the product that exists now. The
     # source signature is the pre-build one on purpose: a source edited during

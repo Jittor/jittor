@@ -13,6 +13,7 @@
 #include "ops/layout_propagation.h"
 #include "core/var.h"
 #include "core/executor.h"
+#include "core/event_queue.h"
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/backend_streams.h"
@@ -146,6 +147,20 @@ PyObject* state_capture_end() {
         // Rebound and back again, or state created inside the capture: a
         // temporary's first Var is not an executed leaf.
         if (holder->var == old || !old->is_finished() || !old->mem_ptr) continue;
+        // A root rebind refreshes its physical view holders as bookkeeping.
+        // They are not independent state: restoring each with _update writes
+        // through the root again, and later replay write-backs can overwrite
+        // the root's new bytes with an alias snapshot. The root owns those
+        // writes and refreshes the aliases when its record is committed.
+        if (holder->view && holder->view->base && holder->view->physical_storage) {
+            auto* base = holder->view->base;
+            auto found = records->find(base);
+            if (found != records->end()) {
+                auto* previous = found->second.ptr;
+                if (base->var != previous && previous->is_finished() && previous->mem_ptr)
+                    continue;
+            }
+        }
         PyObject* holder_obj = GET_OBJ_FROM_RAW_PTR(holder);
         Py_INCREF(holder_obj);
         PyObjHolder item(PyTuple_New(3));
@@ -649,6 +664,17 @@ void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
         backend_copy(var->mem_ptr, destination_device,
                      src->var->mem_ptr, source_device, var->size, true);
         return;
+    }
+    if (destination_device.backend != BackendId::Cpu
+            && destination_device.backend == source_device.backend
+            && destination_device.index == source_device.index) {
+        vector<int64> shape, strides;
+        for (uint d = 0; d < var->shape.size(); ++d) {
+            shape.push_back(var->shape[d]);
+            strides.push_back(var->storage_stride(d));
+        }
+        if (backend_copy_strided_from_dense(var->mem_ptr, src->var->mem_ptr,
+                destination_device, shape, strides, var->dsize())) return;
     }
     // Coalesce the innermost contiguous dimensions. Each run uses the same
     // backend/stream copy as the dense path, without rebinding either holder
@@ -1326,8 +1352,14 @@ bool VarHolder::copy_view_into(VarHolder* src) {
     }
     vector<VarViewStep> target_steps;
     if (view && view->base) target_steps = view->steps;
-    // The caller has drained pending readers. Keep every existing holder and
-    // graph node, preparing the complete write on independent device storage.
+    // Logical views can own distinct physical allocations. Preserve their
+    // pending readers as well as the base before refreshing any of them;
+    // the caller need not publish unrelated holder sinks to protect these.
+    vector<VarHolder*> written{base};
+    for (auto& record : records) written.push_back(record.first);
+    preserve_step_readers(written);
+    // Keep every existing holder and graph node, preparing the complete write
+    // on independent device storage.
     sync(false, false);
     src->sync(false, false);
     validate_logical_copy_alias(this, src);
@@ -1940,6 +1972,81 @@ VarHolder* VarHolder::update_copy_result(VarHolder* value) {
     return this;
 }
 
+bool VarHolder::try_indexed_storage_write(VarHolder* values,
+        vector<VarHolder*>&& indices, NanoVector axes) {
+    if (!state_capture_active() || !no_grad || graph_capture_active()) return false;
+    auto* root = is_view() ? view->base : this;
+    if (!root || (view && !view->physical_storage)) return false;
+    for (auto* sibling = root->views; sibling; sibling = sibling->next)
+        if (!sibling->physical_storage) return false;
+    auto* target = var;
+    auto* source = values->var;
+    const int rank = target->shape.size();
+    const int count = indices.size();
+    const auto dtype = target->dtype();
+    if (rank <= 0 || rank > 16 || count <= 0 || count > rank || count != axes.size()
+            || axes[0] != 0 || (dtype != ns_float32 && dtype != ns_bfloat16)
+            || source->dtype() != dtype
+            || !source->is_contiguous() || source->shape.size() != rank - count + 1
+            || construction_target_backend(target) != BackendId::Cuda
+            || construction_target_backend(source) != BackendId::Cuda) return false;
+
+    auto canonical = [](Var* value) {
+        while (value->share_src) value = value->share_src;
+        return value;
+    };
+    auto* allocation = canonical(root->var);
+    if (!allocation->mem_ptr) return false;
+    auto may_alias = [&](Var* value) {
+        if (canonical(value) == allocation || value->shares_allocation_with(allocation)) return true;
+        if (value->mem_ptr) {
+            const uintptr_t begin = reinterpret_cast<uintptr_t>(allocation->mem_ptr);
+            const uintptr_t end = begin + allocation->storage_span_bytes();
+            const uintptr_t candidate = reinterpret_cast<uintptr_t>(value->mem_ptr);
+            return candidate < end && candidate + value->storage_span_bytes() > begin;
+        }
+        // These pending producers can become storage aliases during graph
+        // optimization. Keep them on the ordinary assignment path.
+        auto* producer = value->input();
+        return producer && (producer->is_storage_view()
+            || producer->is_op(op_ids::getitem()) || producer->is_op(op_ids::setitem()));
+    };
+    if (may_alias(source)) return false;
+    const int64 rows = indices[0]->var->num;
+    if (!rows || source->shape[0] != rows || !source->num) return false;
+    vector<bool> indexed(rank, false);
+    vector<Var*> native_indices;
+    for (int i = 0; i < count; ++i) {
+        const int axis = axes[i];
+        auto* index = indices[i]->var;
+        if (axis < 0 || axis >= rank || (i && axes[i-1] >= axis)
+                || index->shape.size() != 1 || index->num != rows || !index->is_contiguous()
+                || (index->dtype() != ns_int32 && index->dtype() != ns_int64)
+                || construction_target_backend(index) != BackendId::Cuda || may_alias(index)) return false;
+        indexed[axis] = true;
+        native_indices.push_back(index);
+    }
+    vector<std::pair<int64, int64>> layout;
+    int dimension = 1;
+    for (int i = 0; i < rank; ++i) {
+        const int64 stride = target->storage_stride(i);
+        if (stride < 0 || (!indexed[i] && source->shape[dimension++] != target->shape[i])) return false;
+        if (target->shape[i] > 1) layout.emplace_back(stride, target->shape[i]);
+    }
+    std::sort(layout.begin(), layout.end());
+    int64 extent = 1;
+    for (auto item : layout) {
+        if (item.first < extent) return false;
+        extent = item.first * item.second;
+    }
+    check_inplace_autograd();
+    static auto make_store = op_constructor<VarPtr, Var*, Var*, Var*, vector<Var*>&&, NanoVector>(
+        "indexed_storage_write");
+    auto updated = make_store(root->var, target, source, move(native_indices), axes);
+    *root = move(updated);
+    return true;
+}
+
 VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
     if (!logical_write) {
         ExecutorEntryScope entry;
@@ -2195,6 +2302,16 @@ void sync_all(bool device_sync) {
         vars.push_back(v.ptr);
     graph_check();
     runtime_executor().run_sync(vars, device_sync); //need sync at last
+    #ifdef HAS_ACCELERATOR
+    if (!device_sync) {
+        // A ready fetch callback must progress even when no pending graph
+        // remains. run_sync drains callbacks after a device wait; an async
+        // caller deliberately avoids that wait and may otherwise poll forever.
+        // CUDA enqueues these callbacks only after its transfer completes.
+        ExecutorEntryScope entry;
+        event_queue.flush();
+    }
+    #endif
     graph_check();
 }
 

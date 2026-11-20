@@ -107,6 +107,24 @@ Targeted tests are in `tests/core/test_storage_strides.py` and
 reduction / indexing that follows it, allocation budgets, assignment refresh, NumPy export,
 positive-stride storage offsets, dense library boundaries and gradients.
 
+## Storage copies that preserve layout
+
+`Var._copy_into` validates dtype, byte count, destination layout and overlap before
+preserving the allocation, views and mutation version. A noncontiguous source is
+materialized as a dense snapshot first. For a dense source and a strided destination
+on the same CUDA device, the backend launches one bit-preserving kernel on the compute
+stream using native strides, avoiding a copy-stream transition for every contiguous
+run. Cross-device copies and backends without this optional callback retain the
+contiguous-run path.
+
+This is a storage-write primitive: its caller must still resolve previous readers.
+Ordinary callers should use public APIs such as `Tensor.copy_` for complete in-place
+semantics. Regression entry points are
+`compat/tests/torch/test_strided_storage_copy_kernel.py` and
+`compat/tests/torch/test_tensor_copy_strided.py`, covering bit preservation, untouched
+regions and the existing view, gradient and alias contracts. The backend callback
+table ABI is 5; existing binary providers need rebuilding.
+
 ## Explicit asynchronous storage copies
 
 Offloaders that manage execution order explicitly can use
@@ -145,3 +163,13 @@ lifetime during transfers and independent waits. Device acceptance and
 performance records belong in [PR #18149](https://github.com/Jittor/jittor/pull/18149).
 Core and backend maintainers should rerun the relevant device cases when
 allocation ownership, stream dependencies or alias rules change.
+
+## Readers of in-place copies
+
+Before writing storage, core materializes only its pending readers. Refreshing logical views
+with independent physical buffers also protects the base and those views' readers. The
+compatibility layer submits only the right-hand value, without sweeping unrelated tensor
+graphs. Ordinary users obtain complete in-place semantics through public APIs such as
+`Tensor.copy_`. Regression entry point `compat/tests/torch/test_tensor_copy_strided.py`
+covers old snapshots, logical view refresh, gradients and unrelated graphs remaining pending;
+`test_tensor_inplace_storage.py` covers the other in-place operators.

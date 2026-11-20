@@ -75,9 +75,12 @@ def _inference_filter(x, weight, groups):
     moved = state.get(_FILTER_OHWI)
     if moved is not None and moved[0] == weight.var_ptr:
         return moved[1], "ohwi"
+    from jittor.autograd.checkpoint import _rematerializing
     from jittor._runtime import step_capture
+    # The checkpoint forward also runs under no_grad, but it must leave the
+    # captured weight and its version intact until backward.
     if (not channels_last_filters or not weight.is_finished
-            or step_capture.tracing() or jt.flags.keep_graph):
+            or step_capture.tracing() or jt.flags.keep_graph or _rematerializing.get()):
         return weight, "oihw"
     dense = weight.transpose(0, 2, 3, 1).clone()
     with jt.flag_scope(transpose_storage_view=1):

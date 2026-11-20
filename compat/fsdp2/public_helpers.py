@@ -3,6 +3,7 @@ import contextlib
 import enum
 
 from . import api, common, compat_types, shard
+from ..functional_collectives import AsyncCollectiveTensor
 from ..torch.fidelity import Fidelity, register_fidelity
 
 
@@ -65,18 +66,6 @@ def reduce_scatter(tensor, *args, **kwargs):
 def is_available(*args, **kwargs):
     """Compatibility namespace availability, not communicator readiness."""
     return True
-
-
-class AsyncCollectiveTensor:
-    """Legacy completed-value wrapper; this does not schedule asynchronous work."""
-    def __init__(self, tensor=None):
-        self.tensor = tensor
-
-    def wait(self):
-        return self.tensor
-
-    def __getattr__(self, name):
-        return getattr(self.tensor, name)
 
 
 def offload_wrapper(module, *args, **kwargs):

@@ -34,6 +34,29 @@ def test_str_enum_device_uses_its_public_value():
     np.testing.assert_array_equal(value.numpy(), [1.0, 2.0])
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_tensor_new_preserves_torch_frontend_for_writable_views(device):
+    import torch
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    source = torch.tensor([[1, 2], [3, 4]], dtype=torch.int64, device=device)
+    batch = source.new(torch.Size([2, 3, 4])).fill_(255)
+    assert isinstance(batch, torch.Tensor) and batch.device == source.device
+    assert batch.dtype == source.dtype and not batch.requires_grad
+    first, _ = batch
+    first[..., :2, :2].copy_(source)
+    expected = np.full((2, 3, 4), 255, dtype=np.int64)
+    expected[0, :2, :2] = [[1, 2], [3, 4]]
+    np.testing.assert_array_equal(batch.cpu().numpy(), expected)
+    assert source.new(2, 3).shape == (2, 3)
+    assert source.new().shape == (0,)
+    np.testing.assert_array_equal(source.new((5, 6)).cpu().numpy(), [5, 6])
+    assert source.new(source).data_ptr() == source.data_ptr()
+    with pytest.raises(TypeError, match="matching dtype and device"):
+        source.new(source.float())
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
@@ -348,3 +371,44 @@ def test_unique_counts_inherit_explicit_input_placement(source, ambient, by_row)
         np.testing.assert_array_equal(values.numpy(), want[0])
         np.testing.assert_array_equal(inverse.numpy().reshape(want[1].shape), want[1])
         np.testing.assert_array_equal(counts.numpy(), want[2])
+
+
+
+def test_parameter_data_slice_copies_cpu_checkpoint_weight_to_cuda():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime(), jt.flag_scope(backend_fallback="error"):
+        parameter = torch.nn.Parameter(torch.zeros((4, 3), dtype=torch.bfloat16, device="cuda"))
+        before = torch.arange(12, dtype=torch.float32, device="cpu").reshape(4, 3)
+        weight = before.to(torch.bfloat16)
+        data = parameter.data
+        data[1:3, ...] = weight[1:3, ...]
+        jt.sync([parameter, data, weight], device_sync=True)
+
+        assert parameter.requires_grad and not data.requires_grad
+        assert parameter.device.type == "cuda" and parameter.location() == "device"
+        assert data.device == parameter.device and data.location() == "device"
+        _cpu(weight)
+        expected = [[0., 0., 0.], [3., 4., 5.], [6., 7., 8.], [0., 0., 0.]]
+        np.testing.assert_array_equal(parameter.cpu().float().numpy(), expected)
+        np.testing.assert_array_equal(data.cpu().float().numpy(), expected)
+        np.testing.assert_array_equal(weight.float().numpy(), before.numpy())
+
+
+
+def test_cuda_boolean_index_with_trailing_ellipsis_matches_mask_assignment():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime(), jt.flag_scope(backend_fallback="error"):
+        value = torch.arange(12, dtype=torch.float32, device="cuda").reshape(3, 2, 2)
+        mask = torch.tensor([True, False, True], dtype=torch.bool, device="cuda")
+        value[mask, ...] = 0
+        jt.sync([value], device_sync=True)
+
+        assert value.location() == "device"
+        np.testing.assert_array_equal(value[mask, ...].cpu().numpy(), np.zeros((2, 2, 2)))
+        np.testing.assert_array_equal(value.cpu().numpy(), [
+            [[0, 0], [0, 0]], [[4, 5], [6, 7]], [[0, 0], [0, 0]],
+        ])

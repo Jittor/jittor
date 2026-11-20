@@ -1,5 +1,6 @@
 """Complete legacy CPU RNG decoding during CUDA checkpoint recovery."""
 import unittest
+import jittor as jt
 import numpy as np
 import torch
 
@@ -8,18 +9,24 @@ class TestLegacyCPURNGState(unittest.TestCase):
     def test_legacy_complete_cpu_state_restores_stream_and_preserves_cuda(self):
         # JTCPU1 checkpoints stored the signed 32-bit seed and the complete
         # default_random_engine stream before the runtime RNG API refactor.
+        # Build and verify the old payload using the legacy native sampler.
+        # The Torch normal stream was not present in a JTCPU1 checkpoint.
+        def legacy_normal(length):
+            with jt.runtime.scope(use_cuda=0):
+                return jt.random((length,), dtype="float32", type="normal").numpy().copy()
+
         for seed in (317, -1):
             with self.subTest(seed=seed):
                 torch.manual_seed(seed)
                 torch.rand(13, device="cpu").numpy()
-                torch.randn(7, device="cpu").numpy()
+                legacy_normal(7)
                 state = torch.get_rng_state()
                 fields = state.numpy().tobytes().decode("ascii").split()
                 self.assertEqual(fields[:3], ["JITTOR_RNG_1", "cpu", "0"])
                 legacy = ("JTCPU1 " + str(seed) + " " + " ".join(fields[7:])).encode("ascii")
                 saved = torch.tensor(list(legacy), dtype=torch.uint8, device="cpu")
                 expected = (torch.rand(9, device="cpu").numpy().copy(),
-                            torch.randn(5, device="cpu").numpy().copy())
+                            legacy_normal(5))
                 cuda = (torch.cuda.get_rng_state().numpy().copy()
                         if torch.cuda.is_available() else None)
                 torch.set_rng_state(saved)
@@ -27,7 +34,7 @@ class TestLegacyCPURNGState(unittest.TestCase):
                 if cuda is not None:
                     np.testing.assert_array_equal(torch.cuda.get_rng_state().numpy(), cuda)
                 actual = (torch.rand(9, device="cpu").numpy().copy(),
-                          torch.randn(5, device="cpu").numpy().copy())
+                          legacy_normal(5))
                 for value, reference in zip(actual, expected):
                     np.testing.assert_array_equal(value, reference)
 

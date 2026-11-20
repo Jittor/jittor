@@ -36,6 +36,14 @@ class TestRegistrationOrder(unittest.TestCase):
         self.assertEqual([name for name, _ in _Late().named_children()],
                          ["first", "last", "middle"])
 
+    def test_module_list_named_children_omits_none_placeholders(self):
+        child = nn.Identity()
+        layers = nn.ModuleList([None, child, None])
+
+        self.assertEqual(list(layers), [None, child, None])
+        self.assertEqual(list(layers.named_children()), [("1", child)])
+        self.assertEqual(list(layers.children()), [child])
+
     def test_rebinding_a_submodule_keeps_its_place(self):
         model = _Late()
         model.first = nn.Linear(2, 2)

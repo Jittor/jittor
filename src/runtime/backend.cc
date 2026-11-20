@@ -84,6 +84,16 @@ void backend_copy_async(void* dst, Device dst_device, const void* src,
     backend_ops(id).copy_async(dst, dst_device, src, src_device, size, stream);
 }
 
+bool backend_copy_strided_from_dense(void* dst, const void* src, Device device,
+                                    const vector<int64>& shape,
+                                    const vector<int64>& strides, size_t item_size) {
+    const auto copy = backend_ops(device.backend).copy_strided_from_dense;
+    if (!copy) return false;
+    USER_CHECK(shape.size() == strides.size() && item_size)
+        << "Invalid strided storage copy descriptor";
+    return copy(dst, src, device, shape.data(), strides.data(), int(shape.size()), item_size);
+}
+
 void backend_synchronize(Device device) {
     USER_CHECK(device.index >= 0 && device.index < 64) << "Invalid synchronization device";
     backend_ops(device.backend).synchronize(1ull << device.index);

@@ -3,6 +3,7 @@
 import sys
 import types
 
+from .. import functional_collectives
 from . import (
     _context_parallel, api, common, compat_types, config, dtensor, grad_sync,
     optimizer, shard, public_helpers,
@@ -183,6 +184,8 @@ def install_with_registry(dist, torch_module=None, registry=None):
     comp_fsdp_mod._fsdp_api = comp_fsdp_api_mod
     dist._functional_collectives = functional_collectives_mod
 
+    functional_collectives.install(functional_collectives_mod)
+
     exports = {}
     for owner, names in (
         (dtensor, (
@@ -303,7 +306,6 @@ def install_with_registry(dist, torch_module=None, registry=None):
     dist.DeviceMesh = exports["DeviceMesh"]
     dist.init_device_mesh = exports["init_device_mesh"]
     dist.is_available = public_helpers.is_available
-    functional_collectives_mod.AsyncCollectiveTensor = public_helpers.AsyncCollectiveTensor
 
     checkpoint_wrapper_mod.checkpoint_wrapper = compat_types._checkpoint_wrapper
     checkpoint_wrapper_mod.apply_activation_checkpointing = (

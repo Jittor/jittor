@@ -168,7 +168,7 @@ def _amp_array_preference(ret):
         return ret if _jittor_dtype_name(ret.dtype) == "float16" else ret.float16()
     return ret
 
-def random(shape, dtype="float32", type="uniform", generator=None):
+def random(shape, dtype="float32", type="uniform", generator=None, *, _torch_normal=False):
     ''' Constructs a random jittor Var.
 
     :param shape: The shape of the random Var.
@@ -202,7 +202,8 @@ def random(shape, dtype="float32", type="uniform", generator=None):
     # explicit generator's state: only the global stream is captured.
     ret = _captured_draw(shape, draw, type) if generator is None else None
     if ret is None:
-        ret = ops.random(shape, draw, type, generator)
+        ret = (ops.random(shape, draw, type, generator, True) if _torch_normal
+               else ops.random(shape, draw, type, generator))
     if draw != name:
         # The CPU and accelerator random engines generate standard floating
         # types; low-precision outputs use their regular cast kernels.
@@ -1036,6 +1037,16 @@ Var.transpose = Var.permute = permute = transpose
 def _flatten_cpu(input, start_dim=0, end_dim=-1):
     '''flatten dimentions by reshape'''
     in_shape = input.shape
+    if not in_shape:
+        if start_dim not in (-1, 0):
+            raise IndexError(
+                "Dimension out of range (expected to be in range of [-1, 0], "
+                f"but got {start_dim})")
+        if end_dim not in (-1, 0):
+            raise IndexError(
+                "Dimension out of range (expected to be in range of [-1, 0], "
+                f"but got {end_dim})")
+        return input.reshape([1])
     start_dim = len(in_shape) + start_dim if start_dim < 0 else start_dim
     end_dim = len(in_shape) + end_dim if end_dim < 0 else end_dim
     if end_dim < start_dim:

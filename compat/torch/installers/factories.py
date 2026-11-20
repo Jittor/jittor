@@ -57,8 +57,8 @@ _FACTORY_FIDELITY_DETAIL = (
     "some Torch layout, pin-memory, out, or generator-state semantics"
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
-    "preserves input shape, dtype, device and leaf-gradient options but "
-    "approximates or omits Torch layout, pin-memory and memory-format semantics"
+    "preserves shape, dtype, device, leaf-gradient options and dense storage order. "
+    "It honors contiguous_format. Other layouts and pin-memory options are approximate."
 )
 
 
@@ -84,6 +84,8 @@ def _invoke_factory(name, args, kwargs):
         raise RuntimeError("torch.%s is not installed" % name)
     from ..frontend import tensor_frontend
     like = args[0] if args and (name.endswith("_like") or name in _TENSOR_FIRST_ARGUMENT) else None
+    if name == "randn_like" and not args:
+        like = kwargs.get("input", kwargs.get("x"))
     if name == "normal":
         mean = kwargs.get("mean", args[0] if args else None)
         std = kwargs.get("std", args[1] if len(args) > 1 else None)
@@ -237,8 +239,23 @@ def _factory_implementation(value):
     return value
 
 
-def _allocate_empty_like(input):
-    return jt.empty(input.shape, dtype=input.dtype)
+def _allocate_empty_like(input, dtype=None, preserve_layout=True):
+    shape = tuple(input.shape)
+    dtype = input.dtype if dtype is None else dtype
+    if preserve_layout and not input._storage_is_contiguous():
+        strides = input._storage_strides()
+        # Torch densifies a strided slice in its physical axis order. The
+        # dimension order matters even when the source has gaps between rows.
+        if all(size <= 1 or stride > 0 for size, stride in zip(shape, strides)):
+            order = sorted(range(len(shape)), key=lambda axis: (strides[axis], shape[axis]),
+                           reverse=True)
+            if order != list(range(len(shape))):
+                inverse = [0] * len(order)
+                for position, axis in enumerate(order):
+                    inverse[axis] = position
+                storage = jt.empty([shape[axis] for axis in order], dtype=dtype)
+                return storage._storage_permute(jt.NanoVector(inverse))
+    return jt.empty(shape, dtype=dtype)
 
 
 def _copy_like(input):
@@ -279,7 +296,10 @@ def _empty_like_implementation(input, **kwargs):
         # device the factory call requested.
         device = kwargs.pop("device", None)
         return _materialize_meta_like(input, device, **kwargs)
-    return _constructor_adapter("empty_like", _allocate_empty_like, False, input, **kwargs)
+    factory = _allocate_empty_like
+    if kwargs.get("memory_format") not in (None, "preserve_format"):
+        factory = functools.partial(factory, preserve_layout=False)
+    return _constructor_adapter("empty_like", factory, True, input, **kwargs)
 
 
 def _install_empty_like(root):
@@ -321,6 +341,41 @@ def _creates_fresh_leaf(name, args, kwargs):
         values = args[:2] + (kwargs.get("mean"), kwargs.get("std"))
         return not any(isinstance(value, jt.Var) for value in values)
     return False
+
+
+def _torch_cpu_normal_available(dtype):
+    if _dtype_to_str(dtype) not in ("float32", "float64"):
+        return False
+    placement = jt.core._current_tensor_placement()
+    return placement[0] == 0 if placement is not None else not jt.flags.use_cuda
+
+
+def _implicit_torch_cpu_normal(name, original, args, kwargs, default_dtype):
+    """Use the native compat stream inside the established factory scope."""
+    if name not in ("randn", "randn_like") or original is not getattr(_native_creation, name):
+        return None
+    if name == "randn_like":
+        if not args and set(kwargs) - {"dtype", "input", "x"}:
+            return None
+        if args and (len(args) != 1 or set(kwargs) - {"dtype"}):
+            return None
+        reference = args[0] if args else kwargs.get("input", kwargs.get("x"))
+        if not isinstance(reference, jt.Var):
+            return None
+        shape = reference.shape
+        dtype = kwargs.get("dtype", reference.dtype)
+    else:
+        if set(kwargs) - {"dtype"} or not args:
+            return None
+        shape = _shape_tuple(args[0]) if len(args) == 1 else None
+        if shape is None and all(_is_dim(arg) for arg in args):
+            shape = args
+        if shape is None:
+            return None
+        dtype = kwargs.get("dtype", default_dtype)
+    if not _torch_cpu_normal_available(dtype):
+        return None
+    return jt.random(shape, _dtype_to_str(dtype), "normal", _torch_normal=True)
 
 
 def _draw_inputs_require_grad(args, kwargs):
@@ -381,16 +436,20 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         out._jittor_torch_ext_mutable = True
         return out
     g = get_install_context(jt).target_namespace
-    # ACL adapters call jt.empty thousands of times; keep the FP32 fast path.
-    if (name == "empty" and not kwargs and args and
-            g.get_default_dtype() == g.float32 and
-            (len(args) == 1 or all(type(dim) is int for dim in args))):
+    if (name == "empty" and orig is _native_creation.empty and _accepts_dtype
+            and args and (len(args) == 1 or all(type(dim) is int for dim in args))
+            and kwargs.keys() <= {"device", "dtype", "requires_grad"}
+            and kwargs.get("requires_grad", False) is False):
         shape = args[0]
         native_shape = isinstance(shape, jt.NanoVector) or type(shape) is int
         if type(shape) in (tuple, list):
             native_shape = all(type(dim) is int for dim in shape)
         if native_shape:
-            out = orig(*args)
+            # EmptyOp creates independent uninitialized storage with the exact
+            # dtype. Mark its holder directly to avoid a second detached alias.
+            dtype = kwargs.get("dtype")
+            dtype = _dtype_to_str(g.get_default_dtype() if dtype is None else dtype)
+            out = orig(*args, dtype=dtype)
             out._jittor_torch_ext_mutable = True
             out.requires_grad_(False)
             return out
@@ -491,7 +550,11 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
     elif _cast_to in _COMPLEX_COMPONENTS and name == "normal":
         _complex_normal_refusal()
     else:
-        out = orig(*args, **kwargs)
+        out = None
+        if name in ("randn", "randn_like"):
+            out = _implicit_torch_cpu_normal(name, orig, args, kwargs, g.get_default_dtype())
+        if out is None:
+            out = orig(*args, **kwargs)
     # Typed factories can already return the requested dtype. A final cast
     # should convert values, rather than repeat frontend dispatch unchanged.
     if (_cast_to is not None and
@@ -706,7 +769,10 @@ def _draw_from_generator(name, generator, args, kwargs):
             t = _complex_random(name, shape, cast_to, generator=native)
         else:
             distribution = "normal" if name.startswith("randn") else "uniform"
-            t = jt.random(shape, cast_to, distribution, generator=native)
+            if distribution == "normal" and _torch_cpu_normal_available(cast_to):
+                t = jt.random(shape, cast_to, distribution, generator=native, _torch_normal=True)
+            else:
+                t = jt.random(shape, cast_to, distribution, generator=native)
     elif name == "normal":
         if cast_to in _COMPLEX_COMPONENTS:
             _complex_normal_refusal()

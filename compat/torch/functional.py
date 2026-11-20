@@ -9,6 +9,15 @@ from .types import _dtype_to_str
 from ..diagnostics import swallowed
 
 
+def _sqrt_norm(total):
+    if _jittor_dtype_name(total.dtype).startswith("complex"):
+        return jt.sqrt(total)
+    zero = total == 0
+    # Avoid the singular sqrt derivative at zero while retaining NaN inputs.
+    safe = jt.ternary(zero, jt.ones_like(total).stop_grad(), total)
+    return jt.ternary(zero, jt.zeros_like(total).stop_grad(), jt.sqrt(safe))
+
+
 def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
     # torch.norm / Tensor.norm with torch semantics:
     #   * dim=None  -> reduce over ALL dims to a 0-dim scalar (the key fix);
@@ -41,7 +50,9 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
         elif pv == 1.0:
             r = x.abs().sum()
         elif pv == 2.0:
-            r = jt.sqrt((x.cast("float32") if _jittor_dtype_name(x.dtype) not in ("float32", "float64") else x).sqr().sum())
+            if _jittor_dtype_name(x.dtype) not in ("float32", "float64"):
+                x = x.cast("float32")
+            r = _sqrt_norm(x.sqr().sum())
         else:
             r = (x.abs() ** pv).sum() ** (1.0 / pv)
         return r
@@ -65,17 +76,11 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
                     if (all(0 <= axis < input.ndim for axis in axes)
                             and len(set(axes)) != len(axes)):
                         raise RuntimeError("norm: a dimension appears multiple times in dim")
-                total = input.sqr().sum(dim=tuple(dim), keepdims=keepdim)
-                zero = total == 0
-                # Evaluate sqrt at a finite positive value on a zero row, so
-                # its backward cannot multiply an infinite slope by zero.
-                # NaNs still propagate: a NaN does not compare equal to zero.
-                safe = jt.ternary(zero, jt.ones_like(total).stop_grad(), total)
-                return jt.ternary(zero, jt.zeros_like(total).stop_grad(), jt.sqrt(safe))
+                return _sqrt_norm(input.sqr().sum(dim=tuple(dim), keepdims=keepdim))
             r = input.sqr()
             for d in sorted(dim, reverse=True):
                 r = r.sum(dim=d, keepdims=keepdim)
-            return jt.sqrt(r)
+            return _sqrt_norm(r)
         r = input.abs() ** pv
         for d in sorted(dim, reverse=True):
             r = r.sum(dim=d, keepdims=keepdim)
@@ -87,7 +92,7 @@ def _torch_norm_impl(input, p="fro", dim=None, keepdim=False, dtype=None):
     if pv == 1.0:
         return input.abs().sum(dim=dim, keepdims=keepdim)
     if pv == 2.0:
-        return jt.sqrt(input.sqr().sum(dim=dim, keepdims=keepdim))
+        return _sqrt_norm(input.sqr().sum(dim=dim, keepdims=keepdim))
     return (input.abs() ** pv).sum(dim=dim, keepdims=keepdim) ** (1.0 / pv)
 
 

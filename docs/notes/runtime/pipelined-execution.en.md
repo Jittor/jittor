@@ -4,6 +4,15 @@
 
 Use `auto_flush_ops` to overlap CUDA execution with Python graph construction. Earlier launches can improve latency but materialize intermediates across graph segments, increasing peak memory. Measure both effects on your workload.
 
+## Explicit submission and callbacks
+
+`jt.sync_all(False)` submits pending work and dispatches already completed
+`jt.fetch` callbacks on the calling thread, without waiting for device completion.
+An asynchronous-result waiter can call it repeatedly to make callback progress,
+including when no pending graph remains. A Python Event alone does not dispatch
+framework callbacks. Use `jt.sync_all(True)` to wait for all work and callbacks.
+User code inside a callback may itself wait for the device.
+
 ## Mechanism
 
 `jt.flags.auto_flush_ops = N` flushes the pending graph early. Every operator
