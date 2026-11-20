@@ -32,6 +32,7 @@ from _helpers import capability as _test_capability
 from _helpers.cupy_bridge import cuda_numpy_code_available
 import unittest
 import numpy as np
+import pytest
 import torch
 import jittor as jt
 from jittor import distributions as D
@@ -51,6 +52,29 @@ def both_devices(fn):
     for name, use_cuda in _DEVICES:
         with jt.flag_scope(use_cuda=use_cuda):
             fn(name)
+
+
+@pytest.mark.parametrize("device, default_device", [("cpu", "cuda"), ("cuda", "cpu")])
+def test_multivariate_normal_samples_on_the_location_device(device, default_device):
+    if not torch.cuda.is_available():
+        pytest.skip("requires two distinct backend placements")
+    if device == "cuda" and not cuda_numpy_code_available():
+        pytest.skip("requires CUDA linear algebra inputs")
+    original_default = torch.get_default_device()
+    try:
+        torch.set_default_device(default_device)
+        loc = torch.tensor([0.25, -0.5, 0.75], dtype=torch.float64, device=device, requires_grad=True)
+        covariance = torch.eye(3, dtype=loc.dtype, device=device)
+        dist = torch.distributions.MultivariateNormal(loc, covariance_matrix=covariance)
+        for samples in (dist.sample((6,)), dist.rsample((6,))):
+            assert samples.shape == (6, 3) and samples.device == loc.device
+            assert samples.dtype == loc.dtype and torch.isfinite(samples).all().item()
+            samples.sync()
+            assert samples.location() == ("device" if device == "cuda" else "cpu")
+        samples.sum().backward()
+        np.testing.assert_array_equal(loc.grad.cpu().numpy(), [6., 6., 6.])
+    finally:
+        torch.set_default_device(original_default)
 
 
 def _c(shape):
