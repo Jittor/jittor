@@ -209,11 +209,11 @@ register_fidelity(
 
 from .sparse import _SparseCOO
 
-from .sparse import sparse_coo_tensor
+from .sparse import sparse_coo_tensor, sparse_mm
 
 _SPARSE_COO_TENSOR_FIDELITY_DETAIL = (
-    "matches Torch COO indices/values materialization through a dense-backed "
-    "compatibility object but omits sparse storage, device, and dtype semantics"
+    "keeps scalar 2-D COO sparse storage on the selected device, with a "
+    "dense-backed compatibility path for other layouts"
 )
 
 register_fidelity(
@@ -1141,7 +1141,7 @@ def _tensor_abs(value):
 
 
 def _sparse_sum(x, dim=None):
-    d = x._dense if isinstance(x, _SparseCOO) else x
+    d = x.to_dense() if isinstance(x, _SparseCOO) else x
     return _SparseCOO(d.sum(dim) if dim is not None else d.sum())
 
 
@@ -1389,6 +1389,7 @@ def install(ctx):
     from ...namespace import native_module_facade
     sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
     g.sparse = sparse_namespace
+    sparse_namespace.mm = sparse_mm
     if not hasattr(sparse_namespace, "sum"):
         sparse_namespace.sum = _sparse_sum
     # torch.sparse._triton_ops_meta: Triton BSR autotuning metadata. This layer
@@ -1450,7 +1451,7 @@ def install(ctx):
     import sys as _sparse_sys
     _published_sparse = _sparse_sys.modules.get("torch.sparse")
     if _published_sparse is not None and _published_sparse is not sparse_namespace:
-        for _name in ("_triton_ops_meta", "SparseSemiStructuredTensor",
+        for _name in ("mm", "_triton_ops_meta", "SparseSemiStructuredTensor",
                       "SparseSemiStructuredTensorCUSPARSELT",
                       "SparseSemiStructuredTensorCUTLASS"):
             setattr(_published_sparse, _name, getattr(sparse_namespace, _name))
@@ -1473,6 +1474,8 @@ def install(ctx):
         "Shares the numerical module's implementation; existing dtype, layout and fallback limitations remain")
     register_api_bindings(sparse_namespace, "torch.sparse", ("sum",),
         Fidelity.APPROXIMATE, "Existing dense-backed sparse reduction fallback")
+    register_api_bindings(sparse_namespace, "torch.sparse", ("mm",),
+        Fidelity.APPROXIMATE, "Native multiplication of scalar COO and dense 2-D matrices")
 
 def install_parity(ctx):
     g = ctx.jittor_module
