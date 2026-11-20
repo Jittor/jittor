@@ -211,6 +211,7 @@ struct TypeInfo {
     PyObject* tensor_type = nullptr;
     PyObject* native_call = nullptr;
     bool frontend_dispatch = false;
+    unsigned int dispatch_version = 0;
     // `_prefer_forward(type)`: the class's own forward wins over an
     // inherited execute. Asked once, as the Python side caches it per class.
     bool prefer_forward = false;
@@ -240,9 +241,24 @@ void assign_ref(PyObject*& slot, PyObject* value) {
     slot = value;
 }
 
+void refresh_frontend_dispatch(PyTypeObject* type, TypeInfo& info) {
+    if (info.dispatch_version && PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG)
+            && info.dispatch_version == type->tp_version_tag) return;
+    // FX installs a temporary _dispatch_call on the frontend classes. A
+    // previously warmed model must still reach that tracing hook.
+    PyObjHolder own_dispatch(PyObject_GetAttrString((PyObject*)type, "_dispatch_call"));
+    if (!own_dispatch.obj) PyErr_Clear();
+    info.frontend_dispatch = own_dispatch.obj && own_dispatch.obj == dispatch_call;
+    info.dispatch_version = PyType_HasFeature(type, Py_TPFLAGS_VALID_VERSION_TAG)
+        ? type->tp_version_tag : 0;
+}
+
 const TypeInfo& info_of(PyTypeObject* type) {
     auto found = type_info.find(type);
-    if (found != type_info.end()) return found->second;
+    if (found != type_info.end()) {
+        refresh_frontend_dispatch(type, found->second);
+        return found->second;
+    }
     TypeInfo info;
     PyObjHolder owner(PyObject_GetAttrString((PyObject*)type, "_nn_frontend_owner"));
     info.tensor_type = PyObject_GetAttrString(owner.obj, "tensor_type");
@@ -250,10 +266,7 @@ const TypeInfo& info_of(PyTypeObject* type) {
     info.native_call = PyObject_GetAttrString(native.obj, "__call__");
     if (!info.tensor_type || !info.native_call)
         throw std::runtime_error("torch frontend module type without its owner");
-    PyObject* own_dispatch = PyObject_GetAttrString((PyObject*)type, "_dispatch_call");
-    if (!own_dispatch) { PyErr_Clear(); }
-    info.frontend_dispatch = own_dispatch && own_dispatch == dispatch_call;
-    Py_XDECREF(own_dispatch);
+    refresh_frontend_dispatch(type, info);
     if (prefer_forward_fn) {
         PyObjHolder prefer(PyObject_CallFunctionObjArgs(prefer_forward_fn, (PyObject*)type, nullptr));
         info.prefer_forward = PyObject_IsTrue(prefer.obj) == 1;
