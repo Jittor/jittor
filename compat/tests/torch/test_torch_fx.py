@@ -52,6 +52,21 @@ class TestGraphAndInterpreter(unittest.TestCase):
         self.assertEqual(gm(value).numpy().tolist(), [4.0, 4.0, 4.0])
         self.assertIn("def forward(self, x):", gm.code)
 
+    def test_generated_code_qualifies_builtins_that_share_local_names(self):
+        class Block(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.layers = torch.nn.Sequential(torch.nn.ReLU())
+
+            def forward(self, slice):
+                torch._assert(slice.ndim == 2, "expected a two-dimensional input")
+                return self.layers(slice)[:1]
+
+        block = Block()
+        traced = fx.symbolic_trace(block)
+        value = torch.tensor([[-1.0, 2.0], [3.0, -4.0]])
+        torch.testing.assert_close(traced(value), block(value))
+
     def test_users_and_input_nodes_track_mutation(self):
         graph, x, add, mul = _module_graph()
         self.assertEqual(list(add.users), [mul])

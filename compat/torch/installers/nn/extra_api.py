@@ -15,6 +15,7 @@ from ...types import _dtype_to_str
 from jittor._runtime.dispatch import try_dispatch as _try_dispatch
 from ...tensor_state import latest_optimizer
 from ...grad import _clip_grad_norm_device
+from ...fx.proxy import wrap as _fx_wrap
 from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
@@ -866,6 +867,7 @@ def _adaptive_max_pool2d(input, output_size, return_indices=False):
     return (out, None) if return_indices else out
 
 
+@_fx_wrap
 def _linear(input, weight, bias=None):
     _context = get_install_context(jt)
     _jt_linear = _context.state["nn_extra_native"]['_jt_linear']
