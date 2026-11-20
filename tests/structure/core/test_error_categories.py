@@ -181,7 +181,8 @@ MIGRATED_PY_ARRAY_USER_BOUNDARIES = {
 }
 
 MIGRATED_RANDOM_TYPE_USER_BOUNDARIES = {
-    "src/ops/composite/random_op.cc": 1,
+    # Distribution name and the device/dtype contract for Torch CPU normals.
+    "src/ops/composite/random_op.cc": 2,
 }
 
 MIGRATED_PY_CALLER_USER_BOUNDARIES = {

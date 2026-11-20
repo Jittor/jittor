@@ -20,6 +20,7 @@ RandomGeneratorState::RandomGeneratorState(int64 seed, int device_id)
 void RandomGeneratorState::set_seed(int64 seed) {
     seed_ = seed;
     cpu_engine.seed((uint64)seed);
+    cpu_torch_normal.reset();
     cuda_offset = 0;
 }
 
@@ -32,6 +33,8 @@ int64 RandomGeneratorState::reserve_cuda(int64 raw_count) {
 }
 
 string RandomGeneratorState::get_state() {
+    if (cpu_torch_normal)
+        return encode_cpu_rng_state((uint64)seed_, cpu_engine, cpu_torch_normal);
     std::ostringstream oss;
     oss << seed_ << ' ' << device_id << ' ' << cuda_offset << ' '
         << kCudaStreamTag << ' ' << cpu_engine;
@@ -39,15 +42,17 @@ string RandomGeneratorState::get_state() {
 }
 
 void RandomGeneratorState::set_state(const string& s) {
-    if (s.compare(0, 12, "JITTOR_RNG_1") == 0) {
+    if (s.compare(0, 12, "JITTOR_RNG_1") == 0 || s.compare(0, 12, "JITTOR_RNG_2") == 0) {
         USER_CHECK(device_id < 0)
             << "Generator.set_state(): the state belongs to cpu but this generator is on cuda";
         uint64 seed;
         std::default_random_engine engine;
-        decode_cpu_rng_state(s, seed, engine);
+        shared_ptr<TorchCpuNormal> normal;
+        decode_cpu_rng_state(s, seed, engine, normal);
         seed_ = (int64)seed;
         cuda_offset = 0;
         cpu_engine = engine;
+        cpu_torch_normal = move(normal);
         return;
     }
     std::istringstream iss(s);
@@ -89,6 +94,7 @@ void RandomGeneratorState::set_state(const string& s) {
     seed_ = new_seed;
     cuda_offset = new_offset;
     cpu_engine = new_engine;
+    cpu_torch_normal.reset();
 }
 
 static int parse_device(const string& device) {
@@ -140,7 +146,7 @@ string RandomGenerator::get_state() {
 string RandomGenerator::get_cpu_rng_state() {
     USER_CHECK(state->device_id < 0 && state->cuda_offset == 0)
         << "CPU RNG snapshot requires a CPU-only generator stream";
-    return encode_cpu_rng_state((uint64)state->seed_, state->cpu_engine);
+    return encode_cpu_rng_state((uint64)state->seed_, state->cpu_engine, state->cpu_torch_normal);
 }
 
 RandomGenerator* RandomGenerator::set_state(const string& s) {

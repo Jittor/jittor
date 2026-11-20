@@ -10,21 +10,34 @@ struct AclRngStream {
     int64 offset = 0;
 };
 
+// Torch-style CPU normal draws are owned and checkpointed alongside the
+// existing CPU engine. Keep the extra stream lazy for native-only callers.
+struct TorchCpuNormal {
+    explicit TorchCpuNormal(uint64 seed) : engine(static_cast<uint32>(seed)) {}
+    std::mt19937 engine;
+    bool has_spare = false;
+    double spare = 0;
+};
+
 // One physical owner. Host and each visible ACL device have independent state;
 // default device streams inherit the last global seed until explicitly seeded.
 struct RuntimeRngState {
     uint64 global_seed = 0;
     uint64 host_seed = 0;
     std::default_random_engine host_engine;
+    shared_ptr<TorchCpuNormal> host_torch_normal;
     std::map<int, AclRngStream> acl_streams;
 };
 
 EXTERN_LIB RuntimeRngState& runtime_rng_state();
 // Shared CPU state wire format for the global and explicitly owned engines.
 // Parsing is pure and commits neither engine until every field is validated.
-EXTERN_LIB string encode_cpu_rng_state(uint64 seed, const std::default_random_engine& engine);
+EXTERN_LIB string encode_cpu_rng_state(uint64 seed, const std::default_random_engine& engine,
+                                      const shared_ptr<TorchCpuNormal>& normal = {});
 EXTERN_LIB void decode_cpu_rng_state(const string& payload, uint64& seed,
-                                     std::default_random_engine& engine);
+                                     std::default_random_engine& engine,
+                                     shared_ptr<TorchCpuNormal>& normal);
+EXTERN_LIB void fill_torch_cpu_normal(TorchCpuNormal& state, void* output, int64 size, bool is_double);
 struct AclRngSpan { int64 seed; int64 offset; };
 // Atomically reserves counters from the selected device stream. Callers may
 // already own the executor (kernel launchers) or enter from a host generator.
