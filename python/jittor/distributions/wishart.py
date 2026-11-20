@@ -41,7 +41,7 @@ class Wishart(Distribution):
         if dtype_name(matrix.dtype) not in ("float32", "float64"):
             raise TypeError("Wishart requires a float32 or float64 matrix")
         rank = matrix.shape[-1]
-        with device_scope_like(matrix):
+        with device_scope_like(matrix, prefer_reference=True):
             if not isinstance(df, jt.Var):
                 df = jt.full((), df, dtype=matrix.dtype)
             self._offsets = jt.arange(rank, dtype=matrix.dtype)
@@ -108,13 +108,13 @@ class Wishart(Distribution):
 
         shape = self._extended_shape(sample_shape)
         scale = self.scale_tril
-        with device_scope_like(scale):
+        with device_scope_like(scale, prefer_reference=True):
             gamma = sample_gamma(self._gamma_concentration(), shape[:-1], dtype=scale.dtype)
             diagonal = jt.maximum(jt.sqrt(2 * gamma), jt.finfo(scale.dtype).eps)
             identity = jt.init.eye(self.event_shape[-1], dtype=scale.dtype)
             noise = jt.tril(jt.randn(shape, dtype=scale.dtype), -1)
-        factor = scale @ (noise + diagonal.unsqueeze(-1) * identity)
-        return factor @ _transpose_matrix(factor)
+            factor = scale @ (noise + diagonal.unsqueeze(-1) * identity)
+            return factor @ _transpose_matrix(factor)
 
     def rsample(self, sample_shape=None, max_try_correction=None):
         import jittor as jt

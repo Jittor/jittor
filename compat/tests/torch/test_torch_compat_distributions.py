@@ -135,6 +135,22 @@ def test_wishart_batched_sampling_and_density(device, monkeypatch):
     assert tuple(expanded.rsample((4,)).shape) == (4, 3, 2, 2, 2)
 
 
+def test_wishart_bartlett_refill_inherits_parameter_device():
+    _test_capability.require_accelerator("cuda")
+    from jittor.compat.torch.frontend import tensor_frontend
+
+    for device, ambient in (("cuda", "cpu"), ("cpu", "cuda")):
+        scale = torch.eye(8, device=device)
+        distribution = torch.distributions.Wishart(8, scale_tril=scale)
+        distribution._bartlett_sampling().sum().item()
+        with tensor_frontend(torch.Tensor, device=ambient), torch.no_grad():
+            placement = jt.core._current_tensor_placement()
+            draw = distribution._bartlett_sampling()
+            assert draw.device == scale.device
+            assert torch.isfinite(draw).all().item()
+            assert jt.core._current_tensor_placement() == placement
+
+
 # ------------------------------------------------------------------------- Normal
 
 class TestNormal(Base):
