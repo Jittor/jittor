@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from jittor._core.function import Function
 from jittor._runtime.dispatch import register_kernel
 
 
@@ -184,6 +185,107 @@ def gamma_grad(x, alpha):
     '''
     grad = jt.code(x.shape, x.dtype, [x], cuda_header=cuda_header, cuda_src=cuda_src, data={"alpha":alpha})
     return grad
+
+
+_SAMPLE_GAMMA_HEADER = r"""
+#include <curand_kernel.h>
+
+__device__ double draw_gamma(double alpha, curandStatePhilox4_32_10_t* state) {
+    // Boost concentrations below one into the Marsaglia-Tsang sampler's range.
+    double scale = 1.0;
+    if (alpha < 1.0) {
+        scale = exp(log(curand_uniform_double(state)) / alpha);
+        alpha += 1.0;
+    }
+    double d = alpha - 1.0 / 3.0;
+    double c = rsqrt(9.0 * d);
+    for (;;) {
+        double z = curand_normal_double(state);
+        double v = 1.0 + c * z;
+        if (v <= 0.0) continue;
+        v = v * v * v;
+        double u = curand_uniform_double(state);
+        double z2 = z * z;
+        if (u < 1.0 - 0.0331 * z2 * z2 ||
+            log(u) < 0.5 * z2 + d * (1.0 - v + log(v))) {
+            return scale * d * v;
+        }
+    }
+}
+
+__global__ void sample_gamma_batch(const float* alpha, const double* seed_parts,
+                                   float* out, int64_t total) {
+    // Use a seed from Jittor's device RNG and a separate subsequence per sample.
+    constexpr double two_to_32 = 4294967296.0;
+    uint32_t low = static_cast<uint64_t>(seed_parts[0] * two_to_32);
+    uint32_t high = static_cast<uint64_t>(seed_parts[1] * two_to_32);
+    uint64_t seed = (static_cast<uint64_t>(high) << 32) | low;
+    int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x * blockDim.x;
+    for (; index < total; index += stride) {
+        double a = alpha[index];
+        if (isnan(a) || a == INFINITY) {
+            out[index] = a;
+            continue;
+        }
+        curandStatePhilox4_32_10_t state;
+        curand_init(seed, index, 0, &state);
+        out[index] = draw_gamma(fmax(a, 1e-8), &state);
+    }
+}
+"""
+
+
+_SAMPLE_GAMMA_GRAD_HEADER = r"""
+__global__ void sample_gamma_batch_grad(const float* alpha, const float* sample,
+                                        const float* dout, float* out, int64_t total) {
+    int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t stride = (int64_t)gridDim.x * blockDim.x;
+    for (; index < total; index += stride) {
+        double a = alpha[index];
+        double x = sample[index];
+        double grad = a > 0 && x > 0
+            ? standard_gamma_grad_one<double, double>(a, x) : 0;
+        out[index] = dout[index] * (isfinite(grad) ? grad : 0);
+    }
+}
+"""
+
+
+class _CudaGammaSampler(Function):
+    def execute(self, alpha):
+        import jittor as jt
+        from jittor._core.var import device_scope_like
+
+        self.alpha = jt.contiguous(alpha)
+        with device_scope_like(alpha), jt.flag_scope(amp_reg=0):
+            seed = jt.random((2,), dtype="float64")
+        self.sample = jt.code(alpha.shape, alpha.dtype, [self.alpha, seed],
+                              cuda_header=_SAMPLE_GAMMA_HEADER, cuda_src=r"""
+            int64_t total = out0->num;
+            int blocks = (int)std::min<int64_t>((total + 255) / 256, 4096);
+            if (total) sample_gamma_batch<<<blocks, 256>>>(in0_p, in1_p, out0_p, total);
+            CHECK(0 == cudaGetLastError());
+        """)
+        return self.sample
+
+    def grad(self, dout):
+        import jittor as jt
+
+        header = (Path(__file__).parent / "src" / "gamma_grad.h").read_text(encoding="utf8")
+        return jt.code(self.alpha.shape, self.alpha.dtype,
+                       [self.alpha, self.sample, jt.contiguous(dout)],
+                       cuda_header=header + _SAMPLE_GAMMA_GRAD_HEADER, cuda_src=r"""
+            int64_t total = out0->num;
+            int blocks = (int)std::min<int64_t>((total + 255) / 256, 4096);
+            if (total) {
+                sample_gamma_batch_grad<<<blocks, 256>>>(in0_p, in1_p, in2_p, out0_p, total);
+            }
+            CHECK(0 == cudaGetLastError());
+        """)
+
+
+register_kernel("math.sample_gamma", "cuda", _CudaGammaSampler.apply, dtypes={"float32"})
 
 
 for _backend in ("cuda", "rocm_legacy", "corex_legacy"):

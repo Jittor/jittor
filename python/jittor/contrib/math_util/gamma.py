@@ -418,20 +418,19 @@ def _standard_gamma_grad_one(alpha, x):
 _standard_gamma_grad_vec = np.vectorize(_standard_gamma_grad_one, otypes=[np.float64])
 
 def sample_gamma(alpha, shape):
-    r'''Draw x ~ Gamma(concentration=alpha, rate=1), differentiable wrt alpha via
-    the implicit reparameterization gradient (Figurnov et al. 2018). All-backend
-    (numpy_code runs on host; alpha may be a per-element Var). The old version was
-    CUDA-only, baked alpha as a scalar (crashed for Var alpha) and produced no
-    gradient (empty input list).'''
+    r'''Draw Gamma(concentration=alpha, rate=1) with an implicit gradient in alpha.'''
     import jittor as jt
+
     alpha = alpha if isinstance(alpha, jt.Var) else jt.array(alpha)
     alpha = alpha.float32()
     # broadcast alpha to the requested sample shape (grad flows back, summed)
-    alpha_b = alpha if tuple(alpha.shape) == tuple(shape) else alpha + jt.zeros(shape, alpha.dtype)
+    alpha_b = alpha if tuple(alpha.shape) == tuple(shape) else alpha.broadcast(shape)
 
-    # xp is cupy on CUDA, numpy on CPU/ACL; `np` (module) is always real numpy.
-    # The rejection sampler + the python implicit-grad run on host numpy, then
-    # results are copied to the device buffer (sampling is not a hot path).
+    impl = select_kernel("math.sample_gamma", alpha_b)
+    if impl is not None:
+        return impl(alpha_b)
+
+    # NumPy implements sampling and the pathwise gradient on the other backends.
     def _host(arr):
         return arr.get() if hasattr(arr, "get") else np.asarray(arr)
 
