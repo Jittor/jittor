@@ -1,3 +1,4 @@
+from jittor.nn.functional.interpolation import _interpolate_antialiased
 from jittor.nn.functional.loss import _checked_class_target, _legacy_reduction, smooth_l1_loss as _native_smooth_l1
 from ...fidelity import Fidelity, register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
@@ -163,15 +164,13 @@ def _interpolate(input=None, size=None, scale_factor=None,
                  mode="nearest", align_corners=None,
                  recompute_scale_factor=None, antialias=False,
                  **_kw):
-    if antialias:
-        raise NotImplementedError(
-            "torch.nn.functional.interpolate antialias=True is not implemented "
-            "by the Jittor frontend; use antialias=False")
-    _context = get_install_context(jt)
-    _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
     if input is None:
         input = _kw.pop("X")
     ac = False if align_corners is None else align_corners
+    if antialias:
+        return _interpolate_antialiased(input, size, scale_factor, mode, ac, recompute_scale_factor)
+    _context = get_install_context(jt)
+    _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
     return _jt_interpolate(input, size=size,
                            scale_factor=scale_factor, mode=mode,
                            align_corners=ac)

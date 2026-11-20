@@ -1,7 +1,12 @@
 """Image interpolation operations exposed through :mod:`jittor.nn`."""
 
+import math
+from numbers import Integral, Real
+
 import jittor as jt
-from jittor._runtime.dispatch import try_dispatch
+from jittor._core.dtypes import dtype_name
+from jittor._core.var import device_scope_like
+from jittor._runtime.dispatch import dispatch_context, try_dispatch
 from ._layout import channels_last_source, channels_last_view, records_no_grad
 
 
@@ -12,6 +17,131 @@ def _bicubic(x, a, func):
     if func == 2:
         return a * (jt.abs(x) ** 3) - 5 * a * (x**2) + 8 * a * jt.abs(x) - 4 * a
     return 0
+
+
+def _antialias_size(input_size, size, scale_factor, recompute_scale_factor):
+    if (size is None) == (scale_factor is None):
+        raise ValueError("Specify either size or scale_factor for interpolation")
+    if size is not None:
+        if recompute_scale_factor:
+            raise ValueError("recompute_scale_factor requires scale_factor")
+        size = (size, size) if isinstance(size, Integral) else tuple(size)
+        if len(size) != 2 or not all(isinstance(extent, Integral) for extent in size):
+            raise ValueError("size must have two integer spatial dimensions")
+        return tuple(map(int, size)), (None, None)
+    factors = (scale_factor, scale_factor) if isinstance(scale_factor, Real) else tuple(scale_factor)
+    if len(factors) != 2 or not all(
+        isinstance(factor, Real) and math.isfinite(factor) and factor > 0 for factor in factors
+    ):
+        raise ValueError("scale_factor must have two positive finite spatial factors")
+    size = tuple(int(extent * factor) for extent, factor in zip(input_size, factors))
+    return size, (None, None) if recompute_scale_factor else factors
+
+
+def _antialias_weights(in_size, out_size, ratio, mode, dtype):
+    width = max(ratio, 1.0)
+    support = width * (2 if mode == "bicubic" else 1)
+    taps = min(in_size, 2 * math.ceil(support) + 1)
+    output_index, tap = jt.index((out_size, taps))
+    center = (output_index.cast(dtype) + 0.5) * jt.array(ratio, dtype=dtype)
+    radius = jt.array(support, dtype=dtype)
+    start = (center - radius + 0.5).floor_int().maximum(0)
+    end = (center + radius + 0.5).floor_int().minimum(in_size)
+    index = start + tap
+    distance = (index.cast(dtype) + 0.5 - center).abs() / jt.array(width, dtype=dtype)
+    if mode == "bicubic":
+        weights = jt.ternary(distance < 1, _bicubic(distance, -0.5, 1),
+                             jt.ternary(distance < 2, _bicubic(distance, -0.5, 2), 0))
+    else:
+        weights = (1 - distance).maximum(0)
+    valid = index < end
+    weights = jt.ternary(valid, weights, 0)
+    total = weights.sum(1, keepdims=True)
+    return jt.ternary(valid, index, in_size), weights / jt.ternary(total != 0, total, 1)
+
+
+def _antialias_axis(image, extent, axis, ratio, mode, dtype, byte_image):
+    index, weights = _antialias_weights(image.shape[axis], extent, ratio, mode, dtype)
+    taps = index.shape[1]
+    shape = list(image.shape)
+    shape[axis] = extent
+    indices = ["i0", "i1", "i2", "i3"]
+    indices[axis] = f"@e0(i{axis}, i4)"
+    samples = image.reindex([*shape, taps], indices, extras=[index])
+    weights_shape = [1, 1, 1, 1, taps]
+    weights_shape[axis] = extent
+    if byte_image:
+        # The uint8 path rounds to fixed-point coefficients and saturates the
+        # intermediate image before the second spatial pass.
+        precision = ((32767.5 / weights.max()).log2().ceil() - 1).clamp(0, 22)
+        scale = jt.array(2.0, dtype="float64") ** precision
+        scaled = weights * scale
+        rounded = (scaled.abs() + 0.5).floor()
+        weights = jt.ternary(scaled < 0, -rounded, rounded)
+    result = (samples * weights.reshape(weights_shape)).sum(-1)
+    if byte_image:
+        result = (result / scale + 0.5).floor().clamp(0, 255)
+    return result
+
+
+class _AntialiasOutput(jt.Function):
+    def execute(self, output, gradient_source):
+        return output.detach().start_grad()
+
+    def grad(self, gradient):
+        return None, gradient
+
+
+def _interpolate_antialiased(image, size, scale_factor, mode, align_corners,
+                            recompute_scale_factor):
+    if image.ndim != 4 or mode not in ("bilinear", "bicubic"):
+        raise ValueError("antialias=True requires a 4-D input and bilinear or bicubic mode")
+    backend = dispatch_context(image).backend
+    if backend not in ("cpu", "cuda"):
+        raise NotImplementedError(f"antialias=True is not implemented for {backend}")
+    input_size = tuple(image.shape[-2:])
+    size, factors = _antialias_size(input_size, size, scale_factor, recompute_scale_factor)
+    if min(*input_size, *size) <= 0 or image.shape[1] <= 0:
+        raise RuntimeError("antialiased interpolation requires positive channel and spatial sizes")
+    dtype = dtype_name(image.dtype)
+    supported = ("float32", "float64", "uint8") if backend == "cpu" else (
+        "float16", "bfloat16", "float32", "float64"
+    )
+    if dtype not in supported:
+        raise NotImplementedError(f"antialias=True is not implemented for {dtype} on {backend}")
+    same_size = input_size == size
+    if same_size and (align_corners or all(f in (None, 1) for f in factors)):
+        return image.clone()
+    byte_image = dtype == "uint8"
+    compute_dtype = "float64" if byte_image or dtype == "float64" else "float32"
+    with device_scope_like(image):
+        result = image.cast(compute_dtype)
+        for axis in (3, 2):
+            in_size = input_size[axis - 2]
+            out_size = size[axis - 2]
+            factor = factors[axis - 2]
+            if align_corners:
+                ratio = (in_size - 1) / (out_size - 1) if out_size > 1 else 0.0
+            else:
+                ratio = in_size / out_size if factor is None else 1.0 / factor
+            if in_size == out_size and ratio == 1.0:
+                continue
+            if backend == "cpu" and in_size == out_size:
+                # PyTorch's CPU forward copies an unchanged axis. Its backward
+                # still uses the explicit scale for that axis.
+                if not jt.flags.no_grad and result.requires_grad:
+                    filtered = _antialias_axis(result, out_size, axis, ratio, mode, compute_dtype, byte_image)
+                    result = _AntialiasOutput.apply(result, filtered)
+                continue
+            result = _antialias_axis(result, out_size, axis, ratio, mode, compute_dtype, byte_image)
+        result = result.cast(dtype)
+        if same_size and backend == "cpu":
+            return result.clone()
+        if same_size and not jt.flags.no_grad and image.requires_grad:
+            # CUDA's backward copies the gradient when both spatial sizes
+            # match, even if the forward sampled with explicit factors.
+            return _AntialiasOutput.apply(result, image)
+        return result
 
 
 class _ChannelsLast:
