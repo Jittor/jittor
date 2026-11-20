@@ -368,7 +368,15 @@ def _copy_detached_storage(self, value):
 
 def _ip(self, value, preserve_storage=False):
     self._check_inplace_autograd()
-    if preserve_storage or getattr(self, "_torch_data_owner", None) is not None:
+    data_owner = getattr(self, "_torch_data_owner", None)
+    if (data_owner is not None and not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
+            and (self.requires_grad or value.requires_grad)):
+        # Store into the shared allocation and give the history to the data alias.
+        # Rebinding its owner would attach this history to the parameter.
+        data_owner.sync(False, False)
+        _owner.jt.core._preserve_step_readers([data_owner])
+        return _copy_(self, value)
+    if preserve_storage or data_owner is not None:
         if self.requires_grad and not _owner.jt.flags.no_grad:
             if self.is_leaf:
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
