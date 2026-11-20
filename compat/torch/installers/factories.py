@@ -23,6 +23,7 @@ from ..types import (
     _make_cuda_resident,
 )
 from ..nested import _torch_register_leaf
+from ..tensor_layout import CHANNELS_LAST_3D, empty_channels_last_3d
 from ..fidelity import Fidelity, register_fidelity
 from ...diagnostics import EXPECTED, swallowed
 from ...transaction import set_flag
@@ -58,7 +59,7 @@ _FACTORY_FIDELITY_DETAIL = (
 )
 _EMPTY_LIKE_FIDELITY_DETAIL = (
     "preserves shape, dtype, device, leaf-gradient options and dense storage order. "
-    "It honors contiguous_format. Other layouts and pin-memory options are approximate."
+    "It honors contiguous_format and channels_last_3d. Pin-memory options are approximate."
 )
 
 
@@ -239,10 +240,12 @@ def _factory_implementation(value):
     return value
 
 
-def _allocate_empty_like(input, dtype=None, preserve_layout=True):
+def _allocate_empty_like(input, dtype=None, memory_format=None):
     shape = tuple(input.shape)
     dtype = input.dtype if dtype is None else dtype
-    if preserve_layout and not input._storage_is_contiguous():
+    if memory_format == CHANNELS_LAST_3D:
+        return empty_channels_last_3d(shape, dtype=dtype)
+    if memory_format in (None, "preserve_format") and not input._storage_is_contiguous():
         strides = input._storage_strides()
         # Torch densifies a strided slice in its physical axis order. The
         # dimension order matters even when the source has gaps between rows.
@@ -297,8 +300,9 @@ def _empty_like_implementation(input, **kwargs):
         device = kwargs.pop("device", None)
         return _materialize_meta_like(input, device, **kwargs)
     factory = _allocate_empty_like
-    if kwargs.get("memory_format") not in (None, "preserve_format"):
-        factory = functools.partial(factory, preserve_layout=False)
+    memory_format = kwargs.get("memory_format")
+    if memory_format not in (None, "preserve_format"):
+        factory = functools.partial(factory, memory_format=memory_format)
     return _constructor_adapter("empty_like", factory, True, input, **kwargs)
 
 
@@ -454,6 +458,9 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
             out.requires_grad_(False)
             return out
     # _invoke_factory already established native construction placement.
+    if name == "empty" and kwargs.get("memory_format") == CHANNELS_LAST_3D:
+        orig = empty_channels_last_3d
+        _accepts_dtype = True
     _requires_grad = bool(kwargs.get("requires_grad", False))
     fresh_like = name in ("empty_like", "zeros_like", "ones_like", "full_like")
     fresh_leaf = _creates_fresh_leaf(name, args, kwargs)
