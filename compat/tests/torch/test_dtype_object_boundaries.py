@@ -80,6 +80,18 @@ def test_placeholder_dtypes_are_metadata_only_at_every_boundary(torch):
     np.testing.assert_array_equal((value + 1).numpy(), [2.0])
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_dense_tensor_layout_can_be_used_in_factory(torch, device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("requires CUDA")
+    value = torch.zeros((2, 3), device=device).transpose(0, 1)
+    assert value.layout == torch.strided
+    sample = torch.randn(value.shape, layout=value.layout, device=device)
+    assert sample.layout == torch.strided and sample.device.type == device
+    assert tuple(sample.shape) == (3, 2)
+    assert np.isfinite(sample.cpu().numpy()).all()
+
+
 def test_default_dtype_precision_matmul_and_gradient(torch):
     previous = torch.get_default_dtype()
     a = None
