@@ -57,6 +57,25 @@ def test_tensor_new_preserves_torch_frontend_for_writable_views(device):
         source.new(source.float())
 
 
+def test_cpu_clamp_bounds_do_not_allocate_cuda_memory():
+    import torch
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    with _cuda_runtime(), forbid_backend_fallbacks(), torch.no_grad():
+        source = torch.from_numpy(np.array([-1., 0.5, 2.], dtype=np.float32))
+        source.sync()
+        _cpu(source)
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        result = source.clamp(0, 1)
+        result.sync()
+        _cpu(result)
+        np.testing.assert_array_equal(result.numpy(), [0., 0.5, 1.])
+        torch.cuda.synchronize()
+        assert torch.cuda.max_memory_allocated() == baseline
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
