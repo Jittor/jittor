@@ -141,6 +141,15 @@ bool collect_cpu_prefix(Var* root, HostPrefix& prefix,
     return true;
 }
 
+// Both native Where and CUB compaction transfer a data-dependent extent
+// to the host. Evaluate that extent before recording or replaying the graph.
+Var* compaction_condition(Op* op) {
+    if (auto* where = dynamic_cast<WhereOp*>(op)) return where->cond;
+    const auto cub_where = get_op_definition("cub_where", false);
+    if (cub_where && op->is_op(cub_where->id)) return op->inputs().front();
+    return nullptr;
+}
+
 bool collect_dynamic_prefix(Var* root, HostPrefix& prefix,
                             std::unordered_set<Var*>& seen) {
     vector<Var*> stack{root};
@@ -184,15 +193,15 @@ unique_ptr<HostPrefix> find_host_prefix(const vector<VarHolder*>& roots, bool dy
         if (!seen.insert(value).second) continue;
         Op* op = value->input();
         if (value->is_finished() || !op) continue;
-        if (auto* where = dynamic_cast<WhereOp*>(op)) {
+        if (Var* condition = compaction_condition(op)) {
             if (!dynamic) return nullptr;
-            if (!collect_dynamic_prefix(where->cond, *prefix, dynamic_seen))
+            if (!collect_dynamic_prefix(condition, *prefix, dynamic_seen))
                 return nullptr;
             // Where allocates for the maximum possible number of indices,
             // rather than just the current number of true entries.
-            for (Var* output : where->outputs()) {
+            for (Var* output : op->outputs()) {
                 if (!prefix->boundaries.insert(output).second) continue;
-                const int64 count = where->cond->num;
+                const int64 count = condition->num;
                 if (count < 0 || count > (std::numeric_limits<int64>::max()
                         - prefix->bytes) / output->dsize()) return nullptr;
                 prefix->bytes += count * output->dsize();
@@ -313,9 +322,9 @@ int64 step_shape_prefix_create(const vector<VarHolder*>& roots) {
         if (!seen.insert(value).second) continue;
         Op* op = value->input();
         if (value->is_finished() || !op) continue;
-        if (auto* where = dynamic_cast<WhereOp*>(op)) {
-            if (!collect_dynamic_prefix(where->cond, *prefix, conditions)) return -1;
-            for (Var* output : where->outputs())
+        if (Var* condition = compaction_condition(op)) {
+            if (!collect_dynamic_prefix(condition, *prefix, conditions)) return -1;
+            for (Var* output : op->outputs())
                 if (prefix->boundaries.insert(output).second)
                     prefix->dynamic_roots.push_back(output);
             continue;
@@ -437,7 +446,7 @@ string graph_host_work(const vector<VarHolder*>& roots) {
         stack.pop_back();
         Op* op = v->input();
         if (v->is_finished() || !op) continue;
-        if (dynamic_cast<WhereOp*>(op)
+        if (compaction_condition(op)
                 || (!op->executes_on_accelerator() && !graph_capture_launches_nothing(op))) {
             std::stringstream ss;
             ss << op->name() << v->shape;

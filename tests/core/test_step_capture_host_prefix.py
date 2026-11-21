@@ -195,6 +195,32 @@ def test_dynamic_indices_with_changing_cpu_scale_preserve_queued_training_steps(
 
 
 @pytest.mark.cuda
+@pytest.mark.parametrize('shape', [(4,), (2, 2)])
+def test_shape_used_only_by_python_is_checked_before_replaying_an_update(shape):
+    require_accelerator('cuda')
+    with jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback='error'):
+        weight = array([3.], 1)
+        accepted = jt.array(np.array([False, True, False, False]).reshape(shape))
+        rejected = jt.array(np.array([True, False, True, False]).reshape(shape))
+
+        def step(mask):
+            if len(jt.where(mask)[0]) != 1:
+                raise ValueError("expected one true position")
+            weight.update(weight + 1)
+            return weight.clone()
+
+        replay = jt.capture_step(step)
+        try:
+            assert [replay(accepted).item() for _ in range(8)] == list(range(4, 12))
+            assert replay.stats['graph'] > 0, replay._graph_refused
+            with pytest.raises(ValueError, match="expected one true position"):
+                replay(rejected)
+            assert weight.item() == 11
+        finally:
+            replay.invalidate()
+
+
+@pytest.mark.cuda
 @pytest.mark.parametrize('record', [True, False])
 def test_hook_cannot_change_dynamic_extent_before_an_update(record):
     require_accelerator('cuda')

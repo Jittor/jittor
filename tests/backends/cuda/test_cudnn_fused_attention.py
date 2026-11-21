@@ -16,6 +16,7 @@ the composite does.
 from _helpers import capability as _test_capability
 import importlib.util
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -288,6 +289,40 @@ class TestCudnnFusedAttention(unittest.TestCase):
         mask = jt.zeros((33, 47), dtype="float32").start_grad()
         self.assertIsNone(self.kernel._cudnn_fused_attention(q, k, k, attn_mask=mask))
 
+    def test_boolean_inference_mask_uses_cudnn_during_replay(self):
+        from jittor._runtime.step_capture import tracing
+
+        class Attention(jt.Module):
+            def execute(self, q, k, v, mask):
+                return scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=True)
+
+        rng = np.random.RandomState(45)
+        shapes = ((1, 4, 33, 64), (1, 2, 47, 64), (1, 2, 47, 64))
+        admitted = []
+        forward = self.kernel._forward
+
+        def observe_forward(*args, **kwargs):
+            admitted.append(tracing())
+            return forward(*args, **kwargs)
+
+        with jt.no_grad(), forbid_backend_fallbacks(), patch.object(self.kernel, "_forward", observe_forward):
+            qkv = [jt.array(rng.normal(0, .5, shape).astype("float32")).bfloat16() for shape in shapes]
+            values = [tensor.float32().numpy() for tensor in qkv]
+            replay = jt.graph_replay(Attention())
+            for step in range(8):
+                mask = rng.rand(1, 1, 33, 47) > 0.3
+                mask[..., step, :] = False
+                want, *_ = _reference(*values, mask, False, np.zeros_like(values[0]))
+                got = replay(*qkv, jt.array(mask))
+                got.sync()
+                self.assertEqual(got.location(), "device")
+                observed = got.float32().numpy()
+                np.testing.assert_allclose(observed, want, rtol=2e-2, atol=5e-3)
+                np.testing.assert_array_equal(observed[..., step, :], 0)
+        self.assertIn(True, admitted)
+        self.assertIsNone(replay.refused)
+        self.assertGreater(replay.stats["graph"], 0, replay._graph_refused)
+
     def test_masked_training_replays_with_changed_inputs(self):
         def step(q, k, v, mask):
             out = scaled_dot_product_attention(q, k, v, attn_mask=mask)
@@ -317,8 +352,7 @@ class TestCudnnFusedAttention(unittest.TestCase):
                     self.assertEqual(run.stats["captured"], 1)
                     self.assertGreater(run.stats["replayed"], 0)
             jt.sync_all(True)
-        # Mask admission reads a scalar only on the eager fused path;
-        # tracing retains the existing graph-only composite implementation.
+        # Masked training uses the composite implementation during tracing.
 
     def test_an_updated_mask_does_not_reuse_the_old_bias(self):
         rng = np.random.RandomState(44)

@@ -4,6 +4,16 @@ import pytest
 import torch
 
 
+def test_unique_consecutive_keeps_a_leading_nan():
+    x = torch.tensor([float("nan"), 1.0, 1.0, 2.0])
+    out, inverse, counts = torch.unique_consecutive(x, return_inverse=True, return_counts=True)
+    assert out.shape == (3,)
+    assert torch.isnan(out[0]).item()
+    assert out[1:].tolist() == [1.0, 2.0]
+    assert inverse.tolist() == [0, 1, 1, 2]
+    assert counts.tolist() == [1, 2, 1]
+
+
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 def test_unique_consecutive_on_cuda_input_under_host_ambient():
     # The Torch frontend runs with the host as its ambient placement; the

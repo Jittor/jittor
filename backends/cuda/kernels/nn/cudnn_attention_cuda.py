@@ -415,19 +415,18 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         query, key, value, attn_mask, dropout_p, is_causal))
     if not (_accuracy_admitted(query) or reduced_precision):
         return None
+    training = _output_requires_grad(query, key, value)
     if attn_mask is not None:
         if _output_requires_grad(attn_mask):
             return None
         from jittor._runtime import step_capture
-        # Mask admission depends on device values. Preserve replay by using
-        # the graph-only attention path while tracing rather than reading a
-        # fresh mask back to the host during capture.
-        if step_capture.tracing():
+        # Boolean inference masks only add zero or -inf. Their bias and
+        # empty-row handling can stay on the device during capture.
+        if step_capture.tracing() and (training or _jittor_dtype_name(attn_mask.dtype) != "bool"):
             return None
     if _library() is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
-    training = _output_requires_grad(query, key, value)
     (query, q_seq), (key, k_seq), (value, v_seq) = (_physical(t) for t in (query, key, value))
     layout = (_Q if q_seq else 0) | (_K if k_seq else 0) | (_V if v_seq else 0)
 
@@ -500,7 +499,7 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False):
             effective = jt.ternary(hidden, negative, bias)
         top = effective.max([-1], keepdims=True)
         live = jt.logical_not(jt.isinf(top) & (top < 0))
-        if key_dims[2] > 1:
+        if key_dims[2] > 1 and _jittor_dtype_name(attn_mask.dtype) != "bool":
             # The fused backward reconstructs exp(score - logsumexp). If a
             # finite row offset absorbs log(Lk) in float32, that subtraction
             # loses its normalizer. Keep the explicit-softmax path for these

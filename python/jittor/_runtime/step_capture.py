@@ -178,6 +178,15 @@ def live_array(value, refresh, dtype="float32"):
     return var
 
 
+def _observe_dynamic_indices(values):
+    """Retain coordinate lookups whose shape Python can inspect."""
+    if _ACTIVE is not None:
+        if any(value.is_finished for value in values):
+            refuse("the step materialized dynamic indices outside the kept graph")
+            return
+        _ACTIVE.dynamic_indices.extend(values)
+
+
 def on_replay(hook):
     """Run `hook()` before every replay of the step being captured."""
     if _ACTIVE is not None:
@@ -508,7 +517,7 @@ class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
-                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix")
+                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix", "dynamic_indices")
 
     def __init__(self):
         self.prologue = []
@@ -521,6 +530,7 @@ class _Capture:
         self.gradient_leaves = []
         self.differentiable_leaves = []
         self.dynamic_prefix = None
+        self.dynamic_indices = []
 
 
 def _finish_normally(roots):
@@ -779,12 +789,16 @@ class StepCapture:
             cap.refused = ("the call draws random numbers, which a replay would draw "
                            "again on every run")
         if cap.refused is None:
+            # A coordinate lookup can control Python through its length even
+            # when none of the resulting coordinates reach a tensor output.
+            roots = _unique(roots + cap.dynamic_indices)
             prefix = _core._step_shape_prefix_create(roots)
             if prefix < 0:
                 cap.refused = ("dynamic output shapes require an admissible "
                                "read-only device prefix")
             elif prefix:
                 cap.dynamic_prefix = _ShapePrefix(prefix)
+        cap.dynamic_indices.clear()
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)

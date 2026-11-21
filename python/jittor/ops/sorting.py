@@ -244,21 +244,12 @@ def unique_consecutive(input, return_inverse=False, return_counts=False, dim=Non
             out = flat
             group = jt.zeros([0], dtype='int64')
         else:
-            # boundary[i] == True where element i starts a new run.
-            #
-            # The leading True is derived from `flat` rather than written as
-            # `jt.ones([1], dtype='bool')`: `jt.ones` follows the *ambient*
-            # placement, so a run over a tensor that was placed explicitly
-            # (MiniMax-H3 builds its sigma schedule with `device="cpu"`) mixed
-            # two placements and `dispatch_context` rejected the concat.
-            leading = flat[:1] == flat[:1]
-            if n == 1:
-                keep = leading
-            else:
-                diff = flat[1:] != flat[:-1]
-                keep = jt.concat([leading, diff], dim=0)
-            # group id of each input element = cumulative count of run-starts - 1
-            group = keep.int32().cumsum(0) - 1   # 0-based group index per element
+            with placement_scope_like(flat):
+                position = jt.index(flat.shape, dim=0, dtype="int64")
+            previous = flat.reindex(flat.shape, ["i0 == 0 ? 0 : i0 - 1"])
+            keep = (position == 0) | (flat != previous)
+            if return_inverse or return_counts:
+                group = keep.int32().cumsum(0) - 1
             out = flat[keep]
         ret = [out]
         if return_inverse:

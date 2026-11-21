@@ -22,7 +22,7 @@ from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel
 from jittor.nn.functional.activation import offer_activation
-from jittor.nn.functional._layout import channels_last_source, channels_last_view, take_channels_last
+from jittor.nn.functional._layout import channels_last_source, channels_last_view
 
 #: Blocks a reduction aims for: a few per SM on current parts. More segments
 #: add partial results to combine; fewer leave SMs idle on narrow layers.
@@ -871,12 +871,6 @@ def _batch_norm_cuda_statistics(x, weight, bias, eps):
             return frozen
     shape = tuple(int(size) for size in x.shape)
     source = _nhwc_source(x)
-    if source is None and shape[1] % 4 == 0 and _dtype_name(x.dtype) == "float32":
-        # A convolution's output it offered channels-last: take it, and the
-        # layout carries through this and on into the next convolution.
-        offered = take_channels_last(x)
-        if offered is not None:
-            source = _nhwc_source(offered)
     if source is not None:
         return _batch_norm_nhwc_statistics(source, shape, weight, bias, eps)
     spatial = shape[2] * shape[3]
