@@ -249,7 +249,7 @@ def test_prepared_kernel_can_read_strided_physical_storage_without_copy():
 def test_prepared_triton_writes_bound_storage_after_pending_readers(physical_window):
     require_cuda()
     from jittor.compat.triton import backend
-    from jittor.kernels.triton import _BoundOutput, _prepared_call
+    from jittor.kernels import BoundOutput, triton_call
 
     triton = backend.real_triton()
     if triton is None:
@@ -274,8 +274,8 @@ def test_prepared_triton_writes_bound_storage_after_pending_readers(physical_win
         address = state._mem_ptr_now
 
         def step(delta):
-            _, output = _prepared_call(
-                advance, state, delta, _BoundOutput(state), TensorSpec((8,), "float32"),
+            _, output = triton_call(
+                advance, state, delta, BoundOutput(state), TensorSpec((8,), "float32"),
                 grid=(1,), num_warps=1,
             )
             return output

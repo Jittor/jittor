@@ -8,7 +8,7 @@ from numbers import Integral
 
 import jittor as jt
 
-__all__ = ["TensorSpec", "call", "triton_call", "tilelang_call", "batch_triton_launches"]
+__all__ = ["TensorSpec", "BoundOutput", "call", "triton_call", "tilelang_call", "batch_triton_launches"]
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,13 @@ class TensorSpec:
             raise ValueError("TensorSpec requires concrete nonnegative dimensions")
         object.__setattr__(self, "shape", shape)
         object.__setattr__(self, "dtype", str(self.dtype))
+
+
+@dataclass(frozen=True)
+class BoundOutput:
+    """Existing contiguous CUDA storage written by an inference Triton kernel."""
+
+    buffer: jt.Var
 
 
 class _Buffer:
@@ -119,19 +126,28 @@ def _arguments(args):
 
 
 def triton_call(kernel, *args, grid, **kwargs):
-    """Call an upstream ``@triton.jit`` function with TensorSpec output slots.
+    """Call an upstream ``@triton.jit`` function with explicit output slots.
 
     Positional arguments describe the kernel ABI; keyword arguments contain
     constexpr values and Triton compiler options. Upstream specialization and
     persistent compilation caching are preserved. Autotuners are not accepted:
     choose a configuration explicitly so tuning cannot mutate user inputs.
+
+    TensorSpec allocates a fresh output. BoundOutput enables a prepared CUDA
+    launch that orders writes to existing storage in inference mode. It
+    requires ready nonempty contiguous buffers and positive grid dimensions.
+    The kernel owns alias safety within a launch.
     """
     from .triton import launch as triton_launch
     from triton.runtime.jit import JITFunction
     if not isinstance(kernel, JITFunction):
         raise TypeError("triton_call requires a @triton.jit function, not an autotuner/interpreter")
-    if any(isinstance(value, (jt.Var, TensorSpec)) for value in kwargs.values()):
+    if any(isinstance(value, (jt.Var, TensorSpec, BoundOutput)) for value in kwargs.values()):
         raise TypeError("tensor arguments must be positional")
+    if any(isinstance(arg, BoundOutput) for arg in args):
+        from .triton import _prepared_call
+
+        return _prepared_call(kernel, *args, grid=grid, **kwargs)
     inputs, outputs, bind = _arguments(args)
     return call(lambda context: triton_launch(kernel, bind(context), grid, kwargs, context),
                 *inputs, outputs=outputs[0] if len(outputs) == 1 else outputs)

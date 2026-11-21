@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from functools import lru_cache
 
+from . import BoundOutput as _BoundOutput
+
 
 def launch(kernel, args, grid, options, context):
     from triton.runtime import driver
@@ -53,12 +55,6 @@ def _launch_word(name, value):
 class _InitializedOutput:
     """An executor-owned output initialized from a read-only input."""
     initial: object
-
-
-@dataclass(frozen=True)
-class _BoundOutput:
-    """A ready CUDA storage buffer replaced by the recorded write."""
-    buffer: object
 
 
 @lru_cache(maxsize=128)
