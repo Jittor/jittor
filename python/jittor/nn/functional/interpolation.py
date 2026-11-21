@@ -61,7 +61,17 @@ def _antialias_weights(in_size, out_size, ratio, mode, dtype):
 
 
 def _antialias_axis(image, extent, axis, ratio, mode, dtype, byte_image):
-    index, weights = _antialias_weights(image.shape[axis], extent, ratio, mode, dtype)
+    # Index and filter coefficients depend on geometry alone.
+    with jt.no_grad():
+        index, weights = _antialias_weights(image.shape[axis], extent, ratio, mode, dtype)
+        if byte_image:
+            # The uint8 path uses rounded fixed-point coefficients and
+            # saturates the intermediate image before the second pass.
+            precision = ((32767.5 / weights.max()).log2().ceil() - 1).clamp(0, 22)
+            scale = jt.array(2.0, dtype="float64") ** precision
+            scaled = weights * scale
+            rounded = (scaled.abs() + 0.5).floor()
+            weights = jt.ternary(scaled < 0, -rounded, rounded)
     taps = index.shape[1]
     shape = list(image.shape)
     shape[axis] = extent
@@ -70,14 +80,6 @@ def _antialias_axis(image, extent, axis, ratio, mode, dtype, byte_image):
     samples = image.reindex([*shape, taps], indices, extras=[index])
     weights_shape = [1, 1, 1, 1, taps]
     weights_shape[axis] = extent
-    if byte_image:
-        # The uint8 path rounds to fixed-point coefficients and saturates the
-        # intermediate image before the second spatial pass.
-        precision = ((32767.5 / weights.max()).log2().ceil() - 1).clamp(0, 22)
-        scale = jt.array(2.0, dtype="float64") ** precision
-        scaled = weights * scale
-        rounded = (scaled.abs() + 0.5).floor()
-        weights = jt.ternary(scaled < 0, -rounded, rounded)
     result = (samples * weights.reshape(weights_shape)).sum(-1)
     if byte_image:
         result = (result / scale + 0.5).floor().clamp(0, 255)
@@ -109,9 +111,11 @@ def _interpolate_antialiased(image, size, scale_factor, mode, align_corners,
     )
     if dtype not in supported:
         raise NotImplementedError(f"antialias=True is not implemented for {dtype} on {backend}")
+    tracks_grad = not jt.flags.no_grad and image.requires_grad
     same_size = input_size == size
     if same_size and (align_corners or all(f in (None, 1) for f in factors)):
-        return image.clone()
+        result = image.clone()
+        return result if tracks_grad else result.stop_grad()
     byte_image = dtype == "uint8"
     compute_dtype = "float64" if byte_image or dtype == "float64" else "float32"
     with device_scope_like(image):
@@ -136,12 +140,13 @@ def _interpolate_antialiased(image, size, scale_factor, mode, align_corners,
             result = _antialias_axis(result, out_size, axis, ratio, mode, compute_dtype, byte_image)
         result = result.cast(dtype)
         if same_size and backend == "cpu":
-            return result.clone()
-        if same_size and not jt.flags.no_grad and image.requires_grad:
+            result = result.clone()
+        elif same_size and tracks_grad:
             # CUDA's backward copies the gradient when both spatial sizes
             # match, even if the forward sampled with explicit factors.
             return _AntialiasOutput.apply(result, image)
-        return result
+        # Resizing stopped input must not create a new differentiable tensor.
+        return result if tracks_grad else result.stop_grad()
 
 
 class _ChannelsLast:

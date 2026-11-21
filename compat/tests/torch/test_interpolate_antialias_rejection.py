@@ -61,6 +61,22 @@ def test_interpolate_antialias_matches_reference_forward_and_backward(device, mo
         np.testing.assert_allclose(x.grad.cpu().numpy().ravel(), gradient, rtol=0, atol=1e-12)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("mode", ["bilinear", "bicubic"])
+def test_interpolate_antialias_preserves_stopped_input(device, mode):
+    if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("requires a real CUDA device")
+    with jt.runtime.scope(use_cuda=int(device == "cuda")), forbid_backend_fallbacks():
+        pixels = (torch.arange(3 * 17 * 23, device=device) % 256).to(dtype=torch.uint8)
+        image = pixels.reshape(1, 3, 17, 23).to(dtype=torch.float32)
+        assert not image.requires_grad
+        result = torch.nn.functional.interpolate(image, size=(11, 13), mode=mode, antialias=True)
+        assert not result.requires_grad
+        assert result.device.type == device
+        result.round_()
+        assert np.isfinite(result.cpu().numpy()).all()
+
+
 @pytest.mark.parametrize("mode, expected", [
     ("bilinear", [[88, 102, 85], [114, 111, 126]]),
     ("bicubic", [[86, 102, 82], [113, 108, 131]]),
