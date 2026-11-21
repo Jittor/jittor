@@ -109,7 +109,7 @@ class TestDispatchKeySelection(unittest.TestCase):
         library = torch.library.Library(namespace, "FRAGMENT")
         torch.library.define(f"{name}.named", schema, lib=library)
         torch.library.register_kernel(name, "cpu", lambda x: x + 1)
-        torch.library.register_kernel(f"{name}.named", "cpu", lambda x: x + 2)
+        torch.library.register_kernel(f"{name}.named", "default", lambda x: x + 2)
 
         op = getattr(torch.ops, namespace).f
         self.assertEqual(op._tags, (torch.Tag.pointwise,))

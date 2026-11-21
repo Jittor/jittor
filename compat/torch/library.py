@@ -75,6 +75,11 @@ _CPU_DISPATCH_ORDER = (
     "CompositeImplicitAutograd", "Autograd", "BackendSelect", "",
 )
 _FAKE_ONLY_KEYS = ("Meta", "FakeTensor", "SparseCPU", "SparseCUDA")
+_DEVICE_DISPATCH_KEYS = {
+    "cpu": "CPU",
+    "cuda": "CUDA",
+    "default": "CompositeExplicitAutograd",
+}
 
 
 def _dispatch_order(residency):
@@ -219,7 +224,7 @@ class _RegisteredOp:
     def register_impl(self, dispatch_key, function, allow_override=False):
         with InstallTransaction._lock:
             key = str(dispatch_key or "CompositeExplicitAutograd")
-            key = {"cpu": "CPU", "cuda": "CUDA"}.get(key, key)
+            key = _DEVICE_DISPATCH_KEYS.get(key, key)
             if key in self._implementations and not allow_override:
                 raise RuntimeError(
                     "operator %s::%s already has an implementation for %s"
