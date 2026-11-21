@@ -1,4 +1,6 @@
 """Device and autograd regression for the public torch.fill APIs."""
+from contextlib import nullcontext
+
 import numpy as np
 import pytest
 import torch
@@ -55,3 +57,27 @@ def test_fill_inplace_and_invalid_value(device):
         torch.fill(x, torch.ones(2, device=device))
     with pytest.raises(TypeError):
         torch.fill(x, 3, out=x)
+
+
+def test_literal_bool_fill_preserves_view_readers_and_empty_write_version(device):
+    base = torch.tensor([False, True, False, True], device=device)
+    view = base[1:3]
+    empty = view[:0]
+    require_residency(base, device)
+    require_residency(view, device)
+    before = torch.logical_not(view)
+    version = base._version
+
+    scope = nullcontext()
+    if hasattr(torch, '_torch_compat_install_context'):
+        import jittor as jt
+        scope = jt.flag_scope(auto_graph_replay=0)
+    with scope:
+        assert view.fill_(True) is view
+        assert empty.fill_(False) is empty
+
+    assert base._version == version + 2
+    assert view.dtype == empty.dtype == torch.bool
+    np.testing.assert_array_equal(base.cpu().numpy(), [False, True, True, True])
+    np.testing.assert_array_equal(before.cpu().numpy(), [False, True])
+    assert empty.shape == (0,)

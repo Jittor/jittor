@@ -63,6 +63,33 @@ def test_tilelang_native_kernel_with_torch_frontend():
     check_double(lambda x: tilelang_call(kernel, x, TensorSpec(x.shape, x.dtype)))
 
 
+def test_prepared_triton_uses_current_scalars_and_grid():
+    require_cuda()
+    pytest.importorskip("triton")
+    import triton
+    import triton.language as tl
+    from jittor.kernels.triton import _prepared_call
+
+    @triton.jit
+    def affine(x, output, scale, OFFSET: tl.constexpr):
+        index = tl.program_id(0) * 4 + tl.arange(0, 4)
+        tl.store(output + index, tl.load(x + index) * scale + OFFSET)
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        reference = np.arange(16, dtype=np.float32)
+        source = torch.tensor(reference, device="cuda")
+        graph_count = jt.core.graph_launch_count()
+        for scale, offset, blocks in ((0.5, 1, 2), (2.0, 1, 4), (0.5, 3, 4), (1.5, 1, 3)):
+            count = blocks * 4
+            result = _prepared_call(
+                affine, source, TensorSpec((count,)), scale, OFFSET=offset, grid=(blocks,),
+            )
+            result.sync(False, False)
+            assert result.location() == "device"
+            np.testing.assert_array_equal(result.cpu().numpy(), reference[:count] * scale + offset)
+        assert jt.core.graph_launch_count() == graph_count
+
+
 def test_prepared_triton_replays_indexed_state_updates():
     require_cuda()
     from jittor.compat.triton import backend

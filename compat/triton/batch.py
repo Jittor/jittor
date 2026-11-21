@@ -56,6 +56,21 @@ def _argument_words(call, pointers, backend):
     return words, tuple(aligned)
 
 
+@lru_cache(maxsize=128)
+def _launch_fields(driver, kernel, signature, constants, options, aligned):
+    from . import backend
+
+    info = backend._compile(kernel, dict(signature), dict(constants), dict(options),
+                            device=driver.ordinal, aligned=aligned)
+    if info["scratch"] or info["profile_scratch"]:
+        return None
+    driver.check_shared_memory(info["shared"])
+    function = driver.get_function(info["cubin"], info["name"])
+    driver.ensure_dynamic_shared(function, info["shared"])
+    return (function.value, info["num_warps"] * 32, info["shared"], info["n_ptx_params"],
+            int(info["has_scratch"]) + int(info["has_profile_scratch"]))
+
+
 def current_batch():
     return getattr(_scope, "current", None)
 
@@ -148,24 +163,24 @@ class _LaunchBatch:
         stream = backend._launch_stream()
         for call in commands:
             words, aligned = _argument_words(call, pointers, backend)
-            info = backend._compile(call.kernel, call.signature, call.constants,
-                                    call.options, device=self._device, aligned=aligned)
-            if info["scratch"] or info["profile_scratch"]:
+            # The specialization includes live pointer alignment, but no
+            # tensor address or scalar value is kept in the launch cache.
+            fields = _launch_fields(
+                driver, call.kernel, tuple(call.signature.items()), tuple(call.constants.items()),
+                tuple(sorted(call.options.items())), aligned,
+            )
+            if fields is None:
                 with self.suspend():
                     backend.run(call.kernel, call.args, call.kwargs, call.grid)
                 continue
-            driver.check_shared_memory(info["shared"])
-            for field in ("has_scratch", "has_profile_scratch"):
-                if info[field]:
-                    words.append(0)
-            if info["n_ptx_params"] and info["n_ptx_params"] != len(words):
+            function, threads, shared, parameter_count, extra_slots = fields
+            words.extend((0,) * extra_slots)
+            if parameter_count and parameter_count != len(words):
                 raise backend.JittorTritonError("Batched Triton launch argument count differs")
-            function = driver.get_function(info["cubin"], info["name"])
-            driver.ensure_dynamic_shared(function, info["shared"])
             gx, gy, gz = (call.launch_grid + (1, 1))[:3]
             if gx and gy and gz:
-                status = self._launcher.launch(function.value, gx, gy, gz, info["num_warps"] * 32,
-                                               1, 1, info["shared"], stream, words)
+                status = self._launcher.launch(function, gx, gy, gz, threads, 1, 1,
+                                               shared, stream, words)
                 if status:
                     raise backend.JittorTritonError(f"Batched Triton launch failed with CUDA error {status}")
             self.submitted_launches += 1

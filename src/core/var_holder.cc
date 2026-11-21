@@ -2030,7 +2030,7 @@ bool VarHolder::try_indexed_storage_write(VarHolder* values,
     const int count = indices.size();
     const auto dtype = target->dtype();
     if (rank <= 0 || rank > 16 || count <= 0 || count > rank || count != axes.size()
-            || axes[0] != 0 || (dtype != ns_float32 && dtype != ns_bfloat16)
+            || axes[0] != 0 || (dtype != ns_float32 && dtype != ns_bfloat16 && dtype != ns_float16)
             || source->dtype() != dtype
             || !source->is_contiguous() || source->shape.size() != rank - count + 1
             || construction_target_backend(target) != BackendId::Cuda

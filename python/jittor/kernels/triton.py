@@ -95,6 +95,29 @@ def _prepared_source(layout, copies):
 """
 
 
+@lru_cache(maxsize=128)
+def _prepared_launch_fields(driver, device, kernel, kinds, constants, options):
+    """Resolve stable launch metadata for one kernel specialization and device."""
+    import ctypes
+    from jittor.compat.triton import backend
+
+    info = backend._compile(kernel, dict(kinds), dict(constants), dict(options), device=device)
+    if info["scratch"] or info["profile_scratch"]:
+        raise NotImplementedError("prepared Triton does not support global scratch")
+    function = driver.get_function(info["cubin"], info["name"])
+    driver.ensure_dynamic_shared(function, info["shared"])
+    driver.check_shared_memory(info["shared"])
+    launcher = ctypes.cast(driver.lib.cuLaunchKernel, ctypes.c_void_p).value
+    fields = {
+        **_launch_word("function", function.value),
+        **_launch_word("launcher", launcher),
+        "threads": info["num_warps"] * 32,
+        "shared": info["shared"],
+    }
+    extra_slots = int(info["has_scratch"]) + int(info["has_profile_scratch"])
+    return fields, extra_slots, info["n_ptx_params"]
+
+
 def _prepared_call(kernel, *args, grid, **options):
     """Schedule a scratch-free, inference-only CUDA Triton kernel for replay.
 
@@ -103,7 +126,6 @@ def _prepared_call(kernel, *args, grid, **options):
     to remain alive through replay. Its kernel must keep writes from racing
     reads by other threads. Prepare on the recording device before capture.
     """
-    import ctypes
     import jittor as jt
     from triton.runtime.jit import JITFunction
     from jittor.compat.triton import backend
@@ -180,26 +202,16 @@ def _prepared_call(kernel, *args, grid, **options):
 
     driver = backend._Driver.get(device)
     driver.ensure_ctx()
-    # Pointer alignment is intentionally unspecialized. Replay can substitute
-    # allocations with the same layout but different alignment.
-    info = backend._compile(kernel, kinds, constants, compiler, device=device)
-    if info["scratch"] or info["profile_scratch"]:
-        raise NotImplementedError("prepared Triton does not support global scratch")
-    layout.extend(["null"] * (int(info["has_scratch"]) + int(info["has_profile_scratch"])))
-    if info["n_ptx_params"] and info["n_ptx_params"] != len(layout):
+    # Runtime geometry and scalar values still belong to the current launch.
+    fields, extra_slots, parameter_count = _prepared_launch_fields(
+        driver, device, kernel, tuple(kinds.items()), tuple(constants.items()),
+        tuple(sorted(compiler.items())),
+    )
+    layout.extend(["null"] * extra_slots)
+    if parameter_count and parameter_count != len(layout):
         raise RuntimeError("prepared Triton argument count differs from compiled kernel")
-    function = driver.get_function(info["cubin"], info["name"])
-    driver.ensure_dynamic_shared(function, info["shared"])
-    driver.check_shared_memory(info["shared"])
-    launcher = ctypes.cast(driver.lib.cuLaunchKernel, ctypes.c_void_p).value
     gx, gy, gz = dims + (1,) * (3 - len(dims))
-    data = {
-        **_launch_word("function", function.value),
-        **_launch_word("launcher", launcher),
-        **scalar_bits,
-        "device": device, "gx": gx, "gy": gy, "gz": gz,
-        "threads": info["num_warps"] * 32, "shared": info["shared"],
-    }
+    data = dict(fields, device=device, gx=gx, gy=gy, gz=gz, **scalar_bits)
     shapes = [spec.shape for spec in outputs]
     dtypes = [spec.dtype.removeprefix("torch.") for spec in outputs]
     source = _prepared_source(tuple(layout), tuple(copies))

@@ -2265,8 +2265,22 @@ def _fill_captured_state(self, val):
 def _api_fill(self, val):
     if _fill_captured_state(self, val):
         return self
+    jt = _owner.jt
+    direct_bool = (
+        type(val) is bool and _jittor_dtype_name(self.dtype) == "bool"
+        and not jt.flags.auto_graph_replay and not jt.core._state_capture_active()
+        and not jt.core.graph_capture_active()
+    )
+    if direct_bool and not self.numel():
+        # The empty view has no bytes to change. The native self-copy still
+        # advances the shared write version without constructing a source.
+        self._copy_into(self, False)
+        return self
     with _new_scope(self, None):
-        value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
+        if direct_bool:
+            value = jt.full(self.shape, val, self.dtype)
+        else:
+            value = jt.ones(self.shape, self.dtype).stop_grad() * val
     return _ip(self, value, preserve_storage=True)
 
 

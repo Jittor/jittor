@@ -52,6 +52,41 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    def test_step_capture_disables_both_automatic_submission_paths(self):
+        active_policy = []
+
+        def step(x):
+            if jt.core._state_capture_active():
+                active_policy.append((jt.flags.auto_flush_ops, jt.flags.async_flush_ops))
+            return x * 2
+
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=3, async_flush_ops=2):
+            runner = jt.capture_step(step, record=False)
+            try:
+                for value in (1., 2., 3.):
+                    np.testing.assert_array_equal(runner(jt.array([value])).numpy(), [2 * value])
+                    self.assertEqual((jt.flags.auto_flush_ops, jt.flags.async_flush_ops), (3, 2))
+                self.assertEqual(active_policy, [(0, 0)])
+                self.assertEqual(runner.stats["captured"], 1)
+            finally:
+                runner.invalidate()
+
+    def test_step_capture_restores_automatic_submission_after_an_exception(self):
+        def step(x):
+            if jt.core._state_capture_active():
+                raise ValueError("capture failure")
+            return x * 2
+
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=3, async_flush_ops=2):
+            runner = jt.capture_step(step, record=False)
+            try:
+                runner(jt.array([1.])).sync()
+                with self.assertRaisesRegex(ValueError, "capture failure"):
+                    runner(jt.array([2.]))
+                self.assertEqual((jt.flags.auto_flush_ops, jt.flags.async_flush_ops), (3, 2))
+            finally:
+                runner.invalidate()
+
     def test_mixed_signatures_return_preupdate_gradient_readouts(self):
         parameter = jt.array([1., 2.]).start_grad()
 
