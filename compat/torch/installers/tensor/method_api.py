@@ -1401,7 +1401,8 @@ def _narrow(self, dim, start, length):
 
 
 def _stride(self, dim=None):
-    st = tuple(self._storage_strides())
+    layout = getattr(self, "_jittor_torch_meta_layout", None)
+    st = layout[0] if layout is not None else tuple(self._storage_strides())
     if dim is None:
         return tuple(st)
     return st[dim]
@@ -2701,6 +2702,8 @@ def _api_untyped_storage(self):
 
 
 def _api_data_ptr(self):
+    if _api_is_meta(self):
+        return 0
     _owner.jt.graph_replay_barrier("Tensor.data_ptr exposes storage to an external consumer")
     return int(self._storage_address)
 
@@ -2716,6 +2719,17 @@ def _api_is_shared(self):
 
 
 def _api_is_contiguous(self, *a, **k):
+    layout = getattr(self, "_jittor_torch_meta_layout", None)
+    if layout is not None:
+        expected = 1
+        shape = tuple(self.shape)
+        if 0 in shape:
+            return True
+        for size, stride in reversed(tuple(zip(shape, layout[0]))):
+            if size > 1 and stride != expected:
+                return False
+            expected *= size
+        return True
     return self._storage_is_contiguous()
 
 
@@ -2755,7 +2769,7 @@ def _api_retains_grad(self):
 
 
 def _api_is_cpu(self):
-    return not _is_cuda(self)
+    return not _api_is_meta(self) and not _is_cuda(self)
 
 
 def _api_is_mps(self):
@@ -2775,7 +2789,8 @@ def _api_get_device(self):
 
 
 def _api_storage_offset(self):
-    return int(self._storage_offset())
+    layout = getattr(self, "_jittor_torch_meta_layout", None)
+    return layout[1] if layout is not None else int(self._storage_offset())
 
 
 def _api_reduce_ex(self, protocol):
