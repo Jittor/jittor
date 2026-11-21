@@ -2341,6 +2341,18 @@ def _api_zero_batch(tensors):
                 tensor._copy_into(zeros)
 
 
+def _write_inplace_arithmetic_result(self, value):
+    if tuple(value.shape) != tuple(self.shape):
+        raise RuntimeError("in-place result shape does not match destination shape")
+    result_dtype, target_dtype = value.dtype, self.dtype
+    if result_dtype != target_dtype:
+        namespace = get_install_context(_owner.jt).target_namespace
+        if not namespace.can_cast(result_dtype, target_dtype):
+            raise RuntimeError("result type can't be cast to the destination type")
+        value = value.cast(_jittor_dtype_name(target_dtype))
+    return _ip(self, value, preserve_storage=True)
+
+
 def _inplace_add_sub(self, other, alpha, subtract=False):
     other = _dense_arithmetic_operand(other)
     if subtract and (
@@ -2367,15 +2379,7 @@ def _inplace_add_sub(self, other, alpha, subtract=False):
         value = self + (other if alpha else False)
     else:
         value = self - other * alpha if subtract else self + other * alpha
-    if tuple(value.shape) != tuple(self.shape):
-        raise RuntimeError("in-place result shape does not match destination shape")
-    result_dtype, target_dtype = value.dtype, self.dtype
-    if result_dtype != target_dtype:
-        namespace = get_install_context(_owner.jt).target_namespace
-        if not namespace.can_cast(result_dtype, target_dtype):
-            raise RuntimeError("result type can't be cast to the destination type")
-        value = value.cast(_jittor_dtype_name(target_dtype))
-    return _ip(self, value, preserve_storage=True)
+    return _write_inplace_arithmetic_result(self, value)
 
 
 def _api_add(self, o, alpha=1):
@@ -2397,7 +2401,7 @@ def _inplace_saved_input(self, other):
 
 
 def _api_mul(self, o):
-    return _ip(self, _inplace_saved_input(self, o) * o, preserve_storage=True)
+    return _write_inplace_arithmetic_result(self, _inplace_saved_input(self, o) * o)
 
 
 def _api_div(self, o):
