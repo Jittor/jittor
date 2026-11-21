@@ -284,6 +284,26 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
                         % (error, tol))
 
 
+    def test_bfloat16_backward_with_promoted_cotangent(self):
+        values = np.array([[0.125, -0.25, 0.375], [-0.125, 0.25, -0.375]], dtype=np.float32)
+        weights = np.array([[0.25, 0.5, 1.0], [0.125, 0.75, 0.625]], dtype=np.float32)
+        with jt.flag_scope(use_cuda=1):
+            for log in (False, True):
+                with self.subTest(log=log):
+                    x = jt.array(values).bfloat16()
+                    y = softmax_v1(x, log=log)
+                    raised = jt.exp(y)
+                    gradient = jt.grad((raised * jt.array(weights)).sum(), x)
+                    saved, actual = jt.fetch_sync([y.float32(), gradient.float32()])
+                    self.assertEqual(gradient.location(), "device")
+                    cotangent = np.exp(saved) * weights
+                    if log:
+                        expected = cotangent - np.exp(saved) * cotangent.sum(-1, keepdims=True)
+                    else:
+                        expected = saved * (cotangent - (saved * cotangent).sum(-1, keepdims=True))
+                    np.testing.assert_allclose(actual, expected, rtol=0.02, atol=0.002)
+
+
 class TestSoftmaxScheduleCoversBothKernels(unittest.TestCase):
     """The case table reaches every backward route. Needs no GPU.
 

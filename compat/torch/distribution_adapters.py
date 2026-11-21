@@ -73,6 +73,8 @@ class DistributionMethod:
         instance = args[0] if args else kwargs.get("self")
         multivariate = getattr(state.native, "MultivariateNormal", ())
         reference = instance.loc if isinstance(instance, multivariate) else None
+        if isinstance(instance, state.relaxed_types):
+            reference = instance.logits
         with tensor_frontend(state.tensor_type, like=reference):
             result = _adapter.implementation(*args, **kwargs)
             if (_adapter.implementation.__name__ == "rsample"
@@ -126,6 +128,14 @@ class DistributionAdapterState:
         self.target = target
         self.tensor_type = target.Var
         self.adapters = {}
+        self.relaxed_types = tuple(
+            cls for cls in (
+                getattr(native, "LogitRelaxedBernoulli", None),
+                getattr(native, "RelaxedBernoulli", None),
+                getattr(native, "ExpRelaxedCategorical", None),
+                getattr(native, "RelaxedOneHotCategorical", None),
+            ) if cls is not None
+        )
 
     def adapt(self, original):
         if original in self.adapters:
