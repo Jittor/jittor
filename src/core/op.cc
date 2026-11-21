@@ -660,21 +660,42 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // only keep its output alive until the update: a captured step, whose
     // whole forward is pending when the optimizer is built, held every
     // activation to the end, half as much memory again.
-    std::unordered_set<Op*> upstream;
-    vector<Node*> stack;
-    for (auto& edge : op->_inputs) stack.push_back(edge.node);
-    while (!stack.empty()) {
-        Node* v = stack.back();
-        stack.pop_back();
-        if (v->is_finished()) continue;
-        Op* producer = ((Var*)v)->input();
-        if (!producer || !upstream.insert(producer).second) continue;
-        for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+    {
+        // Queued marks denote the pending readers we are looking for.
+        // Expanded marks denote producers already visited in the upstream walk.
+        TraversalQueueMarks upstream("ordered write upstream readers");
+        size_t remaining = 0;
+        bool inputless_reader = false;
+        for (Node* out : after) {
+            Op* reader = ((Var*)out)->input();
+            if (!reader) {
+                inputless_reader = true;
+            } else if (!upstream.contains(reader)) {
+                upstream.mark_queued(reader);
+                ++remaining;
+            }
+        }
+        vector<Node*> stack;
+        for (auto& edge : op->_inputs) stack.push_back(edge.node);
+        while (remaining && !stack.empty()) {
+            Node* v = stack.back();
+            stack.pop_back();
+            if (v->is_finished()) continue;
+            Op* producer = ((Var*)v)->input();
+            if (!producer || upstream.expanded(producer)) continue;
+            bool is_reader = upstream.contains(producer);
+            upstream.mark_expanded(producer);
+            if (is_reader && --remaining == 0) break;
+            for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+        }
+        if (!remaining && !inputless_reader) return;
+        size_t kept = 0;
+        for (Node* out : after) {
+            Op* reader = ((Var*)out)->input();
+            if (!reader || !upstream.expanded(reader)) after[kept++] = out;
+        }
+        after.resize(kept);
     }
-    size_t kept = 0;
-    for (Node* out : after)
-        if (!upstream.count(((Var*)out)->input())) after[kept++] = out;
-    after.resize(kept);
     if (after.empty()) return;
     op->add_inputs(after);
     // Control edges: they order the two ops and carry no data.
