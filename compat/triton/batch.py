@@ -27,6 +27,11 @@ class _Command(NamedTuple):
 
 
 @lru_cache(maxsize=128)
+def _parameter_descriptors(kernel):
+    return tuple((parameter.name, parameter.is_constexpr) for parameter in kernel.params)
+
+
+@lru_cache(maxsize=128)
 def _alignment_positions(kernel):
     if not hasattr(kernel, "_pack_args"):
         return {}
@@ -88,15 +93,14 @@ class _LaunchBatch:
         bound = bind_arguments(kernel, shape, args, argument_options)
         signature, constants, runtime = {}, {}, []
         saw_tensor = False
-        for parameter in kernel.params:
-            name = parameter.name
+        for name, is_constexpr in _parameter_descriptors(kernel):
             value = bound[name]
-            if value is None or parameter.is_constexpr:
+            if value is None or is_constexpr:
                 signature[name] = "constexpr"
                 constants[name] = getattr(value, "value", value)
                 continue
             if isinstance(value, jt.Var):
-                if (not backend._tensor_is_cuda(value)
+                if ((value.placement_backend != 1 and not backend._tensor_is_cuda(value))
                         or value.device_id not in (-1, self._device)
                         or (not self._allow_strided and not backend._tensor_is_contiguous(value))):
                     return False
