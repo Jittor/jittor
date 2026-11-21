@@ -1,5 +1,9 @@
 """Stable policy APIs and the explicit owner of the Pillow bridge."""
+import operator
 import weakref
+
+from packaging.version import Version
+
 import jittor as jt
 from .context import get_install_context
 from .api_delegates import bind_delegates
@@ -7,6 +11,28 @@ from .fidelity import Fidelity, register_fidelity
 from ..stub_policy import allow_stub, set_allow_stub
 from ..diagnostics import EXPECTED, swallowed
 from ..transaction import set_attr
+
+
+class _TorchVersion(str):
+    """Keep the reported version string comparable to release tuples."""
+
+    def _compare(self, other, compare, compare_str):
+        if isinstance(other, tuple):
+            release = Version(".".join(map(str, other)))
+            return compare(Version(self), release)
+        return compare_str(self, other)
+
+    def __lt__(self, other):
+        return self._compare(other, operator.lt, str.__lt__)
+
+    def __le__(self, other):
+        return self._compare(other, operator.le, str.__le__)
+
+    def __gt__(self, other):
+        return self._compare(other, operator.gt, str.__gt__)
+
+    def __ge__(self, other):
+        return self._compare(other, operator.ge, str.__ge__)
 
 
 def compat_allow_stub(value=None):
@@ -20,7 +46,8 @@ def compat_report_torch_api_version(enable=True):
     target = context.target_namespace
     native = getattr(target, "__jittor_version__", None) or context.state["core_install_api"]["native_version"]
     api = getattr(target, "__torch_version__", None)
-    set_attr(target, "__version__", api if enable and api is not None else native, context=context)
+    reported = api if enable and api is not None else native
+    set_attr(target, "__version__", _TorchVersion(reported), context=context)
     return target.__version__
 
 
