@@ -328,6 +328,26 @@ class SequentialLR(LRScheduler):
         return list(getattr(self, "_last_lr", _base_lrs(self.optimizer)))
 
 
+    def state_dict(self):
+        state = super().state_dict()
+        state.pop("_scheds")
+        state["_schedulers"] = [scheduler.state_dict() for scheduler in self._scheds]
+        return state
+
+    def load_state_dict(self, sd):
+        state = dict(sd)
+        legacy = state.pop("_scheds", None)
+        children = state.pop("_schedulers", legacy)
+        if children is not None:
+            if len(children) != len(self._scheds):
+                raise ValueError("SequentialLR checkpoint has a different number of schedulers")
+            # Legacy Jittor checkpoints stored the child objects themselves.
+            # Restore their metadata into the current optimizer's schedulers.
+            for scheduler, child in zip(self._scheds, children):
+                scheduler.load_state_dict(child if isinstance(child, dict) else child.state_dict())
+        super().load_state_dict(state)
+
+
 class ChainedScheduler:
     def __init__(self, schedulers, optimizer=None):
         self._scheds = list(schedulers)
