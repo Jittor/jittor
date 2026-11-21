@@ -530,6 +530,18 @@ class TestStepCaptureCuda(TestStepCapture):
                 self.assertFalse(value.requires_grad)
                 np.testing.assert_array_equal(value.numpy(), 2 * (np.arange(16) + i) + 1)
 
+    def test_cuda_input_staging_checks_aliases_before_copying(self):
+        with jt.no_grad():
+            first = jt.array(np.arange(8, dtype=np.float32))
+            second = jt.array(np.arange(8, dtype=np.float32) + 10)
+            source = jt.array(np.arange(8, dtype=np.float32) + 20)
+            jt.sync([first, second, source], False, False)
+            self.assertFalse(jt.core._try_stage_cuda_step_inputs([first, second], [source, first]))
+            np.testing.assert_array_equal(first.numpy(), np.arange(8))
+            np.testing.assert_array_equal(second.numpy(), np.arange(8) + 10)
+            self.assertTrue(jt.core._try_stage_cuda_step_inputs([second], [source]))
+            np.testing.assert_array_equal(second.numpy(), np.arange(8) + 20)
+
     def test_two_fast_path_sums_survive_a_replay(self):
         rs = np.random.RandomState(5)
         w = jt.array(rs.randn(256, 128).astype("float32"))

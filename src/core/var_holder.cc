@@ -596,6 +596,65 @@ void finish_step_readouts(const vector<VarHolder*>& roots) {
     for (VarHolder* holder : roots) holder->release_kept();
 }
 
+bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
+                                const vector<VarHolder*>& sources) {
+    if (!no_grad || targets.size() != sources.size()
+            || state_capture_active() || graph_capture_active())
+        return false;
+    if (targets.empty()) return true;
+
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    const Device device{BackendId::Cuda, current_device()};
+    auto ready_on_device = [device](Var* value) {
+        if (!value->is_finished() || !value->is_contiguous() || !value->size
+                || !value->mem_ptr || !value->allocator
+                || value->flag(VarFlags::_execution_failed))
+            return false;
+        const Device owner = allocation_device(value->allocator);
+        return owner.backend == device.backend && owner.index == device.index;
+    };
+    vector<Var*> destinations;
+    destinations.reserve(targets.size());
+    for (size_t i = 0; i < targets.size(); ++i) {
+        Var* target = targets[i]->var;
+        Var* source = sources[i]->var;
+        if (targets[i]->is_view() || !ready_on_device(target) || !ready_on_device(source)
+                || target->shape != source->shape || target->dtype() != source->dtype())
+            return false;
+        destinations.push_back(target);
+    }
+    auto overlaps = [](const Var* a, const Var* b) {
+        auto x = reinterpret_cast<uintptr_t>(a->mem_ptr);
+        auto y = reinterpret_cast<uintptr_t>(b->mem_ptr);
+        return x <= y ? y - x < a->size : x - y < b->size;
+    };
+    // Validate the whole transaction before any copy can overwrite a later
+    // source. The ordinary executor path owns views and saved readers.
+    for (size_t i = 0; i < targets.size(); ++i)
+        for (size_t j = 0; j < targets.size(); ++j)
+            if (overlaps(destinations[i], sources[j]->var)
+                    || (i < j && overlaps(destinations[i], destinations[j])))
+                return false;
+    if (!saved_storage_readers(destinations).empty()) return false;
+
+    vector<VarPtr> held_sources;
+    vector<VarPtr> held_targets;
+    held_sources.reserve(sources.size());
+    held_targets.reserve(targets.size());
+    for (size_t i = 0; i < targets.size(); ++i) {
+        targets[i]->check_inplace_autograd();
+        held_targets.emplace_back(destinations[i]);
+        held_sources.emplace_back(sources[i]->var);
+    }
+    for (size_t i = 0; i < targets.size(); ++i) {
+        targets[i]->record_inplace_write();
+        backend_copy(held_targets[i]->mem_ptr, device, held_sources[i]->mem_ptr,
+                     device, held_targets[i]->size, true);
+    }
+    return true;
+}
+
 bool commit_shared_updates(const vector<VarHolder*>& targets,
                            const vector<VarHolder*>& sources) {
     USER_CHECK(targets.size() == sources.size())

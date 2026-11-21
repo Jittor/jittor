@@ -1061,13 +1061,16 @@ class StepCapture:
                 jt.flags.keep_graph = outer_keep
             if preserved:
                 self.stats["preserved"] = self.stats.get("preserved", 0) + 1
-            with jt.no_grad():
-                if not dynamic_prefix:
-                    # Dynamic replay already staged these arguments before
-                    # shape preflight. Keep that same feed through the hooks
-                    # and the final prefix check, rather than copying it twice.
-                    for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-                        captured._copy_into(given)
+            if not dynamic_prefix:
+                # Dynamic replay has already staged the inputs for preflight.
+                given = _input_vars((args, kwargs), [])
+                staged = (jt.flags.no_grad and self._cuda_graph
+                          and not self._graph_has_host_prefix and not cap.prologue
+                          and _core._try_stage_cuda_step_inputs(cap.inputs, given))
+                if not staged:
+                    with jt.no_grad():
+                        for target, source in zip(cap.inputs, given):
+                            target._copy_into(source)
             if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
                 if self._graph_has_host_prefix:
                     # The pool scope above already orders shared temporary
