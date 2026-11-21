@@ -1,6 +1,7 @@
 """Explicitly ordered eager launches with one operand barrier per batch."""
 
 from contextlib import contextmanager
+from functools import lru_cache
 import threading
 from typing import NamedTuple
 
@@ -23,6 +24,31 @@ class _Command(NamedTuple):
     runtime: list
     options: dict
     launch_grid: tuple
+
+
+@lru_cache(maxsize=128)
+def _alignment_positions(kernel):
+    if not hasattr(kernel, "_pack_args"):
+        return {}
+    return {parameter.name: index for index, parameter in enumerate(kernel.params)
+            if not getattr(parameter, "do_not_specialize", False)
+            and not getattr(parameter, "do_not_specialize_on_alignment", False)}
+
+
+def _argument_words(call, pointers, backend):
+    positions = _alignment_positions(call.kernel)
+    words, aligned = [], []
+    for name, kind, value in call.runtime:
+        if kind.startswith("*"):
+            pointer = pointers[id(value)]
+            words.append(pointer)
+            divisible = pointer != 0 and pointer % 16 == 0
+        else:
+            words.append(backend._scalar_bits(kind, value))
+            divisible = type(value) is int and value % 16 == 0
+        if divisible and (index := positions.get(name)) is not None:
+            aligned.append(index)
+    return words, tuple(aligned)
 
 
 def current_batch():
@@ -48,15 +74,20 @@ class _LaunchBatch:
 
         if self._launcher is None or kernel not in self._kernels or not jt.flags.no_grad:
             return False
-        unexpected = kwargs.keys() - kernel.signature.parameters.keys() - _COMPILER_OPTIONS
-        if kwargs.get("num_ctas") == 1:
-            unexpected.discard("num_ctas")
-        if unexpected:
-            return False
-        bound = bind_arguments(kernel, kernel.signature, args, {
-            k: v for k, v in kwargs.items() if k in kernel.signature.parameters
-        })
+        shape = kernel.signature
+        parameters = shape.parameters
+        argument_options, compiler_options = {}, {}
+        for name, value in kwargs.items():
+            if name in parameters:
+                argument_options[name] = value
+            elif name not in _COMPILER_OPTIONS and (name != "num_ctas" or value != 1):
+                return False
+            if name in _COMPILER_OPTIONS:
+                compiler_options[name] = value
+
+        bound = bind_arguments(kernel, shape, args, argument_options)
         signature, constants, runtime = {}, {}, []
+        saw_tensor = False
         for parameter in kernel.params:
             name = parameter.name
             value = bound[name]
@@ -70,22 +101,23 @@ class _LaunchBatch:
                         or (not self._allow_strided and not backend._tensor_is_contiguous(value))):
                     return False
                 kind = backend._ptr_sig(value)
+                saw_tensor = True
             else:
                 value = getattr(value, "value", value)
                 kind = backend._scalar_sig(value)
             signature[name] = kind
             runtime.append((name, kind, value))
-        if not any(kind.startswith("*") for _, kind, _ in runtime):
+        if not saw_tensor:
             return False
-        launch_grid = grid(bound) if callable(grid) else grid
-        if isinstance(launch_grid, int):
-            launch_grid = (launch_grid,)
-        launch_grid = tuple(launch_grid)
-        if not 1 <= len(launch_grid) <= 3 or any(type(dim) is not int or dim < 0 for dim in launch_grid):
+        dimensions = grid(bound) if callable(grid) else grid
+        if isinstance(dimensions, int):
+            dimensions = (dimensions,)
+        else:
+            dimensions = tuple(dimensions)
+        if not 1 <= len(dimensions) <= 3 or any(type(dim) is not int or dim < 0 for dim in dimensions):
             return False
-        options = {k: v for k, v in kwargs.items() if k in _COMPILER_OPTIONS}
         self._commands.append(_Command(
-            kernel, args, kwargs, grid, signature, constants, runtime, options, launch_grid))
+            kernel, args, kwargs, grid, signature, constants, runtime, compiler_options, dimensions))
         return True
 
     def flush(self):
@@ -111,9 +143,7 @@ class _LaunchBatch:
         driver.ensure_ctx()
         stream = backend._launch_stream()
         for call in commands:
-            arguments = {name: pointers[id(value)] for name, kind, value in call.runtime
-                         if kind.startswith("*")}
-            aligned = backend._launch_alignment(call.kernel, call.runtime, arguments)
+            words, aligned = _argument_words(call, pointers, backend)
             info = backend._compile(call.kernel, call.signature, call.constants,
                                     call.options, device=self._device, aligned=aligned)
             if info["scratch"] or info["profile_scratch"]:
@@ -121,8 +151,6 @@ class _LaunchBatch:
                     backend.run(call.kernel, call.args, call.kwargs, call.grid)
                 continue
             driver.check_shared_memory(info["shared"])
-            words = [arguments[name] if kind.startswith("*") else backend._scalar_bits(kind, value)
-                     for name, kind, value in call.runtime]
             for field in ("has_scratch", "has_profile_scratch"):
                 if info[field]:
                     words.append(0)

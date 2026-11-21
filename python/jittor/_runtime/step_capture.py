@@ -717,16 +717,17 @@ class StepCapture:
         cap.exact = self._exact_random
         working = _WorkingSet()
         before = jt.flags.keep_graph
-        # The step is built whole, as a replay runs it. CUDA's auto-flush
-        # otherwise launches what is pending every `auto_flush_ops` operators,
-        # and a kept graph frees each piece after its last use, so the sync
-        # below computed those pieces again: a Qwen3 training step ran its
-        # forward two and a half times, and its peak with them.
+        # Build the whole step before submitting it. Both automatic flush
+        # paths can submit while a kept graph is being built, including a
+        # module-boundary flush that falls back to running inline. Submitting
+        # a partial capture can make the final sync repeat state updates.
         flush_before = jt.flags.auto_flush_ops
+        async_flush_before = jt.flags.async_flush_ops
         _ACTIVE = cap
         _core._state_capture_begin()
         jt.flags.keep_graph = 2
         jt.flags.auto_flush_ops = 0
+        jt.flags.async_flush_ops = 0
         records = []
         readbacks = _core._host_readback_count()
         try:
@@ -736,10 +737,13 @@ class StepCapture:
                     cap.refused = cap.refused or (
                         "the step contains an opaque operation: " + barriers[0])
         finally:
-            records = _core._state_capture_end()
-            jt.flags.auto_flush_ops = flush_before
-            jt.flags.keep_graph = before
-            _ACTIVE = None
+            try:
+                records = _core._state_capture_end()
+            finally:
+                jt.flags.async_flush_ops = async_flush_before
+                jt.flags.auto_flush_ops = flush_before
+                jt.flags.keep_graph = before
+                _ACTIVE = None
         if _core._host_readback_count() != readbacks:
             cap.refused = cap.refused or (
                 "the step read a value back to the host, so its path depends on "

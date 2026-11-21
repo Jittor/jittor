@@ -753,12 +753,23 @@ def _tensor_is_contiguous(v):
     return True
 
 
+_POINTER_SIGNATURES = {
+    prefix + name: "*" + code
+    for name, code in _DT.items()
+    for prefix in ("", "torch.")
+}
+
+
 def _ptr_sig(var):
-    name = _dtype_name(var.dtype)
-    code = _DT.get(name)
-    if code is None:
+    spelling = str(var.dtype)
+    signature = _POINTER_SIGNATURES.get(spelling)
+    if signature is not None:
+        return signature
+    name = _dtype_name(spelling)
+    signature = _POINTER_SIGNATURES.get(name)
+    if signature is None:
         raise JittorTritonError("unsupported jittor Var dtype for triton: %r" % name)
-    return "*" + code
+    return signature
 
 
 def _scalar_sig(v):
