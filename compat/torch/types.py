@@ -148,13 +148,10 @@ def _make_dtypes(ns):
         ("float8_e4m3fn", True), ("float8_e4m3fnuz", True),
         ("float8_e5m2", True), ("float8_e5m2fnuz", True),
         ("float8_e8m0fnu", True), ("float4_e2m1fn_x2", True),
-        # sub-byte unsigned dtypes used by torchao/diffusers import-time tables.
-        # They are placeholders only; Jittor kernels do not implement them.
-        ("uint1", False), ("uint2", False), ("uint3", False), ("uint4", False),
-        ("uint5", False), ("uint6", False), ("uint7", False),
-        ("int1", False), ("int2", False), ("int3", False), ("int4", False),
-        ("int5", False), ("int6", False), ("int7", False),
     ]
+    # Sub-byte integers are metadata placeholders for downstream imports.
+    for prefix in ("uint", "int"):
+        specs.extend((f"{prefix}{bits}", False) for bits in range(1, 8))
     objs = {}
     for name, is_fp in specs:
         objs[name] = dtype(name, is_fp)
