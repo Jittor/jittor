@@ -9,6 +9,7 @@ from __future__ import absolute_import
 import collections
 import enum
 import inspect
+import re
 import types
 import typing
 from typing import Any, Optional, Tuple, cast
@@ -74,6 +75,11 @@ _CPU_DISPATCH_ORDER = (
     "CompositeImplicitAutograd", "Autograd", "BackendSelect", "",
 )
 _FAKE_ONLY_KEYS = ("Meta", "FakeTensor", "SparseCPU", "SparseCUDA")
+_DEVICE_DISPATCH_KEYS = {
+    "cpu": "CPU",
+    "cuda": "CUDA",
+    "default": "CompositeExplicitAutograd",
+}
 
 
 def _dispatch_order(residency):
@@ -218,6 +224,7 @@ class _RegisteredOp:
     def register_impl(self, dispatch_key, function, allow_override=False):
         with InstallTransaction._lock:
             key = str(dispatch_key or "CompositeExplicitAutograd")
+            key = _DEVICE_DISPATCH_KEYS.get(key, key)
             if key in self._implementations and not allow_override:
                 raise RuntimeError(
                     "operator %s::%s already has an implementation for %s"
@@ -472,6 +479,21 @@ class Library:
         return None
 
 
+def define(qualname, schema, *, lib=None, tags=()):
+    """Register a named operator schema with the active dispatcher."""
+    if not isinstance(qualname, str) or qualname.count("::") != 1:
+        raise ValueError("operator name must have the form namespace::name")
+    namespace, name = qualname.split("::")
+    if not namespace or not name or not re.fullmatch(r"\(.*\) -> .*", schema):
+        raise ValueError("expected a qualified operator name and a nameless schema")
+    target = lib if lib is not None else Library(namespace, "FRAGMENT")
+    tags = (tags,) if isinstance(tags, Tag) else tuple(tags)
+    with InstallTransaction._lock:
+        if target._op(name)._schema is not None:
+            raise RuntimeError(f"operator {target.ns}::{name} already has a schema")
+        target.define(name + schema, tags=tags)
+
+
 def custom_op(name=None, fn=None, *args, **kwargs):
     """torch.library.custom_op -- a generic registration API.
 
@@ -646,7 +668,11 @@ def infer_schema(prototype_function, *, mutates_args, op_name=None):
                          _library_state()["torch_module"])
 
 
-register_kernel = impl
+def register_kernel(op, device_types, func=None, *, lib=None):
+    if isinstance(op, _RegisteredOp):
+        op = f"{op.namespace}::{op.name}"
+    dispatch_types = "CompositeExplicitAutograd" if device_types is None else device_types
+    return impl(op, dispatch_types, func, lib=lib)
 
 
 def wrap_triton(tensor):
@@ -758,7 +784,7 @@ def install_torch_library(torch_module, modules):
         state = {"dispatcher": dispatcher, "torch_module": torch_module}
         ctx.state["library_api"] = state
     library_module = ctx.registry.ensure("torch.library")
-    for name in ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
+    for name in ("Library", "Tag", "define", "custom_op", "infer_schema", "register_fake",
                  "register_kernel", "impl", "register_autograd",
                  "register_torch_dispatch", "register_vmap", "opcheck", "get_ctx",
                  "wrap_triton"):
@@ -789,7 +815,7 @@ def install_torch_library(torch_module, modules):
     torch_module._custom_ops = custom_ops_module
     modules["torch._custom_ops"] = custom_ops_module
     register_api_bindings(library_module, "torch.library",
-                          ("Library", "Tag", "custom_op", "infer_schema", "register_fake",
+                          ("Library", "Tag", "define", "custom_op", "infer_schema", "register_fake",
                            "register_kernel", "impl", "register_autograd"),
                           Fidelity.APPROXIMATE,
                           "Context-owned dispatcher uses actual tensor CPU/CUDA residency and "
