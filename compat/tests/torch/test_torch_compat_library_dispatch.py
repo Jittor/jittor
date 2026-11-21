@@ -101,6 +101,25 @@ class TestDispatchKeySelection(unittest.TestCase):
         op = self._op([("CompositeExplicitAutograd", lambda x: x + 7)])
         self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [7.0, 7.0])
 
+    def test_module_level_define_dispatches_default_and_named_overloads(self):
+        namespace = _fresh_ns()
+        name = f"{namespace}::f"
+        schema = "(Tensor x) -> Tensor"
+        self.assertIsNone(torch.library.define(name, schema, tags=torch.Tag.pointwise))
+        library = torch.library.Library(namespace, "FRAGMENT")
+        torch.library.define(f"{name}.named", schema, lib=library)
+        torch.library.register_kernel(name, "cpu", lambda x: x + 1)
+        torch.library.register_kernel(f"{name}.named", "cpu", lambda x: x + 2)
+
+        op = getattr(torch.ops, namespace).f
+        self.assertEqual(op._tags, (torch.Tag.pointwise,))
+        self.assertEqual(op(jt.zeros(2)).numpy().tolist(), [1.0, 1.0])
+        self.assertEqual(op.named(jt.zeros(2)).numpy().tolist(), [2.0, 2.0])
+        with self.assertRaisesRegex(RuntimeError, "already has a schema"):
+            torch.library.define(name, schema)
+        with self.assertRaises(ValueError):
+            torch.library.define(f"{namespace}::other", "other(Tensor x) -> Tensor")
+
     def test_backend_specific_kernel_beats_the_composite_fallback(self):
         op = self._op([("CompositeExplicitAutograd", lambda x: x + 7),
                        ("CPU", lambda x: x + 1)])
@@ -134,6 +153,18 @@ class TestDispatchKeySelection(unittest.TestCase):
             x = jt.zeros(2)
             x.sync()
             self.assertEqual(op(x).numpy().tolist(), [100.0, 100.0])
+
+    @unittest.skipUnless(_test_capability.check_accelerator('cuda', backend=jt).enabled, "needs an accelerator")
+    def test_public_registration_dispatches_on_cuda(self):
+        namespace = _fresh_ns()
+        name = f"{namespace}::f"
+        torch.library.define(name, "(Tensor x) -> Tensor")
+        torch.library.register_kernel(name, None, lambda x: x + 1)
+        torch.library.register_kernel(name, "cuda", lambda x: x + 2)
+        x = torch.zeros(2, device="cuda")
+        output = getattr(torch.ops, namespace).f(x)
+        self.assertEqual(output.device.type, "cuda")
+        self.assertEqual(output.cpu().tolist(), [2.0, 2.0])
 
 
 class TestRegisteredAutograd(unittest.TestCase):
