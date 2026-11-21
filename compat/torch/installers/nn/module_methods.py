@@ -1190,6 +1190,32 @@ def _get_submodule(self, target):
     return mod
 
 
+def _set_submodule(self, target, module, strict=False):
+    """Replace or add a child module at a dotted path."""
+    if not target:
+        raise ValueError("Cannot set a submodule without a target name")
+    if not isinstance(module, jt.Module):
+        raise ValueError("module must be an instance of torch.nn.Module")
+    parts = target.split(".")
+    parent = self
+    for name in parts[:-1]:
+        parent = getattr(parent, name)
+        if not isinstance(parent, jt.Module):
+            raise AttributeError(f"{name!r} is not an nn.Module")
+    name = parts[-1]
+    if not name:
+        raise AttributeError("The submodule name is empty")
+    try:
+        previous = getattr(parent, name)
+    except AttributeError:
+        if strict:
+            raise
+    else:
+        if not isinstance(previous, jt.Module):
+            raise AttributeError(f"{name!r} is not an nn.Module")
+    setattr(parent, name, module)
+
+
 def _get_parameter(self, target):
     """Torch's ``get_parameter``: a parameter, never a buffer."""
     mod = self
@@ -1552,6 +1578,8 @@ def _install_module_methods(nn, registry=None):
         M.buffers = _buffers
     if not hasattr(M, "get_submodule"):
         M.get_submodule = _get_submodule
+    if not hasattr(M, "set_submodule"):
+        M.set_submodule = _set_submodule
     if not hasattr(M, "get_parameter"):
         M.get_parameter = _get_parameter
     if not hasattr(M, "get_buffer"):
@@ -1567,7 +1595,7 @@ def _install_module_methods(nn, registry=None):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
     register_api_bindings(M, 'torch.nn.Module',
-        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'set_submodule', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
     register_api_bindings(M, 'torch.nn.Module', ('extra_repr',),
         Fidelity.EXACT, 'Torch Module default extra_repr is empty; explicit subclass overrides retain normal MRO precedence')
