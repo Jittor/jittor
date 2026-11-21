@@ -864,6 +864,16 @@ class StepCapture:
         return cap, self._results(cap, outputs, (args, kwargs))
 
     def _results(self, cap, sources, call_inputs):
+        if jt.flags.no_grad and self._cuda_graph and sources is self._graph_out:
+            outs = []
+            for value, source in zip(cap.outputs, sources):
+                out = _core._try_snapshot_cuda_step_output(source)
+                if out is None:
+                    out = _empty_like(value)
+                    out._copy_into(source, False)
+                outs.append(out)
+            return _rebuild(cap.template, outs)
+
         outs = [_empty_like(o) for o in cap.outputs]
         with jt.no_grad():
             for out, src in zip(outs, sources):

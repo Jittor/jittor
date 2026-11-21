@@ -12,4 +12,8 @@ namespace jittor {
 PyObject* try_rms_norm_cuda(PyObject* x, PyObject* weight, PyObject* epsilon,
                            PyObject* source_fn);
 
+// Copy a materialized graph output into caller-owned CUDA storage.
+// @pyjt(_try_snapshot_cuda_step_output)
+PyObject* try_snapshot_cuda_step_output(PyObject* source);
+
 } // namespace jittor

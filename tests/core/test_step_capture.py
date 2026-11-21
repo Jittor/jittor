@@ -518,6 +518,18 @@ class TestStepCaptureCuda(TestStepCapture):
     def tearDown(self):
         jt.flags.use_cuda = self._use_cuda
 
+    def test_cuda_output_snapshots_survive_replay_and_invalidation(self):
+        with jt.no_grad():
+            captured = jt.capture_step(lambda value: value * 2 + 1)
+            feeds = [jt.array(np.arange(16, dtype=np.float32) + i) for i in range(10)]
+            jt.sync(feeds, False, False)
+            results = [captured(feed) for feed in feeds]
+            self.assertGreater(captured.stats["graph"], 0)
+            captured.invalidate()
+            for i, value in enumerate(results):
+                self.assertFalse(value.requires_grad)
+                np.testing.assert_array_equal(value.numpy(), 2 * (np.arange(16) + i) + 1)
+
     def test_two_fast_path_sums_survive_a_replay(self):
         rs = np.random.RandomState(5)
         w = jt.array(rs.randn(256, 128).astype("float32"))
