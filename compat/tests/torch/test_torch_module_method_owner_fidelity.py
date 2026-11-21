@@ -476,6 +476,27 @@ def test_get_submodule_resolves_dotted_path():
     assert net.get_submodule("") is net
 
 
+def test_set_submodule_replaces_and_registers_nested_children():
+    net = torch.nn.Module()
+    net.layers = torch.nn.ModuleList([_Net()])
+    replacement = torch.nn.Linear(4, 2)
+    assert net.set_submodule("layers.0.lin", replacement, strict=True) is None
+    assert net.get_submodule("layers.0.lin") is replacement
+    assert net.get_parameter("layers.0.lin.weight") is replacement.weight
+
+    extra = torch.nn.ReLU()
+    net.set_submodule("layers.0.extra", extra)
+    assert dict(net.named_modules())["layers.0.extra"] is extra
+
+    for path in ("layers.0.absent", "missing.child", "layers.0.lin.weight"):
+        with pytest.raises(AttributeError):
+            net.set_submodule(path, extra, strict=True)
+    with pytest.raises(ValueError):
+        net.set_submodule("", extra)
+    with pytest.raises(ValueError):
+        net.set_submodule("extra", 5)
+
+
 def test_register_parameter_registers_the_name():
     net = _Net()
     p = torch.ones(2)
