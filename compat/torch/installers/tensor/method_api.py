@@ -314,7 +314,7 @@ def _optimizer_write_scope():
         _OPTIMIZER_WRITES[0] -= 1
 
 
-def _copy_detached_storage(self, value):
+def _copy_detached_storage(self, value, *, fresh_result=False):
     # Optimizer buckets retain detached aliases of dense slices. Rebinding a
     # holder would leave those aliases reading the old allocation. Only use
     # the native imperative store when no differentiable RHS edge is needed.
@@ -343,7 +343,7 @@ def _copy_detached_storage(self, value):
         # would lose that storage, its overlap guards and its gradient history.
         if not self._mem_ptr_now:
             if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
-                    and _owner.jt.core._try_defer_unaliased_inplace(self, value)):
+                    and _owner.jt.core._try_defer_unaliased_inplace(self, value, fresh_result)):
                 return True
             self.sync(False, False)
         if not self._mem_ptr_now:
@@ -376,7 +376,7 @@ def _copy_detached_storage(self, value):
     return True
 
 
-def _ip(self, value, preserve_storage=False):
+def _ip(self, value, preserve_storage=False, *, fresh_result=False):
     self._check_inplace_autograd()
     data_owner = getattr(self, "_torch_data_owner", None)
     if (data_owner is not None and not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
@@ -392,7 +392,7 @@ def _ip(self, value, preserve_storage=False):
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
             if self._view_base_is_trainable_leaf():
                 raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
-        if _copy_detached_storage(self, value):
+        if _copy_detached_storage(self, value, fresh_result=fresh_result):
             return self
     # Keep the RHS graph through an in-place operation. start_grad() on an
     # already connected result would replace its graph with a fresh leaf.
@@ -2341,7 +2341,7 @@ def _api_zero_batch(tensors):
                 tensor._copy_into(zeros)
 
 
-def _write_inplace_arithmetic_result(self, value):
+def _write_inplace_arithmetic_result(self, value, *, fresh_result=False):
     if tuple(value.shape) != tuple(self.shape):
         raise RuntimeError("in-place result shape does not match destination shape")
     result_dtype, target_dtype = value.dtype, self.dtype
@@ -2350,7 +2350,7 @@ def _write_inplace_arithmetic_result(self, value):
         if not namespace.can_cast(result_dtype, target_dtype):
             raise RuntimeError("result type can't be cast to the destination type")
         value = value.cast(_jittor_dtype_name(target_dtype))
-    return _ip(self, value, preserve_storage=True)
+    return _ip(self, value, preserve_storage=True, fresh_result=fresh_result)
 
 
 def _inplace_add_sub(self, other, alpha, subtract=False):
@@ -2401,7 +2401,8 @@ def _inplace_saved_input(self, other):
 
 
 def _api_mul(self, o):
-    return _write_inplace_arithmetic_result(self, _inplace_saved_input(self, o) * o)
+    value = _inplace_saved_input(self, o) * o
+    return _write_inplace_arithmetic_result(self, value, fresh_result=True)
 
 
 def _api_div(self, o):
