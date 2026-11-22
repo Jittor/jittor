@@ -39,8 +39,10 @@ CubArgsortOp::CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, 
         const int64 rows = width > 0 ? x->num / width : 0;
         // Segmented radix sort gives a wide segment to one CTA per pass.
         // A device-wide radix sort per row uses the GPU for these shapes.
-        rowwise = rows > 0 && rows <= 8
-            && width >= std::max<int64>(65536, rows * 16384);
+        const bool grouped = rows > 8 && rows <= 16 && width >= 131072 && width <= 262144
+            && (dtype == ns_int32 || dtype == ns_int64);
+        rowwise = grouped || (rows > 0 && rows <= 8
+            && width >= std::max<int64>(65536, rows * 16384));
     }
     y = create_output(nullptr, dtype);
     y_key = create_output(nullptr, x->dtype());
@@ -143,10 +145,17 @@ void CubArgsortOp::jit_run() {
     auto* __restrict__ indices = y->ptr<Ty>();
     const int width = x->shape[x->shape.size() - 1];
     const int rows = x->num / width;
-    // Wide independent rows can share one device-wide radix pass. Cap the
-    // combined key workspace and preserve the per-row route for large inputs.
-    if (rows > 1 && x->num <= 2 * 1024 * 1024 && (y->dtype() == ns_int32 || y->dtype() == ns_int64)) {
-        packed_wide_argsort(xp, indexesp, values, indices, rows, width);
+    // Keep each packed radix sort within the same key workspace bound even
+    // when the batch needs more than eight rows.
+    constexpr int max_packed_items = 2 * 1024 * 1024;
+    if (rows > 1 && (rows > 8 || x->num <= max_packed_items)
+            && (y->dtype() == ns_int32 || y->dtype() == ns_int64)) {
+        const int group = std::min(8, max_packed_items / width);
+        for (int first = 0; first < rows; first += group) {
+            const int start = first * width;
+            packed_wide_argsort(xp + start, indexesp + start, values + start, indices + start,
+                                std::min(rows - first, group), width);
+        }
         return;
     }
     size_t scratch_bytes = 0;

@@ -79,10 +79,11 @@ def test_stable_argsort_nonlast_axis(device, index_dtype, descending):
 
 @pytest.mark.parametrize("descending", [False, True])
 @pytest.mark.parametrize("index_dtype", ["int32", "int64"])
-def test_cuda_stable_argsort_few_wide_rows(descending, index_dtype):
+@pytest.mark.parametrize(("rows", "width"), [(4, 131072), (9, 131072), (16, 248320)])
+def test_cuda_stable_argsort_wide_rows(descending, index_dtype, rows, width):
     capability.require_accelerator("cuda")
     rng = np.random.default_rng(928)
-    data = rng.integers(-2048, 2048, size=(4, 131072)).astype("float32") / 128
+    data = rng.integers(-2048, 2048, size=(rows, width)).astype("float32") / 128
     data[:, :4] = [np.inf, -np.inf, 0.0, -0.0]
     expected = _stable_indices(data, -1, descending)
     with jt.flag_scope(use_cuda=1, backend_fallback="error"):
