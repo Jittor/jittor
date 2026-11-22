@@ -282,11 +282,12 @@ void FusedOp::prepare_fused_key(JK& jk) {
         jk << "«opkey" << i << JK::val;
         jk << op->name();
         const auto backend = uniform ? op->execution_backend_for(requested) : op->execution_backend();
-        if (backend == BackendId::Cuda && ops.size() == 1 && op->is_op(op_ids::array())
+        if ((backend == BackendId::Cpu || backend == BackendId::Cuda)
+                && ops.size() == 1 && op->is_op(op_ids::array())
                 && op->output(0)->num == 1) {
-            // PassManager's standalone array kernel takes the value as a launch
-            // argument. Only arrays fused with consumers can fold the value
-            // into generated code and need its bits in the key.
+            // A standalone CPU array reads the value at execution time; its
+            // CUDA counterpart passes the value as a launch argument. Keep
+            // the payload in keys for arrays fused with other operators.
             jk << "«T:" << op->output(0)->dtype();
         } else {
             op->prepare_fragment_on(jk, backend);

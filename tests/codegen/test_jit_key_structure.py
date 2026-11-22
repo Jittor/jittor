@@ -87,9 +87,10 @@ def fused_keys(build):
 
 
 class TestJitKeyIdentifiesTheKernel(unittest.TestCase):
-    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
-    def test_cuda_standalone_array_keys_use_dtype_not_payload(self):
-        with jt.flag_scope(use_cuda=1, auto_graph_replay=0, auto_flush_ops=0,
+    def _check_standalone_array_keys(self, use_cuda):
+        backend_key = "«JIT_cuda:1" if use_cuda else "«JIT_cpu:1"
+        location = "device" if use_cuda else "cpu"
+        with jt.flag_scope(use_cuda=use_cuda, auto_graph_replay=0, auto_flush_ops=0,
                            use_cuda_host_allocator=0, auto_convert_64_to_32=0,
                            backend_fallback="error"):
             dtype_keys = []
@@ -100,15 +101,22 @@ class TestJitKeyIdentifiesTheKernel(unittest.TestCase):
                     array = jt.array(expected)
                     keys = fused_keys(lambda: array.sync(True, False))
                     materializations = [key for key in keys if key.startswith("«opkey0:array")
-                                        and "«JIT_cuda:1" in key and "«opkey1:" not in key]
+                                        and backend_key in key and "«opkey1:" not in key]
                     self.assertEqual(len(materializations), 1, keys)
                     payload_keys.add(materializations[0])
-                    self.assertEqual(array.location(), "device")
+                    self.assertEqual(array.location(), location)
                     self.assertEqual(array.numpy().dtype, expected.dtype)
                     np.testing.assert_array_equal(array.numpy(), expected)
                 self.assertEqual(len(payload_keys), 1, payload_keys)
                 dtype_keys.extend(payload_keys)
             self.assertNotEqual(*dtype_keys)
+
+    def test_cpu_standalone_array_keys_use_dtype_not_payload(self):
+        self._check_standalone_array_keys(0)
+
+    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
+    def test_cuda_standalone_array_keys_use_dtype_not_payload(self):
+        self._check_standalone_array_keys(1)
 
     def test_a_300_op_fusion_does_not_share_a_key_with_a_200_op_one(self):
         keys_200 = fused_keys(lambda: chain_sum(200).sync())
