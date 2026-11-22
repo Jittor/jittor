@@ -787,6 +787,10 @@ public:
     // @pyjt(_copy_into)
     void copy_into(VarHolder* src, bool sync_src=true);
 
+    // Keep contiguous CUDA bool storage and its physical aliases in place.
+    // @pyjt(_try_fill_bool_cuda)
+    bool try_fill_bool_cuda(bool value);
+
     /**
         No-grad frontend writeback when retained views include materialized
         permutations. Stage the existing view-assignment mathematics and all

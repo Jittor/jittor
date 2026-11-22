@@ -2276,6 +2276,8 @@ def _api_fill(self, val):
         # advances the shared write version without constructing a source.
         self._copy_into(self, False)
         return self
+    if direct_bool and jt.flags.no_grad and self._try_fill_bool_cuda(val):
+        return self
     with _new_scope(self, None):
         if direct_bool:
             value = jt.full(self.shape, val, self.dtype)

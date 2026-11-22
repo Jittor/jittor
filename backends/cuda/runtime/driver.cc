@@ -744,6 +744,13 @@ bool allocate_index_fault(IndexFault** host, IndexFault** device) {
 }
 } // namespace
 
+#if defined(IS_CUDA) && !defined(IS_COREX)
+void cuda_fill_bytes(void* dst, Device device, int value, size_t size) {
+    auto stream = reinterpret_cast<cudaStream_t>(backend_stream(device, BackendStreamKind::Compute).handle);
+    checkCudaErrors(cudaMemsetAsync(dst, value, size, stream));
+}
+#endif
+
 BackendOps make_cuda_backend() {
     BackendOps ops;
     ops.id = BackendId::Cuda;

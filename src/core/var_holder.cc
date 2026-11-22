@@ -681,6 +681,34 @@ void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     copy_into_impl(src, sync_src, nullptr);
 }
 
+bool VarHolder::try_fill_bool_cuda(bool value) {
+#if defined(IS_CUDA) && !defined(IS_COREX)
+    if (!no_grad || state_capture_active() || graph_capture_active()
+            || var->dtype() != ns_bool || var->num <= 0 || !var->is_contiguous()
+            || var->capture_owners || var->flag(VarFlags::_kept)
+            || !var->placement.explicit_backend || var->placement.device.backend != BackendId::Cuda)
+        return false;
+    ExecutorEntryScope entry;
+    if (var->device_id != current_device() || (view && !storage_view_is_physical())
+            || (var->allocator && !var->allocator->is_cuda()))
+        return false;
+    auto* base = view && view->base ? view->base : this;
+    for (auto* record = base->views; record; record = record->next)
+        if (!record->owner->storage_view_is_physical()) return false;
+
+    // A self-copy preserves prior readers, materializes the destination and
+    // records one mutation. It never copies bytes or rebinds the storage.
+    copy_into(this, false);
+    const Device device = allocation_device(var->allocator);
+    USER_CHECK(device.backend == BackendId::Cuda) << "bool fill destination left CUDA";
+    cuda_fill_bytes(var->mem_ptr, device, int(value), var->size);
+    return true;
+#else
+    (void)value;
+    return false;
+#endif
+}
+
 void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
         std::unordered_set<std::shared_ptr<uint64>>* logical_versions) {
     check_inplace_autograd();
