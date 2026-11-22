@@ -147,8 +147,71 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
     return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=True)
 
 
+_WARP_RMS_NORM_4096 = r"""
+    __global__ static void warp_rms_norm_4096(@ARGS_DEF) {
+        @PRECALC
+        constexpr int width = 4096;
+        const int row = blockIdx.x * blockDim.y + threadIdx.y;
+        const int lane = threadIdx.x;
+        if (row >= in0_shape0) return;
+        // Accumulate the four interleaved streams independently, as the
+        // float32 last-axis reduction does before rounding the BF16 output.
+        float accumulators[4] = {};
+        for (int column = lane * 4; column < width; column += 32 * 4) {
+            #pragma unroll
+            for (int item = 0; item < 4; ++item) {
+                const float x = %(load_reduction)s;
+                accumulators[item] = __fadd_rn(accumulators[item], __fmul_rn(x, x));
+            }
+        }
+        float sum = accumulators[0];
+        #pragma unroll
+        for (int item = 1; item < 4; ++item)
+            sum = __fadd_rn(sum, accumulators[item]);
+        for (int offset = 16; offset > 0; offset /= 2)
+            sum = __fadd_rn(sum, __shfl_down_sync(0xffffffff, sum, offset));
+        const float mean = __shfl_sync(0xffffffff, sum, 0) * (1.0f / width);
+        const float scale = rsqrtf(__fadd_rn(mean, %(epsilon).9gf));
+        for (int column = lane; column < width; column += 32) {
+            const float x = %(load_output)s;
+            const float weight = %(weight)s;
+            @out0(row, column) = out0_type(__fmul_rn(__fmul_rn(x, scale), weight));
+            %(store_residual)s
+        }
+    }
+    warp_rms_norm_4096<<<(in0_shape0 + 7) / 8, dim3(32, 8)>>>(@ARGS);
+    CHECK(0 == cudaGetLastError());
+    """
+
+
+@lru_cache(maxsize=32)
+def _warp_rms_norm_source(epsilon, residual=False, weight_offset=0.0):
+    def load(column):
+        x = f"float(@in0(row, {column}))"
+        return f"__fadd_rn({x}, float(@in1(row, {column})))" if residual else x
+
+    weight = "float(in2_p[column])" if residual else "in1_p[column]"
+    if weight_offset:
+        weight = f"__fadd_rn({weight}, static_cast<float>({weight_offset!r}))"
+    return _WARP_RMS_NORM_4096 % {
+        "epsilon": epsilon,
+        "load_reduction": load("column + item"),
+        "load_output": load("column"),
+        "weight": weight,
+        "store_residual": "@out1(row, column) = out1_type(x);" if residual else "",
+    }
+
+
+def _is_wide_bfloat16_row(x):
+    return x.ndim == 2 and x.shape[1] == 4096 and _jittor_dtype_name(x.dtype) == "bfloat16"
+
+
 @optional_kernel("nn.rms_norm.single_round.inference", "cuda", supports=_rms_norm_supported)
 def _rms_norm_single_round_cuda(x, gamma, epsilon=1e-6):
+    if _is_wide_bfloat16_row(x) and _jittor_dtype_name(gamma.dtype) == "float32":
+        source = _warp_rms_norm_source(float(epsilon))
+        return _stop_grad_outputs(
+            jt.code(x.shape, x.dtype, [x, gamma], cuda_src=source, backend="cuda"))
     return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=False)
 
 
@@ -186,6 +249,11 @@ def _fp32_residual_supported(x, residual, gamma, epsilon=1e-6, weight_offset=0.0
 @optional_kernel("nn.add_rms_norm.fp32_residual.inference", "cuda",
                  supports=_fp32_residual_supported)
 def _fused_add_rms_norm_fp32_residual_cuda(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
+    if _is_wide_bfloat16_row(x):
+        source = _warp_rms_norm_source(float(epsilon), residual=True, weight_offset=float(weight_offset))
+        return _stop_grad_outputs(jt.code(
+            [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
+            cuda_src=source, backend="cuda"))
     return _fused_add_rms_norm_cuda_code(
         x, residual, gamma, epsilon, round_before_weight=False,
         fp32_residual=True, weight_offset=weight_offset)
