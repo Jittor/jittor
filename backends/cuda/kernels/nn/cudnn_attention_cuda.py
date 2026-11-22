@@ -55,10 +55,14 @@ def _include_dirs(frontend):
     from jittor.build import compiler
     dirs = [frontend]
     if compiler.cuda_wheel_stack is not None:
+        # The CUDA 13 compiler components do not include the optional
+        # cuDNN sibling. Match the headers to the loaded cuDNN wheel before
+        # considering headers exposed by an external nvcc installation.
+        dirs += compiler.cuda_wheel_stack.include_dirs("cudnn")
         dirs += compiler.cuda_wheel_stack.include_dirs()
     dirs += [compiler.cuda_include,
              os.path.join(compiler.cuda_include, "..", "targets", "x86_64-linux", "include")]
-    return [d for d in dirs if d and os.path.isdir(d)]
+    return list(dict.fromkeys(d for d in dirs if d and os.path.isdir(d)))
 
 
 def _build(frontend):

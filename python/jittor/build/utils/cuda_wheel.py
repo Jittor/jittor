@@ -320,6 +320,10 @@ class Cuda13WheelStack(CudaWheelStack):
 
     def component_dir(self, component):
         root = super(Cuda13WheelStack, self).component_dir(component)
+        if root is None and component == "cuda_nvrtc":
+            # The optional CUDA 13 NVRTC wheel installs its versioned
+            # libraries into the selected compiler's shared cu13 prefix.
+            return self.components["cuda_nvcc"]
         if root is not None or component != "cudnn":
             return root
         # NVIDIA's CUDA 13 wheels share nvidia/cu13, but cuDNN still ships
