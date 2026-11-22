@@ -461,6 +461,25 @@ class TestModules(Base):
             self.ac(out.numpy(), x @ w.T + b, atol=1e-4, msg=f"Linear fwd {dev}")
         both_devices(body)
 
+    def test_embedding_padding_preserves_dtype(self):
+        weights = np.array([[1, -2, 3], [4, 5, -6], [7, 8, 9]], dtype=np.float32)
+        indices = np.array([[0, 1, 2], [2, 1, 0]], dtype=np.int64)
+        expected_grad = np.array([[2, 2, 2], [0, 0, 0], [2, 2, 2]], dtype=np.float32)
+
+        def body(device):
+            ids = torch.tensor(indices, device=device)
+            for dtype in (torch.float16, torch.bfloat16):
+                with self.subTest(device=device, dtype=dtype):
+                    weight = torch.tensor(weights, dtype=dtype, device=device, requires_grad=True)
+                    values = F.embedding(ids, weight, padding_idx=1)
+                    self.assertEqual(values.dtype, dtype)
+                    np.testing.assert_array_equal(values.detach().float().cpu().numpy(), weights[indices])
+                    grad, = torch.autograd.grad(values.float().sum(), weight)
+                    self.assertEqual(grad.dtype, dtype)
+                    np.testing.assert_array_equal(grad.detach().float().cpu().numpy(), expected_grad)
+
+        both_devices(body)
+
     def test_default_dtype_applies_to_module_parameters(self):
         previous = torch.get_default_dtype()
         try:
