@@ -92,6 +92,41 @@ def test_serialization_objects_have_real_module_owners():
                     isinstance(child, (ast.FunctionDef, ast.ClassDef, ast.Lambda))]
 
 
+def test_native_archive_meta_load_uses_only_storage_metadata(monkeypatch):
+    torch = compatibility_owner(jt)
+    payload = _torch_archive(stride=(1, 2), offset=1)
+    read = zipfile.ZipFile.read
+
+    def metadata_only(archive, name, *args, **kwargs):
+        assert name != "fixture/data/0", "meta loading read the tensor payload"
+        return read(archive, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", metadata_only)
+    for location in ("meta", torch.device("meta"), {"cpu": "meta"}):
+        value = torch.load(io.BytesIO(payload), map_location=location, weights_only=True)
+        assert value.device.type == "meta" and value.is_meta and not value.is_cpu
+        assert value.dtype == torch.float64 and tuple(value.shape) == (3, 2)
+        assert value.stride() == (1, 2) and value.storage_offset() == 1
+        assert not value.is_contiguous() and value.data_ptr() == 0
+        with pytest.raises(pickle.UnpicklingError, match="reaches"):
+            torch.load(io.BytesIO(_torch_archive(offset=5)), map_location=location,
+                       weights_only=True)
+
+
+def test_portable_meta_load_preserves_parameter_metadata():
+    torch = compatibility_owner(jt)
+    original = torch.nn.Parameter(torch.ones((2, 3), dtype=torch.float64, device="cpu"))
+    stream = io.BytesIO()
+    torch.save({"weight": original}, stream)
+    stream.seek(0)
+    value = torch.load(stream, map_location="meta", weights_only=True)["weight"]
+    assert isinstance(value, torch.nn.Parameter) and value.requires_grad
+    assert value.is_meta and value.device.type == "meta" and not value.is_cpu
+    assert value.dtype == torch.float64 and tuple(value.shape) == (2, 3)
+    assert value.stride() == (3, 1) and value.storage_offset() == 0
+    assert value.is_contiguous() and value.data_ptr() == 0
+
+
 @pytest.mark.parametrize("destination", ("file", "bytes"))
 def test_portable_roundtrip_dtype_parameter_view_and_map_location(tmp_path, destination):
     torch = compatibility_owner(jt)
