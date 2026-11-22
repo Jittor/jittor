@@ -247,12 +247,73 @@ def _mm_impl(input, mat2, out=None):
     return jt.matmul(input, mat2)
 
 
-def mm(input, mat2, out=None):
-    """Multiply two 2-D tensors using Jittor's matrix multiplication."""
-    from . import (
-        _mm_impl,
-    )
-    return _mm_impl(input, mat2, out=out)
+def _mm_with_out_dtype(input, mat2, out_dtype, out):
+    from . import jt
+    from ...types import _dtype_to_str, dtype
+
+    if not isinstance(out_dtype, dtype):
+        raise TypeError("mm: out_dtype must be a torch.dtype")
+    if input.device != mat2.device or (out is not None and out.device != input.device):
+        raise RuntimeError("mm: all tensors must be on the same device")
+    if input.device.type != "cuda":
+        raise NotImplementedError("mm with out_dtype requires CUDA")
+    if input.ndim != 2 or mat2.ndim != 2 or input.shape[1] != mat2.shape[0]:
+        raise RuntimeError("mm: inputs must be compatible matrices")
+
+    source = _dtype_to_str(input.dtype)
+    target = _dtype_to_str(out_dtype)
+    if source != _dtype_to_str(mat2.dtype):
+        raise RuntimeError("mm: input dtypes must be the same")
+    if target != source and (target != "float32" or source not in ("float16", "bfloat16")):
+        raise RuntimeError("mm: out_dtype must match the inputs or widen half inputs to float32")
+    if out is not None:
+        if _dtype_to_str(out.dtype) != target:
+            raise RuntimeError("mm: out_dtype must match the provided out tensor")
+        if tuple(out.shape) != (input.shape[0], mat2.shape[1]):
+            raise RuntimeError("mm: out must have the shape of the result")
+
+    def multiply(left, right):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            if target != source:
+                left = left.cast(target)
+                right = right.cast(target)
+            return jt.matmul(left, right)
+
+    if not jt.flags.no_grad and (input.requires_grad or mat2.requires_grad):
+        from ...autograd import Function
+
+        class ForwardOnly(Function):
+            @staticmethod
+            def forward(ctx, left, right):
+                return multiply(left, right)
+
+            @staticmethod
+            def backward(ctx, grad_output):
+                raise RuntimeError("derivative for mm with out_dtype is not implemented")
+
+        result = ForwardOnly.apply(input, mat2)
+    else:
+        result = multiply(input, mat2)
+    if out is not None:
+        return out.copy_(result)
+    return result
+
+
+def mm(input, mat2, dtype_or_out=None, *, out=None, out_dtype=None):
+    """Multiply two matrices, with an optional CUDA output dtype."""
+    from . import jt, _mm_impl
+
+    if isinstance(dtype_or_out, jt.Var):
+        if out is not None:
+            raise TypeError("mm got multiple values for out")
+        out = dtype_or_out
+    elif dtype_or_out is not None:
+        if out_dtype is not None:
+            raise TypeError("mm got multiple values for out_dtype")
+        out_dtype = dtype_or_out
+    if out_dtype is None:
+        return _mm_impl(input, mat2, out=out)
+    return _mm_with_out_dtype(input, mat2, out_dtype, out)
 
 
 def kron(a, b):
