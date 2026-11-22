@@ -123,6 +123,29 @@ class TestArgsortOp(unittest.TestCase):
         check_cub_argsort([12, 34, 56, 78], 2, False)
         check_cub_argsort([12, 34, 56, 78], 0, False)
 
+    @unittest.skipIf(cub_ops is None, "requires real CUDA with CUB")
+    @jt.flag_scope(use_cuda=1, backend_fallback="error")
+    def test_cub_stable_wide_rows_keep_indices_and_signed_zeros(self):
+        rng = np.random.default_rng(381)
+        data = rng.integers(-128, 129, size=(4, 65536)).astype(np.float32)
+        data[:, 0] = -np.inf
+        data[:, 1] = np.inf
+        data[:, 2] = -0.0
+        data[:, 3] = 0.0
+        value = jt.array(data)
+        for descending in (False, True):
+            order = np.argsort(-data if descending else data, axis=-1, kind="stable")
+            expected = np.take_along_axis(data, order, axis=-1)
+            for dtype in ("int32", "int64"):
+                with self.subTest(descending=descending, dtype=dtype):
+                    indices, result = jt.argsort(value, dim=-1, descending=descending,
+                                                 dtype=dtype, stable=True)
+                    jt.sync([indices, result], True, False)
+                    self.assertEqual(result.location(), "device")
+                    np.testing.assert_array_equal(indices.numpy(), order)
+                    np.testing.assert_array_equal(result.numpy().view(np.uint32),
+                                                  expected.view(np.uint32))
+
     @unittest.skipIf(cub_ops==None, "Not use cub, Skip")
     @jt.flag_scope(use_cuda=1)
     def test_cub_backward(self):

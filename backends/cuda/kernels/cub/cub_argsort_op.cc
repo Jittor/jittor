@@ -13,6 +13,7 @@
 #include "cub_argsort_op.h"
 #include <vector>
 #include "core/executor.h"
+#include "runtime/device.h"
 #include "ops/composite/argsort_op.h"
 #ifdef JIT_cuda
 #include <cub/device/device_radix_sort.cuh>
@@ -72,6 +73,7 @@ void CubArgsortOp::jit_prepare(JK& jk) {
     jk << "«Toffsets:" << offsets->dtype();
     jk << "«Ty:" << y->dtype();
     jk << "«ROWWISE=" << JK::hex(rowwise);
+    if (rowwise) jk << "«DESCENDING=" << JK::hex(descending);
     jk << "«FUNC:";
     if (descending)
         jk << "SortPairsDescending";
@@ -81,6 +83,58 @@ void CubArgsortOp::jit_prepare(JK& jk) {
 
 #else // JIT
 #ifdef JIT_cuda
+#if ROWWISE
+__global__ static void pack_wide_sort_keys(const float* values, uint64_t* keys, int count, int width) {
+    const int index = int(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= count) return;
+    const unsigned bits = __float_as_uint(values[index]);
+    // Match the stable radix order, with both zero signs in the same group.
+    const unsigned canonical = (bits & 0x7fffffffu) == 0 ? 0 : bits;
+    unsigned ordered = canonical ^ ((canonical >> 31) ? 0xffffffffu : 0x80000000u);
+    if (DESCENDING) ordered = ~ordered;
+    keys[index] = (uint64_t(index / width) << 32) | ordered;
+}
+
+__global__ static void gather_wide_sort_values(const float* source, const Ty* index,
+                                               float* destination, int count, int width) {
+    const int i = int(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < count) destination[i] = source[(i / width) * width + index[i]];
+}
+
+static void packed_wide_argsort(const float* source, const Tindexes* input_indices,
+                                float* values, Ty* indices, int rows, int width) {
+    const int count = rows * width;
+    int row_bits = 0;
+    for (int max_row = rows - 1; max_row > 0; max_row >>= 1) ++row_bits;
+    const int end_bit = 32 + row_bits;
+    const auto stream = reinterpret_cast<cudaStream_t>(
+        backend_stream({BackendId::Cuda, current_device()}, BackendStreamKind::Compute).handle);
+
+    size_t workspace_bytes = 0;
+    const auto query = cub::DeviceRadixSort::SortPairs(
+        nullptr, workspace_bytes, static_cast<uint64_t*>(nullptr), static_cast<uint64_t*>(nullptr),
+        input_indices, indices, count, 0, end_bit, stream);
+    CHECK(query == cudaSuccess) << "CUDA packed radix sort setup failed: " << cudaGetErrorString(query);
+    // The temporary buffer passed to CUB starts after two key arrays.
+    const size_t key_bytes = (2 * size_t(count) * sizeof(uint64_t) + 255) & ~size_t(255);
+    size_t allocation;
+    auto& allocator = *runtime_executor().temp_allocator;
+    auto* memory = static_cast<char*>(allocator.alloc(key_bytes + workspace_bytes, allocation));
+    auto* keys = reinterpret_cast<uint64_t*>(memory);
+    auto* sorted = keys + count;
+    const int blocks = (count + 255) / 256;
+    pack_wide_sort_keys<<<blocks, 256, 0, stream>>>(source, keys, count, width);
+    auto result = cub::DeviceRadixSort::SortPairs(
+        memory + key_bytes, workspace_bytes, keys, sorted, input_indices, indices, count, 0, end_bit, stream);
+    if (result == cudaSuccess) {
+        gather_wide_sort_values<<<blocks, 256, 0, stream>>>(source, indices, values, count, width);
+        result = cudaGetLastError();
+    }
+    allocator.free(memory, key_bytes + workspace_bytes, allocation);
+    CHECK(result == cudaSuccess) << "CUDA packed radix sort failed: " << cudaGetErrorString(result);
+}
+#endif
+
 void CubArgsortOp::jit_run() {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ indexesp = indexes->ptr<Tindexes>();
@@ -89,6 +143,12 @@ void CubArgsortOp::jit_run() {
     auto* __restrict__ indices = y->ptr<Ty>();
     const int width = x->shape[x->shape.size() - 1];
     const int rows = x->num / width;
+    // Wide independent rows can share one device-wide radix pass. Cap the
+    // combined key workspace and preserve the per-row route for large inputs.
+    if (rows > 1 && x->num <= 2 * 1024 * 1024 && (y->dtype() == ns_int32 || y->dtype() == ns_int64)) {
+        packed_wide_argsort(xp, indexesp, values, indices, rows, width);
+        return;
+    }
     size_t scratch_bytes = 0;
     CHECK(cub::DeviceRadixSort::@FUNC@@(nullptr, scratch_bytes,
         xp, values, indexesp, indices, width) == cudaSuccess);
