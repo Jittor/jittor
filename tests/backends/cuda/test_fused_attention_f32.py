@@ -78,6 +78,36 @@ class TestFusedAttentionF32(unittest.TestCase):
                                                atol=1e-5 * np.abs(reference).max())
         self.assertEqual(jt.core.backend_fallback_count(), before)
 
+    def test_half_training_uses_tiled_opmath_when_half_kernel_declines(self):
+        from jittor._runtime.dispatch import override_kernel
+
+        rng = np.random.RandomState(287)
+        shape = (1, 2, 31, 16)
+        q, k, v, dout = [rng.normal(0, 0.2, shape).astype("float16") for _ in range(4)]
+        keep = np.tril(np.ones((31, 31), dtype=bool))
+        keep[0] = False
+        expected = _reference(q, k, v, False, dout, keep)
+        inputs = [jt.array(array).start_grad() for array in (q, k, v)]
+        calls = []
+
+        def tiled_if_fp32(query, key, value, **kwargs):
+            if str(query.dtype) != "float32":
+                return None
+            calls.append(str(query.dtype))
+            return self.kernel._fused_attention_f32(query, key, value, **kwargs)
+
+        with override_kernel("nn.scaled_dot_product_attention", "cuda", None), \
+                override_kernel("nn.fused_attention", "cuda", tiled_if_fp32), \
+                jt.flag_scope(backend_fallback="error"):
+            result = scaled_dot_product_attention(*inputs, attn_mask=jt.array(keep))
+            grads = jt.grad((result * jt.array(dout)).sum(), inputs)
+        self.assertEqual(calls, ["float32"])
+        for actual, reference in zip([result] + list(grads), expected):
+            actual.sync()
+            self.assertEqual(actual.location(), "device")
+            self.assertEqual(str(actual.dtype), "float16")
+            np.testing.assert_allclose(actual.numpy(), reference, rtol=2e-3, atol=4e-4)
+
     def test_mask_callback_handles_retired_owner_and_stale_reference(self):
         cache = self.kernel._LAST_MASK
         saved = cache[:]
