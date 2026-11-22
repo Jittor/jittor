@@ -572,6 +572,26 @@ class TestStepCaptureCuda(TestStepCapture):
             self.assertTrue(jt.core._try_stage_cuda_step_inputs([second], [source]))
             np.testing.assert_array_equal(second.numpy(), np.arange(8) + 20)
 
+    def test_cuda_input_staging_materializes_only_independent_sources(self):
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=0,
+                                         async_flush_ops=0, backend_fallback="error"):
+            data = np.arange(8, dtype=np.float32)
+            first, second, seed = (jt.array(data + i) for i in (0, 10, 20))
+            jt.sync([first, second, seed], False, False)
+            pending = seed + 2, seed + 4
+            self.assertTrue(all(not value.is_finished for value in pending))
+            self.assertFalse(jt.core._try_stage_cuda_step_inputs([first, second], pending))
+            depends_on_first = first + 1
+            self.assertFalse(jt.core._try_stage_cuda_step_inputs(
+                [first, second], [pending[0], depends_on_first], True))
+            self.assertFalse(depends_on_first.is_finished)
+            np.testing.assert_array_equal(depends_on_first.numpy(), data + 1)
+            self.assertTrue(jt.core._try_stage_cuda_step_inputs([first, second], pending, True))
+            self.assertEqual(first.location(), "device")
+            self.assertEqual(second.location(), "device")
+            np.testing.assert_array_equal(first.numpy(), data + 22)
+            np.testing.assert_array_equal(second.numpy(), data + 24)
+
     def test_two_fast_path_sums_survive_a_replay(self):
         rs = np.random.RandomState(5)
         w = jt.array(rs.randn(256, 128).astype("float32"))

@@ -1191,10 +1191,11 @@ void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync
     the ordinary frontend write path. Successful batches use copy_into's
     reader, alias and mutation checks for every pair, in the supplied order.
  */
-// Stage materialized, disjoint inference inputs on their CUDA compute stream.
+// Stage disjoint inference inputs on their CUDA compute stream. Replay can
+// materialize independent pending sources together before copying their bytes.
 // @pyjt(_try_stage_cuda_step_inputs)
 bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
-                               const vector<VarHolder*>& sources);
+                               const vector<VarHolder*>& sources, bool resolve_pending=false);
 
 // @pyjt(_commit_shared_updates)
 bool commit_shared_updates(const vector<VarHolder*>& targets,

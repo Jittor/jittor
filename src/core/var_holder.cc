@@ -597,7 +597,7 @@ void finish_step_readouts(const vector<VarHolder*>& roots) {
 }
 
 bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
-                                const vector<VarHolder*>& sources) {
+                                const vector<VarHolder*>& sources, bool resolve_pending) {
     if (!no_grad || targets.size() != sources.size()
             || state_capture_active() || graph_capture_active())
         return false;
@@ -614,15 +614,44 @@ bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
         const Device owner = allocation_device(value->allocator);
         return owner.backend == device.backend && owner.index == device.index;
     };
-    vector<Var*> destinations;
+    vector<Var*> destinations, pending;
     destinations.reserve(targets.size());
     for (size_t i = 0; i < targets.size(); ++i) {
         Var* target = targets[i]->var;
         Var* source = sources[i]->var;
-        if (targets[i]->is_view() || !ready_on_device(target) || !ready_on_device(source)
+        if (targets[i]->is_view() || !ready_on_device(target)
                 || target->shape != source->shape || target->dtype() != source->dtype())
             return false;
         destinations.push_back(target);
+        if (ready_on_device(source)) continue;
+        if (!resolve_pending || source->is_finished() || source->flag(VarFlags::_kept)
+                || source->flag(VarFlags::_execution_failed) || !source->is_contiguous()
+                || source->device_id != device.index
+                || (source->placement.explicit_backend
+                    && source->placement.device.backend != device.backend))
+            return false;
+        pending.push_back(source);
+    }
+    if (!pending.empty()) {
+        // A pending reader or alias of a destination belongs to the existing
+        // ordered write path. Detect either before publishing any sources.
+        if (!saved_storage_readers(destinations).empty()) return false;
+        for (Var* source : pending) {
+            auto owner = source->peek_storage_version();
+            if (owner)
+                for (Var* target : destinations)
+                    if (target->peek_storage_version() == owner) return false;
+        }
+        struct KeepGraphScope {
+            int previous = keep_graph;
+            KeepGraphScope() { keep_graph = 0; }
+            ~KeepGraphScope() { keep_graph = previous; }
+        } scope;
+        // Resolve the caller's inputs as ordinary work, while treating
+        // already-executed kept values as boundaries.
+        materialize_step_values(pending, false);
+        if (!std::all_of(pending.begin(), pending.end(), ready_on_device))
+            return false;
     }
     auto overlaps = [](const Var* a, const Var* b) {
         auto x = reinterpret_cast<uintptr_t>(a->mem_ptr);

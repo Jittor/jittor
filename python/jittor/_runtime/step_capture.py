@@ -1066,7 +1066,7 @@ class StepCapture:
                 given = _input_vars((args, kwargs), [])
                 staged = (jt.flags.no_grad and self._cuda_graph
                           and not self._graph_has_host_prefix and not cap.prologue
-                          and _core._try_stage_cuda_step_inputs(cap.inputs, given))
+                          and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))
                 if not staged:
                     with jt.no_grad():
                         for target, source in zip(cap.inputs, given):
