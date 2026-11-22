@@ -127,6 +127,24 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
                 peaks = y[np.arange(3), raw.argmax(axis=1)]
                 np.testing.assert_array_equal(peaks.view(np.uint32), expected)
 
+    def test_wide_fp32_softmax_propagates_nan_from_masked_tile(self):
+        width = 131073
+        data = np.full((4, width), -np.inf, dtype=np.float32)
+        data[0, -3:] = (1.0, 2.0, 3.0)
+        data[1, -3:] = (1.0, 2.0, 3.0)
+        data[1, 0] = np.nan
+        data[3, -1] = np.inf
+        expected = np.exp(np.array([-2., -1., 0.], dtype=np.float64))
+        expected /= expected.sum()
+        with jt.flag_scope(use_cuda=1, backend_fallback="error", cuda_kernel_math="strict"):
+            result = softmax_v1(jt.array(data))
+            result.sync()
+            self.assertEqual(result.location(), "device")
+            out = result.numpy()
+        np.testing.assert_array_equal(out[0, :-3], 0)
+        np.testing.assert_allclose(out[0, -3:], expected, rtol=2e-6)
+        self.assertTrue(np.isnan(out[1:]).all())
+
     def _cuda(self, x_np, cot_np, log):
         with jt.flag_scope(use_cuda=1):
             x = jt.array(x_np)

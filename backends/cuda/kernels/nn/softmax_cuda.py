@@ -345,6 +345,97 @@ CHECK(0 == cudaGetLastError());
 """
 
 
+# Large vocabularies with only a few rows underutilize a one-block-per-row
+# reduction. Compute per-tile maxima and sums, then scale independent tiles.
+_TILED_FP32_SOFTMAX = r"""
+__global__ static void tiled_softmax_stats(const float* input, float* stats, int width, int tiles) {
+    using Reduce = cub::BlockReduce<float, 256>;
+    __shared__ typename Reduce::TempStorage scratch;
+    __shared__ float maximum;
+    const int row = blockIdx.y;
+    const int start = blockIdx.x * 4096;
+    const int end = min(start + 4096, width);
+    const int row_base = row * width;
+    float partial_max = -CUDART_INF_F;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x)
+        partial_max = fmaxf(partial_max, input[row_base + i]);
+    #if CUB_VERSION >= 300000
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cuda::maximum<>{});
+    #else
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cub::Max());
+    #endif
+    if (threadIdx.x == 0) maximum = reduced_max;
+    __syncthreads();
+    float partial_sum = 0.0f;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
+        const float value = input[row_base + i];
+        // A fully masked tile contributes zero; a NaN still propagates.
+        partial_sum += (maximum == -CUDART_INF_F && value == maximum) ? 0.0f : expf(value - maximum);
+    }
+    const float reduced_sum = Reduce(scratch).Sum(partial_sum);
+    if (threadIdx.x == 0) {
+        int index = 2 * (row * tiles + blockIdx.x);
+        stats[index] = maximum;
+        stats[index + 1] = reduced_sum;
+    }
+}
+__global__ static void tiled_softmax_out(const float* input, const float* stats, float* output,
+                                         int width, int tiles) {
+    using Reduce = cub::BlockReduce<float, 256>;
+    __shared__ typename Reduce::TempStorage scratch;
+    __shared__ float maximum, total;
+    const int row = blockIdx.y;
+    const int base = 2 * row * tiles;
+    const int start = blockIdx.x * 4096;
+    const int end = min(start + 4096, width);
+    float partial_max = -CUDART_INF_F;
+    for (int i = threadIdx.x; i < tiles; i += blockDim.x)
+        partial_max = fmaxf(partial_max, stats[base + 2*i]);
+    #if CUB_VERSION >= 300000
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cuda::maximum<>{});
+    #else
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cub::Max());
+    #endif
+    if (threadIdx.x == 0) maximum = reduced_max;
+    __syncthreads();
+    float partial_sum = 0.0f;
+    for (int i = threadIdx.x; i < tiles; i += blockDim.x) {
+        const float tile_max = stats[base + 2*i];
+        const float tile_sum = stats[base + 2*i + 1];
+        partial_sum += tile_max == -CUDART_INF_F ? tile_sum : tile_sum * expf(tile_max - maximum);
+    }
+    const float reduced_sum = Reduce(scratch).Sum(partial_sum);
+    if (threadIdx.x == 0) total = reduced_sum;
+    __syncthreads();
+    const float reciprocal = 1.0f / total;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
+        const int index = row * width + i;
+        output[index] = expf(input[index] - maximum) * reciprocal;
+    }
+}
+const int width = in0_shape1;
+const int tiles = (width + 4095) / 4096;
+auto stream = reinterpret_cast<cudaStream_t>(
+    backend_stream({BackendId::Cuda, current_device()}, BackendStreamKind::Compute).handle);
+tiled_softmax_stats<<<dim3(tiles, in0_shape0), 256, 0, stream>>>(in0_p, out1_p, width, tiles);
+tiled_softmax_out<<<dim3(tiles, in0_shape0), 256, 0, stream>>>(in0_p, out1_p, out0_p, width, tiles);
+CHECK(cudaGetLastError() == cudaSuccess);
+"""
+
+
+def _wide_tiled_softmax(rows):
+    count, width = rows.shape
+    tiles = (width + 4095) // 4096
+    output, _ = jt.code(
+        [rows.shape, (count, 2 * tiles)], [rows.dtype, rows.dtype], [rows],
+        cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <math_constants.h>
+#include "runtime/device.h"
+''', cuda_src=_TILED_FP32_SOFTMAX, backend="cuda")
+    return output
+
+
 @lru_cache(maxsize=8)
 def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
     # Large vocabularies cannot keep a complete row in registers without
@@ -396,6 +487,11 @@ CHECK(0 == cudaGetLastError());
 
     class CodeSoftmaxStreaming(jt.Function):
         def execute(self, x):
+            if (not log and not zero_all_neg_inf and str(x.dtype) in ("float32", "torch.float32")
+                    and x.ndim == 2 and 0 < x.shape[0] <= 8 and x.shape[1] <= 262144
+                    and x._storage_is_contiguous()):
+                self.save_vars = _wide_tiled_softmax(x)
+                return self.save_vars
             self.save_vars = jt.code(
                 x.shape,
                 x.dtype,
