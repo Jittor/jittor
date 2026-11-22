@@ -57,6 +57,13 @@ class Proxy(object):
         return self.tracer.create_proxy(
             "call_method", "__call__", (self,) + args, kwargs)
 
+    @classmethod
+    def __torch_function__(cls, function, types, args=(), kwargs=None):
+        proxy = _find_proxy((args, kwargs))
+        if proxy is None:
+            return NotImplemented
+        return proxy.tracer.create_proxy("call_function", function, args, kwargs or {})
+
     def __iter__(self):
         raise TraceError(
             "Proxy object cannot be iterated. A traced value's contents are "

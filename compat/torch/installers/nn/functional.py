@@ -341,6 +341,9 @@ def _install_functional(ctx):
                 setattr(F, fname, fobj)
     else:
         F = nn.functional
+    if hasattr(F, "batch_norm"):
+        from ...fx.proxy import wrap
+        F.batch_norm = wrap(F.batch_norm)
     if hasattr(nn, "relu"): F.relu = nn.relu
     if hasattr(nn, "gelu"): F.gelu = nn.gelu
     if hasattr(nn, "softmax"):
