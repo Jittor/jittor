@@ -231,6 +231,8 @@ def _install_nn_extras(nn, registry=None):
                   BatchNorm2d=getattr(nn, "BatchNorm2d", getattr(nn, "BatchNorm", None)),
                   BatchNorm3d=getattr(nn, "BatchNorm3d", getattr(nn, "BatchNorm", None)),
                   SyncBatchNorm=getattr(nn, "SyncBatchNorm", getattr(nn, "BatchNorm", None)))
+    if not hasattr(nn, "LocalResponseNorm"):
+        nn.LocalResponseNorm = _adapt_extra(_extra_api.LocalResponseNorm, active_registry)
     _mk_nn_submod(_modules, modules_pkg, "normalization",
                   GroupNorm=getattr(nn, "GroupNorm", None),
                   LayerNorm=getattr(nn, "LayerNorm", None),
@@ -543,6 +545,7 @@ def _install_nn_extras(nn, registry=None):
 
     # ---- nn.functional extras used by mmdetection (not auto-copied from jittor.nn) ----
     F = nn.functional
+    F.local_response_norm = _extra_api._local_response_norm
     if not hasattr(F, "_Reduction"):
         # torch's private reduction-string -> enum helper; mmdet's loss utils do
         # `F._Reduction.get_enum(reduction)` then branch 0/1/2 = none/mean/sum.
@@ -641,6 +644,10 @@ def _install_nn_extras(nn, registry=None):
         Fidelity.APPROXIMATE, 'Native neural-network implementations and installation-owned layer adapters; unsupported Torch modes and parameter subsets remain restricted')
     register_api_bindings(F, "torch.nn.functional", ("linear",),
         Fidelity.APPROXIMATE, "Native linear mathematics with frontend dtype promotion and installation-owned delegates")
+    register_api_bindings(nn, "torch.nn", ("LocalResponseNorm",),
+        Fidelity.APPROXIMATE, "Channel-window normalization implemented with native average pooling")
+    register_api_bindings(F, "torch.nn.functional", ("local_response_norm",),
+        Fidelity.APPROXIMATE, "Channel-window normalization implemented with native average pooling")
     register_api_bindings(
         nn.utils, "torch.nn.utils",
         ("clip_grad_norm_", "clip_grad_value_", "weight_norm", "remove_weight_norm",
