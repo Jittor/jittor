@@ -1288,7 +1288,10 @@ def where(condition=None, x=None, y=None, dtype=None, **kwargs):
     if x is None and y is None:
         result = _try_dispatch("tensor.where", condition)
         if result is None:
-            return _native_where(condition) if dtype is None else _native_where(condition, dtype)
+            result = _native_where(condition) if dtype is None else _native_where(condition, dtype)
+            from jittor._runtime.step_capture import _observe_dynamic_indices
+            _observe_dynamic_indices(result)
+            return result
         if dtype is not None:
             result = [value.cast(dtype) for value in result]
         return result

@@ -596,6 +596,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // has to be a lock. Explicit dynamic-input prerequisite submissions are
     // on this thread and pass straight through; constructors never submit.
     ExecutorEntryScope entry;
+    // Automatic flush selected pending roots while the preceding batch was
+    // in flight. Some of them may have finished while we waited for it.
+    if (may_defer)
+        vars.erase(std::remove_if(vars.begin(), vars.end(), [](Var* root) {
+            return root->is_finished();
+        }), vars.end());
     // A strong, nonblocking sync of successfully materialized roots has no
     // work to submit. Optimizer stores repeatedly reach this case for both
     // sides of an already completed storage-alias update. Keep the worker

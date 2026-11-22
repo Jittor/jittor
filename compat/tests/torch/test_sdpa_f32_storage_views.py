@@ -4,6 +4,7 @@ import unittest
 from unittest import mock
 
 import numpy as np
+import pytest
 import torch
 import jittor as jt
 
@@ -11,6 +12,8 @@ from _helpers import capability
 from _helpers.sdpa_reference import reference
 from jittor._runtime.fallback import forbid_backend_fallbacks
 from jittor.backends.cuda.kernels.nn import fused_attention_f32_cuda as kernel
+
+pytestmark = pytest.mark.cuda
 
 
 @unittest.skipUnless(capability.check_accelerator('cuda', backend=jt).enabled,
@@ -26,7 +29,7 @@ class TestAttentionStorageViews(unittest.TestCase):
 
     def test_packed_qkv_with_offset_masks_and_partial_tiles(self):
         rng = np.random.default_rng(142)
-        for shape in [(2, 129, 3, 4, 80), (1, 37, 3, 3, 64)]:
+        for shape in [(2, 65, 3, 3, 40), (2, 129, 3, 4, 80), (4, 197, 3, 8, 80), (1, 37, 3, 3, 64)]:
             array = rng.normal(0, .2, size=shape).astype('float32')
             # A nonzero offset in the backing allocation is part of the view.
             padded = np.pad(array.ravel(), (17, 11))
@@ -51,6 +54,7 @@ class TestAttentionStorageViews(unittest.TestCase):
                             output.sync()
                             self.assertEqual(output.location(), 'device')
                             self.assertEqual(output.device.type, 'cuda')
+                            self.assertTrue(output.transpose(1, 2).is_contiguous())
                             np.testing.assert_allclose(output.cpu().numpy(), expected, rtol=2e-5, atol=2e-6)
 
     def test_detached_views_do_not_restore_root_gradients(self):
@@ -64,17 +68,43 @@ class TestAttentionStorageViews(unittest.TestCase):
     def test_rectangular_views_from_different_backing_tensors(self):
         rng = np.random.default_rng(62)
         qa = rng.normal(0, .2, (2, 37, 3, 2, 16)).astype('float32')
-        kva = rng.normal(0, .2, (2, 53, 3, 2, 16)).astype('float32')
+        kva = rng.normal(0, .2, (2, 67, 3, 2, 16)).astype('float32')
         with torch.no_grad():
             q = torch.tensor(qa, device='cuda').permute(2, 0, 3, 1, 4).unbind(0)[0]
             _, k, v = torch.tensor(kva, device='cuda').permute(2, 0, 3, 1, 4).unbind(0)
             arrays = [a[:, :, index].transpose(0, 2, 1, 3)
                       for a, index in ((qa, 0), (kva, 1), (kva, 2))]
-            expected = reference(*arrays, None, True, np.zeros_like(arrays[0]))[0]
-            output = kernel._fused_attention_f32(q, k, v, is_causal=True)
+            for causal in (False, True):
+                expected = reference(*arrays, None, causal, np.zeros_like(arrays[0]))[0]
+                output = kernel._fused_attention_f32(q, k, v, is_causal=causal)
+                output.sync()
+                self.assertEqual(output.location(), 'device')
+                np.testing.assert_allclose(output.cpu().numpy(), expected, rtol=2e-5, atol=2e-6)
+
+    def test_graph_replay_preserves_packed_output_layout(self):
+        rng = np.random.default_rng(418)
+        arrays = rng.normal(0, .2, (2, 2, 69, 3, 3, 32)).astype('float32')
+        inputs = [torch.tensor(array, device='cuda') for array in arrays]
+
+        def step(source):
+            q, k, v = source.permute(2, 0, 3, 1, 4).unbind(0)
+            output = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+            return output.transpose(1, 2).reshape(2, 69, 96)
+
+        runner = jt.capture_step(step)
+        self.addCleanup(runner.invalidate)
+        expected = []
+        for array in arrays:
+            q, k, v = [array[:, :, i].transpose(0, 2, 1, 3) for i in range(3)]
+            result = reference(q, k, v, None, False, np.zeros_like(q))[0]
+            expected.append(result.transpose(0, 2, 1, 3).reshape(2, 69, 96))
+        for i in range(8):
+            output = runner(inputs[i % 2])
             output.sync()
             self.assertEqual(output.location(), 'device')
-            np.testing.assert_allclose(output.cpu().numpy(), expected, rtol=2e-5, atol=2e-6)
+            self.assertTrue(output.is_contiguous())
+            np.testing.assert_allclose(output.cpu().numpy(), expected[i % 2], rtol=2e-5, atol=2e-6)
+        self.assertGreater(runner.stats['graph'], 0, runner._graph_refused)
 
     def test_training_keeps_all_input_gradients_on_the_existing_route(self):
         rng = np.random.default_rng(354)

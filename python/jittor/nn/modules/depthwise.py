@@ -80,3 +80,17 @@ register_kernel("depthwise_conv2d", "cuda", _depthwise_cuda,
 register_kernel("depthwise_conv2d", "*", _depthwise_generic)
 register_kernel("conv2d", "cuda", _depthwise_conv2d,
                 supports=_supports_depthwise_conv2d, priority=20)
+def _supports_depthwise_nhwc(*args, **kwargs):
+    # Backend code imports the initialized native API. Load it on dispatch,
+    # after nn's own module initialization has finished.
+    from jittor.backends.cuda.kernels.nn.depthwise_nhwc_cuda import supports_depthwise_nhwc
+    return supports_depthwise_nhwc(*args, **kwargs)
+
+
+def _depthwise_nhwc(*args, **kwargs):
+    from jittor.backends.cuda.kernels.nn.depthwise_nhwc_cuda import depthwise_nhwc
+    return depthwise_nhwc(*args, **kwargs)
+
+
+register_kernel("conv2d", "cuda", _depthwise_nhwc,
+                supports=_supports_depthwise_nhwc, priority=30)

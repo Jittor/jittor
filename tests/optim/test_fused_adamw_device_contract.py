@@ -82,6 +82,46 @@ def physical(tensor):
     return pointer
 
 
+@pytest.mark.skipif(not jt.has_cuda, reason='requires CUDA')
+@pytest.mark.parametrize('metadata_dtype', ['float32', 'float64'])
+def test_live_metadata_dtype_preserves_supplied_scalar_values(metadata_dtype):
+    with jt.flag_scope(use_cuda=1), forbid_backend_fallbacks():
+        p = jt.array([.25, -.5, 1.], dtype='float32')
+        m, v = jt.zeros_like(p), jt.zeros_like(p)
+        gradient = np.array([1e-8, -1e-6, 1e-3], dtype='float32')
+        header = np.array([1., .0012, 0., .95, .999, 0., 1e-8],
+                          dtype=metadata_dtype)
+        pointers = [physical(value) for value in (p, m, v)]
+        metadata = jt.array(header, dtype=metadata_dtype)
+        assert str(metadata.dtype) == metadata_dtype
+        output = jt.fused_adamw([p], [m], [v], [jt.array(gradient)],
+                                metadata, 9., .1, .2, .3, .4)
+        step, rate, _, beta1, beta2, _, eps = header.astype('float64')
+        expected_m = (1-beta1) * gradient.astype('float64')
+        expected_v = (1-beta2) * gradient.astype('float64')**2
+        expected_p = np.array([.25, -.5, 1.]) - rate * (
+            expected_m / (1-beta1**step)) / (
+                np.sqrt(expected_v / (1-beta2**step)) + eps)
+        for index, (value, expected) in enumerate(zip(
+                output, (expected_p, expected_m, expected_v))):
+            assert physical(value) == pointers[index]
+            np.testing.assert_allclose(value.copy().numpy(), expected,
+                                       rtol=2e-6, atol=0.)
+
+
+@pytest.mark.skipif(not jt.has_cuda, reason='requires CUDA')
+@pytest.mark.parametrize('dtype', ['int32', 'int64', 'float16', 'bool'])
+def test_step_metadata_rejects_unsupported_dtypes_before_update(dtype):
+    with jt.flag_scope(use_cuda=1), forbid_backend_fallbacks():
+        parameter = jt.array([.25, -.5], dtype='float32')
+        moment, variance = jt.zeros_like(parameter), jt.zeros_like(parameter)
+        gradient = jt.ones_like(parameter)
+        with pytest.raises(RuntimeError, match='step metadata.*float32 or float64'):
+            jt.fused_adamw([parameter], [moment], [variance], [gradient],
+                           jt.array([1], dtype=dtype), .001, .9, .999, 0., 1e-8)
+        np.testing.assert_array_equal(parameter.copy().numpy(), [.25, -.5])
+
+
 @pytest.mark.parametrize('device', [pytest.param('cuda', marks=pytest.mark.skipif(
     not jt.has_cuda, reason='requires CUDA',
 ))])

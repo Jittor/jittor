@@ -47,12 +47,14 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     this is the update for step ``steps + 1``, as the per-parameter path
     computes it. Entries are grouped by step and dtype, one operator each.
 
-    ``lr`` may instead be a two-element float32 Var ``[step, lr]``, which the
+    ``lr`` may instead be a floating-point Var ``[step, lr]``, which the
     kernel reads on the device and which then stands for every entry's step:
     what a captured step passes, so that a replay advances the count and
     follows the learning rate without the optimizer running.
     A seven-element header also carries found-inf, both betas, weight decay
-    and epsilon, allowing schedulers to change them without recapture.
+    and epsilon, allowing schedulers to change them without recapture. CUDA
+    captures use float64 metadata to retain Python scalar precision before
+    deriving the FP32 update coefficients; state tensors keep their dtype.
     """
     hyper = lr if isinstance(lr, jt.Var) else None
     results = [None] * len(entries)
@@ -80,5 +82,8 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
 #: Takes ``[step, lr]`` as a device Var in place of the learning rate.
 _cuda_fused_adamw_updates.accepts_live_step = True
 _cuda_fused_adamw_updates.accepts_live_hyperparameters = True
+# Preserve Python scheduler scalars until the CUDA update derives its FP32
+# coefficients; parameter, gradient and moment tensors keep their own dtype.
+_cuda_fused_adamw_updates.live_hyperparameters_dtype = "float64"
 
 register_kernel("optim.adamw_fused", "cuda", _cuda_fused_adamw_updates, supports=_supports)

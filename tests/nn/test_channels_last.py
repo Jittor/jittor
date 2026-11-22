@@ -2,10 +2,8 @@
 
 A half-precision convolution that records no gradient answers with an NCHW
 view of NHWC storage; elementwise operators, group norm and max pooling keep
-that layout, so the next convolution reads NHWC memory as it is. In training a
-convolution offers the channels-last result and a batch norm takes it
-(`channels_last_training`); gradients come back the same way. Values never
-depend on it: every check here compares against the dense NCHW computation.
+that layout, so the next convolution reads NHWC memory as it is.
+Training preserves the input layout through supported convolutions.
 
 Run::  python -m pytest tests/nn/test_channels_last.py
 """
@@ -107,7 +105,11 @@ class TestChannelsLastCUDA(unittest.TestCase):
         cudnn_backend.channels_last_training = channels_last
         try:
             net, params = self._training_net()
-            x = jt.array(self.rng_train)
+            if channels_last:
+                storage = jt.array(np.ascontiguousarray(self.rng_train.transpose(0, 2, 3, 1)))
+                x = storage._storage_permute((0, 3, 1, 2))
+            else:
+                x = jt.array(self.rng_train)
             loss = (net(x) ** 2).mean()
             grads = jt.grad(loss, params)
             stats = [net.bn1.running_mean, net.bn1.running_var, net.bn3.running_mean]
@@ -136,16 +138,22 @@ class TestChannelsLastCUDA(unittest.TestCase):
             for g, w in zip(got[2], want[2]):
                 np.testing.assert_allclose(g, w, rtol=rtol, atol=1e-5)
 
-    def test_a_training_convolution_goes_channels_last_only_into_a_batch_norm(self):
-        # A group norm's convolution output is read by the residual add as
-        # well, which would compute it twice; it stays NCHW.
+    def test_training_convolution_layout_follows_input_and_precision(self):
         conv = nn.Conv2d(3, 8, 3, padding=1)
         bn = nn.BatchNorm2d(8)
-        gn = nn.GroupNorm(2, 8)
-        x = jt.array(self.rng.randn(2, 3, 6, 6).astype("float32"))
-        self.assertTrue(conv(x)._storage_is_contiguous())
-        self.assertTrue(_is_channels_last(bn(conv(x))))
-        self.assertTrue(gn(conv(x))._storage_is_contiguous())
+        values = self.rng.randn(2, 3, 6, 6).astype("float32")
+        nchw = jt.array(values)
+        nhwc = jt.array(np.ascontiguousarray(values.transpose(0, 2, 3, 1)))
+        self.assertTrue(bn(conv(nchw))._storage_is_contiguous())
+        fp32_view = nhwc._storage_permute((0, 3, 1, 2))
+        self.assertTrue(_is_channels_last(bn(conv(fp32_view))))
+        half_conv = nn.Conv2d(3, 8, 3, padding=1)
+        for parameter in half_conv.parameters():
+            parameter.assign(parameter.float16())
+        half = nchw.float16()
+        self.assertTrue(half_conv(half)._storage_is_contiguous())
+        half_view = nhwc.float16()._storage_permute((0, 3, 1, 2))
+        self.assertTrue(_is_channels_last(half_conv(half_view)))
 
     def test_a_training_group_norm_over_channels_last_storage(self):
         # Ten channels a group, so a float4 of channels straddles two groups;

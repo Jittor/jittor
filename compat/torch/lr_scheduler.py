@@ -262,7 +262,7 @@ class OneCycleLR(LRScheduler):
         super().__init__(optimizer, last_epoch, verbose)
 
     def _anneal(self, start, end, pct):
-        pct = min(max(float(pct), 0.0), 1.0)
+        pct = float(pct)
         if self.anneal_strategy == "linear":
             return start + (end - start) * pct
         return end + (start - end) / 2.0 * (1.0 + _math.cos(_math.pi * pct))
@@ -271,7 +271,7 @@ class OneCycleLR(LRScheduler):
         first_end = self.pct_start * self.total_steps - 1
         last_end = self.total_steps - 1
         if self.three_phase:
-            second_end = first_end * 2 + 1
+            second_end = first_end * 2
             return [
                 (first_end, self.base_lrs, self.max_lrs, self.max_momentums, self.base_momentums),
                 (second_end, self.max_lrs, self.base_lrs, self.base_momentums, self.max_momentums),
@@ -283,17 +283,23 @@ class OneCycleLR(LRScheduler):
         ]
 
     def get_lr(self):
-        step_num = min(max(self.last_epoch, 0), max(self.total_steps - 1, 0))
+        step_num = self.last_epoch
+        if step_num > self.total_steps:
+            raise ValueError(
+                f"Tried to step {step_num} times. The specified number of total steps is {self.total_steps}"
+            )
         start_step = 0.0
-        selected = self._phases()[-1]
-        for phase in self._phases():
-            if step_num <= phase[0]:
+        phases = self._phases()
+        for index, phase in enumerate(phases):
+            # Torch permits the final call at total_steps and extrapolates
+            # the last phase; the next call exceeds the schedule's budget.
+            if step_num <= phase[0] or index == len(phases) - 1:
                 selected = phase
                 break
             start_step = phase[0]
         end_step, start_lrs, end_lrs, start_moms, end_moms = selected
         denom = end_step - start_step
-        pct = 1.0 if denom <= 0 else (step_num - start_step) / denom
+        pct = (step_num - start_step) / denom
         lrs = [self._anneal(s, e, pct) for s, e in zip(start_lrs, end_lrs)]
         if self.cycle_momentum:
             moms = [self._anneal(s, e, pct) for s, e in zip(start_moms, end_moms)]

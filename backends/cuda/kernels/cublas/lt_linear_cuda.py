@@ -17,6 +17,15 @@ cuBLASLt's own heuristic candidates one by one: the first is 509.4 us and the
 sixth is 422.3. So the difference is which kernel gets picked, not arithmetic.
 This picks by timing them, once per problem shape, and remembers the winner.
 
+Captured frozen FP32 forwards also enumerate the algorithm's supported tiles,
+validated by cuBLASLt within a 32 MB workspace budget. Their tuning sweeps
+refresh L2 between samples: a whole model cycles through many weights, while
+repeated calls with one weight measure a different cache workload. Device
+warmup, rotated candidate order and a median of three ten-sample sweeps reduce
+selection noise. This one-off cost is paid before CUDA graph capture; its
+scratch allocation is temporary. Ordinary eager and lower-precision forwards
+keep the smaller warm-cache search.
+
 Determinism is kept: the algorithm is chosen once and then fixed, and this
 cuBLASLt exposes only deterministic reduction schemes (NONE, INPLACE,
 COMPUTE_TYPE, OUTPUT_TYPE -- there is no atomic one to pick by accident), so
@@ -97,6 +106,7 @@ _HEADER = r"""
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cstring>
 #include "core/executor.h"
 #include "mem/allocator.h"
 #include "runtime/float32_precision.h"
@@ -142,6 +152,19 @@ __global__ static void jt_lt_add_bias(T* out, const T* bias,
                                       int total, int cout) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < total) out[i] = out[i] + bias[i % cout];
+}
+
+
+// Autotuning scratch only. Write distinct values so cache compression cannot
+// keep the sweep resident; do not consume the model's random-number stream.
+__global__ static void jt_lt_scrub_cache(unsigned* p, size_t n) {
+    size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) {
+        unsigned v = (unsigned)i + 0x9e3779b9u;
+        v ^= v >> 16; v *= 0x7feb352du;
+        v ^= v >> 15; v *= 0x846ca68bu; v ^= v >> 16;
+        p[i] = v;
+    }
 }
 
 struct JtLtChoice {
@@ -301,8 +324,133 @@ def _supports(x, weight, bias, *args, **kwargs):
     return rows * int(weight.shape[0]) * int(weight.shape[1]) >= (1 << 18)
 
 
+def _forward_tiles_source():
+    # A heuristic query can omit a faster tile of an otherwise supported
+    # algorithm. Validate each additional configuration with cuBLASLt, and
+    # keep the same bounded candidate array and workspace budget.
+    return r"""
+        int initial_found = found;
+        for (int base = 0; base < initial_found && found < 128; base++) {
+            int tiles[128];
+            size_t written = 0;
+            auto status = cublasLtMatmulAlgoCapGetAttribute(
+                &cand[base].algo, CUBLASLT_ALGO_CAP_TILE_IDS,
+                tiles, sizeof(tiles), &written);
+            if (status != CUBLAS_STATUS_SUCCESS || written > sizeof(tiles)) continue;
+            int count = written / sizeof(int);
+            for (int t = 0; t < count && found < 128; t++) {
+                auto algo = cand[base].algo;
+                if (cublasLtMatmulAlgoConfigSetAttribute(
+                        &algo, CUBLASLT_ALGO_CONFIG_TILE_ID,
+                        &tiles[t], sizeof(tiles[t])) != CUBLAS_STATUS_SUCCESS) continue;
+                bool duplicate = false;
+                for (int c = 0; c < found; c++)
+                    if (std::memcmp(&algo, &cand[c].algo, sizeof(algo)) == 0) duplicate = true;
+                if (duplicate) continue;
+                cublasLtMatmulHeuristicResult_t checked;
+                if (cublasLtMatmulAlgoCheck(lt, op, la, lb, lc, lc, &algo, &checked)
+                            != CUBLAS_STATUS_SUCCESS
+                        || checked.state != CUBLAS_STATUS_SUCCESS
+                        || checked.workspaceSize > wsize) continue;
+                checked.algo = algo;
+                cand[found++] = checked;
+            }
+        }
+    """
+
+
+def _forward_tuning_source(candidates, capture_tuning):
+    if not capture_tuning:
+        return r"""
+        for (int c = 0; c < found; c++) {
+            auto once = [&]() {
+                // Explicit stream: jittor runs on `cudaStreamPerThread`, which
+                // does not synchronise with the legacy default stream.
+                return cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
+                                      out0_p, lc, out0_p, lc, &cand[c].algo,
+                                      ws, wsize, cudaStreamPerThread);
+            };
+            if (once() != CUBLAS_STATUS_SUCCESS) continue;
+            cudaDeviceSynchronize();
+            cudaEventRecord(beg, cudaStreamPerThread);
+            for (int r = 0; r < 3; r++) once();
+            cudaEventRecord(end, cudaStreamPerThread);
+            if (cudaEventSynchronize(end) != cudaSuccess) continue;
+            float ms = 0.0f;
+            cudaEventElapsedTime(&ms, beg, end);
+            if (ms > 0.0f && ms < best) {
+                best = ms;
+                choice.algo = cand[c].algo;
+                choice.workspace = cand[c].workspaceSize;
+                choice.usable = true;
+            }
+        }
+"""
+    # A captured model cycles through many weights. Repeating a GEMM with the
+    # same operands benchmarks L2 reuse that its graph replay does not have.
+    # Warm the device, rotate candidate order, and take a median of three
+    # ten-sample sweeps with cold operands. Scratch dies before graph capture.
+    return r"""
+        int device = 0, l2_bytes = 0;
+        CHECK(cudaGetDevice(&device) == cudaSuccess);
+        CHECK(cudaDeviceGetAttribute(&l2_bytes, cudaDevAttrL2CacheSize, device) == cudaSuccess);
+        size_t scrub_bytes = (size_t)l2_bytes * 2;
+        JtLtWorkspace scrub(scrub_bytes);
+        bool valid[CANDIDATE_COUNT] = {};
+        float elapsed[3][CANDIDATE_COUNT];
+        auto run_candidate = [&](int c) {
+            return cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
+                                  out0_p, lc, out0_p, lc, &cand[c].algo,
+                                  ws, wsize, cudaStreamPerThread);
+        };
+        int warm_candidate = -1;
+        for (int c = 0; c < found; c++) {
+            valid[c] = run_candidate(c) == CUBLAS_STATUS_SUCCESS;
+            if (valid[c] && warm_candidate < 0) warm_candidate = c;
+        }
+        if (warm_candidate >= 0)
+            for (int warm = 0; warm < 128; warm++)
+                CHECK(run_candidate(warm_candidate) == CUBLAS_STATUS_SUCCESS);
+        CHECK(cudaStreamSynchronize(cudaStreamPerThread) == cudaSuccess);
+        for (int pass = 0; pass < 3; pass++) {
+            for (int offset = 0; offset < found; offset++) {
+                int c = (offset + 3 * pass) % found;
+                elapsed[pass][c] = 0.f;
+                if (!valid[c]) continue;
+                for (int trial = 0; trial < 10; trial++) {
+                    if (scrub.ptr)
+                        jt_lt_scrub_cache<<<(scrub_bytes / 4 + 255) / 256, 256,
+                                              0, cudaStreamPerThread>>>(
+                            (unsigned*)scrub.ptr, scrub_bytes / 4);
+                    cudaEventRecord(beg, cudaStreamPerThread);
+                    auto status = run_candidate(c);
+                    cudaEventRecord(end, cudaStreamPerThread);
+                    CHECK(cudaEventSynchronize(end) == cudaSuccess);
+                    if (status != CUBLAS_STATUS_SUCCESS) { valid[c] = false; break; }
+                    float sample = 0.f;
+                    cudaEventElapsedTime(&sample, beg, end);
+                    elapsed[pass][c] += sample / 10.f;
+                }
+            }
+        }
+        for (int c = 0; c < found; c++) {
+            if (!valid[c]) continue;
+            float x = elapsed[0][c], y = elapsed[1][c], z = elapsed[2][c];
+            float score = x + y + z - fminf(x, fminf(y, z)) - fmaxf(x, fmaxf(y, z));
+            if (score > 0.f && score < best) {
+                best = score;
+                choice.algo = cand[c].algo;
+                choice.workspace = cand[c].workspaceSize;
+                choice.usable = true;
+            }
+        }
+    """.replace("CANDIDATE_COUNT", str(candidates))
+
+
 @functools.lru_cache(maxsize=256)
-def _source(rows, cin, cout, dtype):
+def _source(rows, cin, cout, dtype, capture_tuning=False):
+    candidates = 128 if capture_tuning else _CANDIDATES
+    workspace = (32 << 20) if capture_tuning else _WORKSPACE
     # The one place the element type enters the kernel. The accumulate is
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha
     # and beta stay floats either way.
@@ -362,43 +510,22 @@ def _source(rows, cin, cout, dtype):
     JtLtChoice& choice = choices[slot];
     if (!choice.ready) {{
         choice.ready = true;
-        JtLtWorkspace probe({_WORKSPACE});
+        JtLtWorkspace probe({workspace});
         void* ws = probe.ptr;
-        size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
+        size_t wsize = ws ? (size_t){workspace} : 0;
         cublasLtMatmulPreference_t pref = nullptr;
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
             pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
-        cublasLtMatmulHeuristicResult_t cand[{_CANDIDATES}];
+        cublasLtMatmulHeuristicResult_t cand[{candidates}];
         int found = 0;
         cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
-                                       {_CANDIDATES}, cand, &found);
+                                       {candidates}, cand, &found);
+        {_forward_tiles_source() if capture_tuning else ""}
         cudaEvent_t beg, end;
         cudaEventCreate(&beg); cudaEventCreate(&end);
         float best = 1e30f;
-        for (int c = 0; c < found; c++) {{
-            auto once = [&]() {{
-                // Explicit stream: jittor runs on `cudaStreamPerThread`, which
-                // does not synchronise with the legacy default stream.
-                return cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                                      out0_p, lc, out0_p, lc, &cand[c].algo,
-                                      ws, wsize, cudaStreamPerThread);
-            }};
-            if (once() != CUBLAS_STATUS_SUCCESS) continue;
-            cudaDeviceSynchronize();
-            cudaEventRecord(beg, cudaStreamPerThread);
-            for (int r = 0; r < 3; r++) once();
-            cudaEventRecord(end, cudaStreamPerThread);
-            if (cudaEventSynchronize(end) != cudaSuccess) continue;
-            float ms = 0.0f;
-            cudaEventElapsedTime(&ms, beg, end);
-            if (ms > 0.0f && ms < best) {{
-                best = ms;
-                choice.algo = cand[c].algo;
-                choice.workspace = cand[c].workspaceSize;
-                choice.usable = true;
-            }}
-        }}
+        {_forward_tuning_source(candidates, capture_tuning)}
         cudaEventDestroy(beg); cudaEventDestroy(end);
         cublasLtMatmulPreferenceDestroy(pref);
     }}
@@ -742,10 +869,10 @@ def _supports_training(x, weight, bias, *, transposed_weight=False):
     product = rows * cin * cout
     if rows >= _MIN_ROWS and product >= minimum_product:
         return True
-    if dtype == "float32" and rows >= 64 and product >= (1 << 26):
+    if dtype == "float32" and rows >= 32 and product >= (1 << 26):
         # A whole-step capture pays Function/tape construction only once.
-        # Short sequence batches still have substantial GEMMs: 180 rows by
-        # 1024 by 4096, for example. A 512-row floor left those on the
+        # Short sequence batches still have substantial GEMMs: 39 rows by
+        # 1024 by 4096, for example. A 64-row floor left those on the
         # heuristic-only path even though replays amortize the host cost.
         # Keep the eager and low-precision floors above independent.
         from jittor._runtime import step_capture
@@ -828,7 +955,8 @@ def lt_linear_cuda(x, weight, bias):
     if _jittor_dtype_name(bias.dtype) != dtype:
         bias = bias.cast(dtype)
     return jt.code(shape[:-1] + [cout], dtype, [x, weight, bias],
-                   cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype))
+                   cuda_header=_HEADER, cuda_src=_source(
+                       rows, cin, cout, dtype, capture_tuning=_capture_tuning(dtype)))
 
 
 __all__ = ["lt_linear_cuda", "lt_linear_train_cuda", "lt_linear_wgrad_cuda", "lt_addmm_train_cuda",

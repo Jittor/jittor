@@ -178,6 +178,15 @@ def live_array(value, refresh, dtype="float32"):
     return var
 
 
+def _observe_dynamic_indices(values):
+    """Retain coordinate lookups whose shape Python can inspect."""
+    if _ACTIVE is not None:
+        if any(value.is_finished for value in values):
+            refuse("the step materialized dynamic indices outside the kept graph")
+            return
+        _ACTIVE.dynamic_indices.extend(values)
+
+
 def on_replay(hook):
     """Run `hook()` before every replay of the step being captured."""
     if _ACTIVE is not None:
@@ -254,16 +263,17 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
     on_replay(advance)
     first = indices[0]
     live_hyper = bool(getattr(impl, 'accepts_live_hyperparameters', False))
+    hyper_dtype = getattr(impl, 'live_hyperparameters_dtype', 'float32')
     if live_hyper:
         def refresh():
             betas, decay, epsilon = frozen()
             return [float(steps[first]), float(read_lr()), 0.,
                     float(betas[0]), float(betas[1]), float(decay), float(epsilon)]
-        hyper = live_array(refresh(), refresh)
+        hyper = live_array(refresh(), refresh, hyper_dtype)
     else:
         guard(frozen)
         hyper = live_array([float(steps[first]), float(read_lr())],
-                           lambda: [float(steps[first]), float(read_lr())])
+                           lambda: [float(steps[first]), float(read_lr())], hyper_dtype)
     if found_inf is None:
         return hyper
     skipped = getattr(owner, "_amp_skipped_steps", None)
@@ -272,7 +282,7 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
         _materialize(skipped)
         owner._amp_skipped_steps = skipped
     found = found_inf.float32().reshape((1,))
-    parts = [hyper[:1] - skipped, hyper[1:2], found]
+    parts = [hyper[:1] - skipped.cast(hyper.dtype), hyper[1:2], found.cast(hyper.dtype)]
     if live_hyper:
         parts.append(hyper[3:])
     hyper = jt.concat(parts)
@@ -507,7 +517,7 @@ class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
-                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix")
+                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix", "dynamic_indices")
 
     def __init__(self):
         self.prologue = []
@@ -520,6 +530,7 @@ class _Capture:
         self.gradient_leaves = []
         self.differentiable_leaves = []
         self.dynamic_prefix = None
+        self.dynamic_indices = []
 
 
 def _finish_normally(roots):
@@ -778,12 +789,16 @@ class StepCapture:
             cap.refused = ("the call draws random numbers, which a replay would draw "
                            "again on every run")
         if cap.refused is None:
+            # A coordinate lookup can control Python through its length even
+            # when none of the resulting coordinates reach a tensor output.
+            roots = _unique(roots + cap.dynamic_indices)
             prefix = _core._step_shape_prefix_create(roots)
             if prefix < 0:
                 cap.refused = ("dynamic output shapes require an admissible "
                                "read-only device prefix")
             elif prefix:
                 cap.dynamic_prefix = _ShapePrefix(prefix)
+        cap.dynamic_indices.clear()
         if cap.refused is not None:
             self._refused = cap.refused
             _finish_normally(roots)

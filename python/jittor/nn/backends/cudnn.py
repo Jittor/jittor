@@ -8,7 +8,7 @@ from jittor._runtime.dispatch import native_rule, optional_kernel, register_kern
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor.nn.functional._amp import bias_for_compute_dtype
-from jittor.nn.functional._layout import channels_last_source, channels_last_view, offer_channels_last
+from jittor.nn.functional._layout import channels_last_source, channels_last_view
 
 
 
@@ -107,20 +107,9 @@ channels_last_activations = True
 
 _HALF = ("float16", "bfloat16")
 
-#: Whether a convolution that records a gradient runs channels-last where
-#: that pays, float32 included. cuDNN's tensor-core kernels compute in NHWC for
-#: training too: handed NCHW, every forward, data-gradient and filter-gradient
-#: call converts its operands on the way in and its result on the way out --
-#: 7.4 ms of a 78 ms ResNet-50 training step, whose convolutions ran in 41.3 ms
-#: NCHW against 37.1 NHWC. It only pays while what reads the result keeps the
-#: layout: a batch norm does (its NHWC kernels), a group norm, an
-#: interpolation or a reshape would convert it back, and a DDPM UNet trained
-#: 13% slower with every convolution channels-last. So a convolution whose
-#: input is NCHW hands out NCHW and offers the channels-last result
-#: (`offer_channels_last`) for a reader that can use it; one whose input is
-#: already channels-last stays channels-last. Gradients follow the same
-#: layout back (`TransposeOp::grad` keeps a view a view). Grouped convolutions
-#: stay NCHW: their channels-last kernels are the slow ones.
+#: Whether training convolutions preserve channels-last inputs. Keep dense
+#: inputs dense to avoid introducing layout conversions in the forward and
+#: the two backward convolutions. Grouped convolutions use the dense path.
 channels_last_training = True
 
 
@@ -147,6 +136,7 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     sh, sw = stride   if isinstance(stride, tuple)   else (stride, stride)
     ph, pw = padding  if isinstance(padding, tuple)  else (padding, padding)
     dh, dw = dilation if isinstance(dilation, tuple) else (dilation, dilation)
+    dtype = _jittor_dtype_name(x.dtype)
     filter_, layout = _inference_filter(x, weight, groups)
     cudnn = get_library_ops("cudnn")
 
@@ -158,8 +148,19 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
             y = y + bias_for_compute_dtype(y, bias)
         return channels_last_view(y)
 
+    # Preserve an existing FP32 channels-last chain without changing the
+    # layout of ordinary NCHW inference. Pack the filter as a graph operation:
+    # unlike the half-precision cache above, it must observe later writes too.
+    if (channels_last_activations and groups == 1 and not jt.flags.amp_reg
+            and dtype == "float32"
+            and not _output_requires_grad(x, weight, bias)):
+        source = channels_last_source(x)
+        if source is not None:
+            filter_, layout = weight._storage_permute((0, 2, 3, 1)).contiguous(), "ohwi"
+            return channels_last(source).stop_grad()
+
     training = _training_channels_last(x, weight, bias, groups)
-    if training or (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
+    if training or (channels_last_activations and dtype in _HALF
                     and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):
         source = channels_last_source(x)
         if source is None:
@@ -174,8 +175,6 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     y = cudnn.cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups, "abcd", layout)
     if bias is not None:
         y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
-    if training:
-        offer_channels_last(y, lambda: channels_last(None))
     return y
 
 # Same story for the transpose: the forward *is* the conv-backward-x op, and

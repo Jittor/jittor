@@ -1419,9 +1419,7 @@ def install(ctx):
     _triton_ops_meta.minimize = _triton_ops_meta_minimize
     _triton_ops_meta.__all__ = ("get_meta", "minimize", "update")
     sparse_namespace._triton_ops_meta = _triton_ops_meta
-    # Published through the install registry, not sys.modules directly: the
-    # shim's ownership check compares sys.modules' torch.* entries with the
-    # recorded publication set, so an unrecorded entry fails re-activation.
+    # Publish through the registry so the shim records the module's owner.
     _modules["torch.sparse._triton_ops_meta"] = _triton_ops_meta
 
     # torch.sparse.SparseSemiStructuredTensor*: declared, not implemented.
@@ -1444,11 +1442,9 @@ def install(ctx):
     sparse_namespace.SparseSemiStructuredTensor = _SemiStructuredSparseTensorUnavailable
     sparse_namespace.SparseSemiStructuredTensorCUSPARSELT = _SemiStructuredSparseTensorUnavailable
     sparse_namespace.SparseSemiStructuredTensorCUTLASS = _SemiStructuredSparseTensorUnavailable
-    # `from torch.sparse import ...` reads the module the import system has in
-    # sys.modules, which can be a different module object from the facade this
-    # installer builds. Mirror the names onto it when that is the case.
-    import sys as _sparse_sys
-    _published_sparse = _sparse_sys.modules.get("torch.sparse")
+    # A previously registered sparse module can differ from this facade.
+    # Publish the same metadata on both objects.
+    _published_sparse = ctx.registry.get("torch.sparse")
     if _published_sparse is not None and _published_sparse is not sparse_namespace:
         for _name in ("_triton_ops_meta", "SparseSemiStructuredTensor",
                       "SparseSemiStructuredTensorCUSPARSELT",
