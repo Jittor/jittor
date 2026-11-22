@@ -359,6 +359,7 @@ def _install_cuda(g, registry=None):
     if "torch._C" not in _modules:
         c_mod = _types.ModuleType("torch._C")
         c_mod._TensorMeta = type(getattr(g, "Tensor", jt.Var))
+        c_mod._has_xpu = "xpu" in jt.core.registered_backends()
         # TorchScript/ONNX symbolic functions annotate their arguments and
         # return values with these C++ types. Several transformers models
         # define such annotations at class-creation time (for example

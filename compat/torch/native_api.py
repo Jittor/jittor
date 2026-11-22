@@ -159,6 +159,7 @@ def operation(name):
 
 def install(context):
     """Fill declared native-backed APIs, then close the bootstrap-only fallback."""
+    from .core_install_api import _TorchVersion
     from .namespace import TorchNamespace
     target = context.target_namespace
     if not isinstance(target, TorchNamespace):
@@ -196,8 +197,8 @@ def install(context):
                               "Shared native implementation in an owned module and frontend scope; native dtype/backend limitations remain")
     bind_delegates(context, "native_torch_operations", delegates)
     # Version identity must not fall through to the backend after publication.
-    if "__version__" not in vars(target):
-        target.__version__ = getattr(target, "__jittor_version__", "")
+    reported_version = vars(target).get("__version__", getattr(target, "__jittor_version__", ""))
+    target.__version__ = _TorchVersion(reported_version)
     target.__all__ = tuple(sorted(name for name in vars(target) if not name.startswith("_")))
     target._seal()
 
