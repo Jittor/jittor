@@ -90,6 +90,34 @@ def test_prepared_triton_uses_current_scalars_and_grid():
         assert jt.core.graph_launch_count() == graph_count
 
 
+def test_reusable_triton_launch_uses_new_storage_and_fresh_outputs():
+    require_cuda()
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+    from jittor.kernels.triton import _prepare_triton_launch
+
+    @triton.jit
+    def biased_add(left, right, output, amount):
+        idx = tl.arange(0, 16)
+        tl.store(output + idx, tl.load(left + idx) + tl.load(right + idx) + amount)
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback="error"):
+        source = torch.arange(16, device="cuda", dtype=torch.float32)
+        other = torch.full((16,), 4.0, device="cuda")
+        graphs = jt.core.graph_launch_count()
+        plan = _prepare_triton_launch(biased_add, source, other, TensorSpec((16,)), 1.5, grid=(1,))
+        assert plan.input_names == ("left", "right")
+        first = plan(source, other)
+        second = plan(source + 3.0, other + 5.0)
+        jt.sync([first, second], False, False)
+        assert first.location() == second.location() == "device"
+        np.testing.assert_array_equal(first.cpu().numpy(), np.arange(16) + 5.5)
+        np.testing.assert_array_equal(second.cpu().numpy(), np.arange(16) + 13.5)
+        with pytest.raises(ValueError, match="shape and dtype"):
+            plan(source[:8], other)
+        assert jt.core.graph_launch_count() == graphs
+
+
 def test_prepared_triton_replays_indexed_state_updates():
     require_cuda()
     from jittor.compat.triton import backend

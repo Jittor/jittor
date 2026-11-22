@@ -122,6 +122,52 @@ def _prepared_call(kernel, *args, grid, **options):
     to remain alive through replay. Its kernel must keep writes from racing
     reads by other threads. Prepare on the recording device before capture.
     """
+    return _prepare_and_submit(kernel, args, grid, options, reusable=False)
+
+
+@dataclass(frozen=True)
+class _PreparedTritonLaunch:
+    """Fixed CUDA launch metadata, with no bound input or output storage."""
+
+    input_names: tuple
+    _input_specs: tuple
+    _output_shapes: tuple
+    _output_dtypes: tuple
+    _device: int
+    _source: str
+    _data: dict
+
+    def __call__(self, *inputs):
+        import jittor as jt
+
+        if (not jt.flags.use_cuda or not jt.flags.no_grad
+                or jt.current_device() != self._device or jt.core.graph_capture_active()):
+            raise RuntimeError("Run the Triton launch on its preparation device in no_grad mode")
+        if len(inputs) != len(self._input_specs):
+            raise ValueError("Wrong number of inputs for the prepared Triton launch")
+        for value, (shape, dtype) in zip(inputs, self._input_specs):
+            if (not isinstance(value, jt.Var) or value.placement_backend != 1
+                    or value.device_id != self._device or not value._storage_is_contiguous()
+                    or tuple(value.shape) != shape or str(value.dtype) != dtype):
+                raise ValueError("Prepared Triton inputs must keep their CUDA device, shape and dtype "
+                                 "and use contiguous storage")
+        result = jt.code(self._output_shapes, self._output_dtypes, list(inputs),
+                         cuda_header=_PREPARED_HEADER, cuda_src=self._source, data=self._data,
+                         backend="cuda")
+        return result[0] if len(self._output_shapes) == 1 else tuple(result)
+
+
+def _prepare_triton_launch(kernel, *args, grid, **options):
+    """Bind fixed grid/scalars and fresh outputs, then accept new input Vars.
+
+    Pass inputs in the order listed in the returned descriptor's
+    `input_names`. Each call constructs a fresh executor node. Retained
+    metadata contains no exemplar tensor and no recorded execution graph.
+    """
+    return _prepare_and_submit(kernel, args, grid, options, reusable=True)
+
+
+def _prepare_and_submit(kernel, args, grid, options, *, reusable):
     import jittor as jt
     from triton.runtime.jit import JITFunction
     from jittor.compat.triton import backend
@@ -144,6 +190,7 @@ def _prepared_call(kernel, *args, grid, **options):
 
     device = jt.current_device()
     inputs, outputs, layout, copies = [], [], [], []
+    input_names = [] if reusable else None
     kinds, constants, scalar_bits, bound_outputs = {}, {}, {}, {}
 
     def add_input(value):
@@ -164,6 +211,8 @@ def _prepared_call(kernel, *args, grid, **options):
         if isinstance(value, jt.Var):
             slot = f"in{add_input(value)}"
             kinds[name] = backend._ptr_sig(value)
+            if input_names is not None:
+                input_names.append(name)
         elif isinstance(value, _InitializedOutput):
             source = add_input(value.initial)
             slot = f"out{len(outputs)}"
@@ -195,6 +244,8 @@ def _prepared_call(kernel, *args, grid, **options):
         layout.append(slot)
     if not inputs or not outputs:
         raise ValueError("prepared Triton requires inputs and explicit outputs")
+    if reusable and (bound_outputs or copies):
+        raise ValueError("Reusable Triton launch metadata requires fresh outputs")
 
     driver = backend._Driver.get(device)
     driver.ensure_ctx()
@@ -211,6 +262,10 @@ def _prepared_call(kernel, *args, grid, **options):
     shapes = [spec.shape for spec in outputs]
     dtypes = [spec.dtype.removeprefix("torch.") for spec in outputs]
     source = _prepared_source(tuple(layout), tuple(copies))
+    if reusable:
+        specs = tuple((tuple(value.shape), str(value.dtype)) for value in inputs)
+        return _PreparedTritonLaunch(tuple(input_names), specs, tuple(shapes), tuple(dtypes),
+                                     device, source, data)
     if bound_outputs:
         from jittor._core.var import placement_scope_like
 
