@@ -1010,7 +1010,9 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
         auto state = std::make_shared<AutogradAliasState>();
         state->source = source;
         state->version = source->version;
-        state->creation_version = *state->version;
+        state->custom_backward_view = source->custom_backward_view;
+        state->creation_version = source->custom_backward_view
+            ? source->creation_version : *state->version;
         state->created_without_grad = no_grad;
         state->recorded_view_history = !no_grad && backward_grad_fn(var);
         state->source_edge_enabled = base->get_requires_grad();
@@ -1560,6 +1562,17 @@ std::shared_ptr<AutogradAliasState> VarHolder::ensure_autograd_alias() {
     return var->autograd_alias;
 }
 
+void VarHolder::mark_custom_backward_view(VarHolder* base) {
+    // The tape already shares storage with the base. Track the shared write
+    // version without rebasing the custom gradient edge as an ordinary view.
+    auto source = base->ensure_autograd_alias();
+    auto state = ensure_autograd_alias();
+    state->version = source->version;
+    state->creation_version = source->custom_backward_view
+        ? source->creation_version : *source->version;
+    state->custom_backward_view = true;
+}
+
 VarHolder* VarHolder::check_inplace_autograd() {
     if (no_grad || !autograd_policy.stop_outputs_when_inputs_stopped) return this;
     if (get_requires_grad() && var->autograd_alias
@@ -1570,6 +1583,8 @@ VarHolder* VarHolder::check_inplace_autograd() {
             "modified inplace with grad mode enabled.";
     }
     if (get_requires_grad()) {
+        USER_CHECK(!var->autograd_alias || !var->autograd_alias->custom_backward_view)
+            << "A custom backward view is being modified inplace.";
         USER_CHECK(!jittor::is_backward_leaf(var))
             << "a leaf Variable that requires grad is being used in an in-place operation.";
         USER_CHECK(!view_base_is_trainable_leaf())

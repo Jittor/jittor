@@ -523,6 +523,8 @@ struct VarHolder {
     // @pyjt(_check_inplace_autograd)
     // @attrs(return_self)
     VarHolder* check_inplace_autograd();
+    // @pyjt(_mark_custom_backward_view)
+    void mark_custom_backward_view(VarHolder* base);
     void record_inplace_write();
     // Capture a supported indexed store as a mutation of its root storage.
     // False asks the frontend to use its ordinary indexed assignment.
