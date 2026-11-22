@@ -935,9 +935,11 @@ def _align_advanced_index(data, index):
 
 def _torch_getitem(self, slices):
     slices = _normalize_index_sequence(slices)
-    # PyTorch accepts NumPy integer/bool arrays as advanced indices.
-    # Convert them before the native fast path or the dispatcher sees them.
+    # Convert advanced masks before the native fast path or dispatcher.
     def normalize(index):
+        if isinstance(index, list) and index and all(isinstance(item, bool) for item in index):
+            torch = get_install_context(_owner.jt).target_namespace
+            return torch.tensor(index, dtype=torch.bool, device=self.device)
         if isinstance(index, _owner.np.ndarray) and index.ndim:
             if index.dtype.kind not in ("b", "i", "u"):
                 return index
