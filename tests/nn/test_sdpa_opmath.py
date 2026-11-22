@@ -97,6 +97,32 @@ class TestAttentionOpmath(unittest.TestCase):
                         # attention, including the necessary final dtype cast.
                         self.assertLessEqual(error, .002 if index == 0 else .01)
 
+    def test_gqa_math_rounds_after_shared_kv_gradient_reduction(self):
+        device = os.environ.get("JITTOR_TEST_DEVICE", "cpu")
+        rng = np.random.default_rng(198928)
+        arrays = [rng.normal(0, 0.7, (1, heads, 5, 8)).astype("float32")
+                  for heads in (14, 2, 2)]
+        cotangent = rng.normal(0, 0.5, arrays[0].shape).astype("float32")
+
+        def run(dtype, promote):
+            inputs = [jt.array(array).cast(dtype) for array in arrays]
+            operands = [value.float32() for value in inputs] if promote else inputs
+            out = attention._scaled_dot_product_attention(
+                *operands, enable_gqa=True, is_causal=True, use_fused=False).cast(dtype)
+            gradients = jt.grad((out.float32() * jt.array(cotangent)).sum(), inputs)
+            return out, *gradients
+
+        with jt.flag_scope(use_cuda=int(device == "cuda"), amp_reg=0), forbid_backend_fallbacks():
+            for dtype in ("bfloat16", "float16"):
+                with self.subTest(dtype=dtype):
+                    actual = run(dtype, False)
+                    expected = run(dtype, True)
+                    for value, target in zip(actual, expected):
+                        self.assertEqual(str(value.dtype), dtype)
+                        value.sync()
+                        self.assertEqual(value.location(), "device" if device == "cuda" else "cpu")
+                        np.testing.assert_array_equal(value.float32().numpy(), target.float32().numpy())
+
     def test_bfloat16_training(self):
         self._check("bfloat16", True)
 
