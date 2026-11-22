@@ -393,7 +393,7 @@ def _reduced_precision_admitted(query, key, value, attn_mask, dropout_p, is_caus
 
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                            is_causal=False, scale=None, *, grouped=False,
-                           allow_reduced_precision=False):
+                           allow_reduced_precision=False, enable_gqa=False):
     """Run attention through cuDNN, or return None to decline.
 
     ``grouped``: `key` and `value` may have fewer heads than `query`, each
@@ -409,7 +409,7 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     # Equal head counts through `nn.fused_attention`: it has no enable_gqa, so
     # a mismatch there is the caller's error to raise on the path below.
     heads, key_heads = int(query.shape[1]), int(key.shape[1])
-    if key_heads != heads and not (grouped and key_heads > 0 and heads % key_heads == 0):
+    if key_heads != heads and not ((grouped or enable_gqa) and key_heads > 0 and heads % key_heads == 0):
         return None
     dtype = _jittor_dtype_name(query.dtype)
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
@@ -521,7 +521,7 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False):
 
 
 def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
-              scale=None, allow_reduced_precision=False):
+              scale=None, allow_reduced_precision=False, enable_gqa=False):
     return _jittor_dtype_name(query.dtype) in _DTYPES and (
         _accuracy_admitted(query) or (allow_reduced_precision and _reduced_precision_admitted(
             query, key, value, attn_mask, dropout_p, is_causal)))
