@@ -62,11 +62,11 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
     PyObject* state_protocol);
 
 
-// A fresh, unallocated cuBLAS result with no aliases or other readers can be
-// replaced by an independent copy of its binary update. False retains the
-// imperative store. No tensor, graph or execution plan is cached.
+// Defer the binary update of an unallocated, unaliased result. The caller
+// may opt in for a cast when the update is its own temporary, which can be
+// assigned without copying an externally owned RHS. False keeps the store.
 // @pyjt(_try_defer_unaliased_inplace)
-bool try_defer_unaliased_inplace(PyObject* self, PyObject* value);
+bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_result = false);
 
 // An already allocated, unaliased CUDA destination can be updated by a fresh
 // write_back op. Its reader dependencies preserve snapshots without draining
