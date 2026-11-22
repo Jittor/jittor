@@ -10,7 +10,6 @@
 #include "core/event_queue.h"
 #endif
 #include <cstring>
-#include <cmath>
 #include "core/var.h"
 #include "ops/composite/array_op.h"
 #include "runtime/device.h"
@@ -79,34 +78,9 @@ void ArrayOp::jit_prepare(JK& jk) {
     // `num == 1` here instead of reading the (possibly-since-cleared) flag
     // keeps this encoding present regardless of what fuser.cc did to
     // _force_fuse afterward.
-    if (output->num == 1) {
+    if (output->num == 1)
+        // The fused kernel receives this value as a runtime argument.
         jk << "«T:" << output->dtype();
-
-        // fill or find cbuffer for const var pass
-        if (output->dtype().dsize() == 4) {
-            auto x = std::abs(ptr<int32>()[0]);
-            auto y = std::abs(ptr<float32>()[0]);
-            auto z = ptr<uint32>()[0];
-            if ((x<=2) || (y==1.0f || y==2.0f))
-                jk << "«o:" << z;
-        } else if (output->dtype().dsize() == 8) {
-            // Same const-buffer fast path as the dsize()==4 branch above,
-            // extended to 8-byte scalars (float64/int64), which this
-            // branch previously excluded entirely -- excluding them isn't
-            // unsafe by itself (the "T:" dtype tag above already guarantees
-            // dtype-safety on its own), but it does mean two DIFFERENT
-            // 8-byte scalar values of the SAME dtype get no jit_key
-            // differentiation from this op at all. z is the low 32 bits
-            // only; that's fine, it's just a filter for "is this among the
-            // handful of very common small constants".
-            auto x = std::abs(ptr<int64>()[0]);
-            auto y = std::abs(ptr<float64>()[0]);
-            auto z = ptr<uint32>()[0];
-            if ((x<=2) || (y==1.0 || y==2.0))
-                jk << "«o:" << z << ":" << ptr<uint32>()[1];
-        }
-        // end of fill cbuffer
-    }
 }
 
 void ArrayOp::run() {
