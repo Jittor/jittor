@@ -530,6 +530,36 @@ class TestStepCaptureCuda(TestStepCapture):
                 self.assertFalse(value.requires_grad)
                 np.testing.assert_array_equal(value.numpy(), 2 * (np.arange(16) + i) + 1)
 
+    def test_cuda_wide_sort_softmax_scan_preserve_each_replayed_output(self):
+        def step(values):
+            indices, ordered = jt.argsort(values, dim=-1, stable=True)
+            return indices, jt.cumsum(jt.nn.softmax(ordered, dim=-1), dim=-1)
+
+        rng = np.random.default_rng(415)
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, backend_fallback="error"):
+            feeds = [jt.array(rng.normal(0, 3, (2, 65537)).astype(np.float16).astype(np.float32))
+                     for _ in range(8)]
+            jt.sync(feeds, False, False)
+            expected = []
+            for feed in feeds:
+                values = step(feed)
+                jt.sync(values, True, False)
+                expected.append(tuple(value.numpy().copy() for value in values))
+
+            graph_count = jt.core.graph_launch_count()
+            captured = jt.capture_step(step)
+            try:
+                actual = [captured(feed) for feed in feeds]
+                jt.sync_all(True)
+                self.assertGreater(jt.core.graph_launch_count(), graph_count)
+                self.assertGreater(captured.stats["graph"], 0)
+            finally:
+                captured.invalidate()
+            for (indices, prefix), (want_indices, want_prefix) in zip(actual, expected, strict=True):
+                self.assertEqual(prefix.location(), "device")
+                np.testing.assert_array_equal(indices.numpy(), want_indices)
+                np.testing.assert_allclose(prefix.numpy(), want_prefix, rtol=2e-6, atol=8e-7)
+
     def test_cuda_input_staging_checks_aliases_before_copying(self):
         with jt.no_grad():
             first = jt.array(np.arange(8, dtype=np.float32))
