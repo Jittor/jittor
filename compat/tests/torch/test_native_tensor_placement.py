@@ -76,6 +76,39 @@ def test_cpu_clamp_bounds_do_not_allocate_cuda_memory():
         assert torch.cuda.max_memory_allocated() == baseline
 
 
+@pytest.mark.parametrize("spatial_shape", [(6, 8), (4, 6, 8)])
+def test_cpu_grid_operations_do_not_allocate_cuda_memory(spatial_shape):
+    import torch
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    dimensions = len(spatial_shape)
+    centers = [2 * (np.arange(n, dtype=np.float32) + 0.5) / n - 1
+               for n in spatial_shape]
+    positions = np.stack(np.meshgrid(*centers, indexing="ij")[::-1], axis=-1)[None]
+    values = np.linspace(-1, 1, 2 * np.prod(spatial_shape), dtype=np.float32)
+    values = values.reshape((1, 2, *spatial_shape))
+    theta = np.eye(dimensions, dimensions + 1, dtype=np.float32)[None]
+
+    with _cuda_runtime(), forbid_backend_fallbacks(), torch.no_grad():
+        image, grid, transform = map(torch.from_numpy, (values, positions, theta))
+        for source in (image, grid, transform):
+            source.sync()
+            _cpu(source)
+
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+
+        generated = torch.nn.functional.affine_grid(transform, tuple(image.shape), align_corners=False)
+        sampled = torch.nn.functional.grid_sample(image, grid, align_corners=False)
+        for result, expected in ((generated, positions), (sampled, values)):
+            result.sync()
+            _cpu(result)
+            np.testing.assert_allclose(result.numpy(), expected, rtol=1e-6, atol=1e-6)
+        torch.cuda.synchronize()
+        assert torch.cuda.max_memory_allocated() == baseline
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
