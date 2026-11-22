@@ -66,6 +66,43 @@ class TestBasicSlicing(Base):
             self.ac(tx[1:, ::2].numpy(), x[1:, ::2], msg=f"x[1:,::2] {dev}")
         both_devices(body)
 
+    def test_basic_setitem_rhs_leading_singletons(self):
+        cases = (
+            ((1, 8, 1, 1), 0, (1, 8, 1, 1)),
+            ((2, 3, 4), (0, slice(None), 1), (1, 1, 3)),
+            ((2, 3), slice(None), (1, 2, 1)),
+            ((2, 3, 4), (Ellipsis, 0), (1, 2, 3)),
+            ((2, 3), (0, None, slice(None)), (1, 1, 3)),
+        )
+
+        def body(dev):
+            for shape, index, value_shape in cases:
+                values = np.arange(1, np.prod(value_shape) + 1, dtype=np.float32).reshape(value_shape)
+                ref = np.zeros(shape, dtype=np.float32)
+                ref[index] = values
+                out = torch.zeros(shape, dtype=torch.float32, device=dev)
+                out[index] = torch.tensor(values, device=dev)
+                self.assertEqual(out.device.type, dev)
+                self.ae(out.numpy(), ref, msg=f"assignment {index!r} on {dev}")
+
+            out = torch.zeros((2, 3), dtype=torch.float32, device=dev)
+            with self.assertRaises(RuntimeError):
+                out[0] = torch.ones((2, 3), dtype=torch.float32, device=dev)
+
+        both_devices(body)
+
+    def test_basic_setitem_rhs_leading_singletons_backward(self):
+        def body(dev):
+            values = [1.0, 2.0, 3.0]
+            rhs = torch.tensor([[values]], device=dev, requires_grad=True)
+            out = torch.zeros((2, 3), dtype=torch.float32, device=dev)
+            out[1] = rhs
+            out.square().sum().backward()
+            self.assertEqual(rhs.grad.device.type, dev)
+            self.ae(rhs.grad.numpy(), np.array([[[2., 4., 6.]]], dtype=np.float32))
+
+        both_devices(body)
+
     def test_negative_index_and_slice(self):
         x = self.x2
         def body(dev):
