@@ -463,6 +463,30 @@ def test_unique_counts_inherit_explicit_input_placement(source, ambient, by_row)
 
 
 
+@pytest.mark.parametrize("source,ambient", [("cpu", 1), ("cuda", 0)])
+def test_block_diag_uses_input_placement(source, ambient):
+    import jittor as jt
+    import torch
+
+    data = np.arange(1, 17, dtype=np.float32).reshape(4, 2, 2)
+    expected = np.zeros((8, 8), dtype=np.float32)
+    for index, block in enumerate(data):
+        start = 2 * index
+        expected[start:start + 2, start:start + 2] = block
+    with _cuda_runtime(), jt.flag_scope(backend_fallback="error"):
+        inputs = torch.tensor(data, device=source, requires_grad=True)
+        empty = torch.empty((0, 3), device=source)
+        with jt.flag_scope(use_cuda=ambient):
+            out = torch.block_diag(*inputs.unbind())
+            empty_result = torch.block_diag(empty)
+            out.square().sum().backward()
+            jt.sync_all(True)
+        assert out.device.type == inputs.grad.device.type == empty_result.device.type == source
+        assert tuple(empty_result.shape) == (0, 3)
+        np.testing.assert_array_equal(out.numpy(), expected)
+        np.testing.assert_array_equal(inputs.grad.numpy(), 2 * data)
+
+
 def test_parameter_data_slice_copies_cpu_checkpoint_weight_to_cuda():
     import jittor as jt
     import torch

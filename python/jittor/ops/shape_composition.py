@@ -141,9 +141,10 @@ def block_diag(*tensors):
 
     total_rows = sum(t.shape[0] for t in norm)
     total_cols = sum(t.shape[1] for t in norm)
+    if not norm:
+        return jt.zeros((0, 0), "float32")
     if total_rows == 0 or total_cols == 0:
-        dtype = norm[0].dtype if norm else "float32"
-        return jt.zeros((total_rows, total_cols), dtype)
+        return norm[0].new_zeros((total_rows, total_cols))
 
     rows = []
     col_offset = 0
@@ -153,10 +154,10 @@ def block_diag(*tensors):
         right = total_cols - col_offset - c
         pieces = []
         if left > 0:
-            pieces.append(jt.zeros((r, left), t.dtype))
+            pieces.append(t.new_zeros((r, left)))
         pieces.append(t)
         if right > 0:
-            pieces.append(jt.zeros((r, right), t.dtype))
+            pieces.append(t.new_zeros((r, right)))
         row = pieces[0] if len(pieces) == 1 else jt.concat(pieces, dim=1)
         rows.append(row)
         col_offset += c
