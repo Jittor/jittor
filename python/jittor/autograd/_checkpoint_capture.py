@@ -98,7 +98,7 @@ class Capture:
                         self._add(tensor)
                         self.slots.append((owner, name, tensor.id))
                     elif role in ("buffer", "non_persistent_buffer"):
-                        self.buffer_slots.append((owner, name, tensor))
+                        self.buffer_slots.append((owner, name, tensor.id, tensor))
         elif isinstance(value, functools.partial):
             self._visit(value.func)
             self._visit(value.args)
@@ -129,11 +129,11 @@ class Capture:
         # sharing path. The replay copy must not alias a mutable live buffer.
         self.buffers = {}
         with jt.no_grad():
-            for _, _, value in self.buffer_slots:
-                if value.id not in self.buffers:
+            for _, _, key, value in self.buffer_slots:
+                if key not in self.buffers:
                     copy = value + jt.zeros_like(value)
                     copy.sync()
-                    self.buffers[value.id] = copy
+                    self.buffers[key] = copy
 
     def _rebind(self, value, replacements, memo):
         if isinstance(value, Var):
@@ -191,9 +191,11 @@ class Capture:
             # running buffers from the first forward. Replay changes only copies.
             with jt.no_grad():
                 buffers = {key: value + jt.zeros_like(value) for key, value in self.buffers.items()}
-            for owner, name, original in self.buffer_slots:
+            # A write during forward can replace the buffer holder's native
+            # tensor ID. Look up its snapshot using the capture-time ID.
+            for owner, name, key, _ in self.buffer_slots:
                 saved.append((owner, name, vars(owner)[name]))
-                vars(owner)[name] = buffers[original.id]
+                vars(owner)[name] = buffers[key]
             yield self._rebind(self.function, replacements, {})
         finally:
             for owner, name, previous in reversed(saved):

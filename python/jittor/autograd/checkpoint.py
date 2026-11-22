@@ -84,8 +84,14 @@ class _Rematerialize(Function):
         if ([(value.id, value._autograd_version()) for value in self.capture.values]
                 != self.input_versions):
             raise RuntimeError("checkpoint input or captured parameter was modified before backward")
+        parameter_ids = {key for _, _, key in self.capture.slots}
         leaves = []
         for value, enabled in zip(self.capture.values, self.needs_grad):
+            if not enabled and value.id in parameter_ids and not value.requires_grad:
+                # Frozen parameters do not need new autograd leaves. Reuse
+                # their holders so replay can read subtype metadata.
+                leaves.append(value)
+                continue
             # Parameter operations normally return plain frontend Tensors.
             # A functional parameter binding must retain its actual subtype,
             # without invoking a constructor or copying hooks/runtime caches.
