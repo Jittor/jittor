@@ -165,6 +165,53 @@ def test_reusable_triton_launch_orders_each_bound_state(bind_output):
         assert jt.core.graph_launch_count() == graphs
 
 
+@pytest.mark.parametrize("reusable", [False, True])
+def test_prepared_triton_orders_pending_dense_outputs(reusable):
+    require_cuda()
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+    from jittor.kernels import BoundOutput
+    from jittor.kernels.triton import _prepare_triton_launch, _prepared_call
+
+    @triton.jit
+    def advance(target, scratch):
+        offsets = tl.arange(0, 256)
+        previous = tl.load(target + offsets)
+        tl.store(target + offsets, previous + 5)
+        tl.store(scratch + offsets, previous)
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback="error"):
+        source = torch.arange(256, device="cuda", dtype=torch.float32)
+        jt.sync([source], False, False)
+        graphs = jt.core.graph_launch_count()
+        target, scratch = source + 2, source - 2
+        old_target, old_scratch = target + 3, scratch + 3
+        if reusable:
+            submit = _prepare_triton_launch(
+                advance, BoundOutput(target), BoundOutput(scratch), grid=(1,), align_16=True,
+            )
+        else:
+            def submit(values, workspace):
+                return _prepared_call(advance, BoundOutput(values), BoundOutput(workspace), grid=(1,))
+
+        assert not target.is_finished and not scratch.is_finished
+        with pytest.raises(ValueError, match="outputs overlap"):
+            submit(target, target)
+        with pytest.raises(ValueError, match="ready storage for views"):
+            submit((torch.arange(258, device="cuda", dtype=torch.float32) + 2)[1:257], scratch)
+        bound, copied = submit(target, scratch)
+        assert not bound.is_finished and not copied.is_finished
+        new_target, new_scratch = target + 4, scratch + 4
+        jt.sync([new_target, new_scratch, old_target, old_scratch], False, False)
+        expected = np.arange(256, dtype=np.float32)
+        for tensor, offset in ((old_target, 5), (old_scratch, 1), (new_target, 11), (new_scratch, 6)):
+            assert tensor.location() == "device"
+            np.testing.assert_array_equal(tensor.cpu().numpy(), expected + offset)
+        assert bound._mem_ptr_now == target._mem_ptr_now
+        assert copied._mem_ptr_now == scratch._mem_ptr_now
+        assert jt.core.graph_launch_count() == graphs
+
+
 def test_prepared_triton_replays_indexed_state_updates():
     require_cuda()
     from jittor.compat.triton import backend

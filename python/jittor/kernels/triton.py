@@ -159,9 +159,12 @@ class _PreparedTritonLaunch:
                                  "and use contiguous storage")
         if self._bound_inputs:
             outputs = {index: inputs[slot] for index, slot in self._bound_inputs}
-            _validate_bound_outputs(outputs.values())
+            pending = _validate_bound_outputs(outputs.values())
+            source = self._source
+            if pending:
+                source = _pending_output_checks(self._bound_inputs) + source
             result = _submit_bound_outputs(list(inputs), outputs, self._output_shapes,
-                                           self._output_dtypes, self._source, self._data)
+                                           self._output_dtypes, source, self._data)
         else:
             result = jt.code(self._output_shapes, self._output_dtypes, list(inputs),
                              cuda_header=_PREPARED_HEADER, cuda_src=self._source, data=self._data,
@@ -174,6 +177,8 @@ def _prepare_triton_launch(kernel, *args, grid, align_16=False, **options):
 
     Use `input_names` to bind read operands and, where declared with
     `BoundOutput`, writable storage. Each call constructs a fresh executor node.
+    Ordinary Eager calls can bind unmaterialized dense outputs with distinct
+    storage. Recording a replay still requires ready bound storage.
     Use `align_16` when all specializable pointer operands are 16-byte aligned.
     The executor checks those addresses before launching.
     """
@@ -181,15 +186,53 @@ def _prepare_triton_launch(kernel, *args, grid, align_16=False, **options):
 
 
 def _validate_bound_outputs(buffers):
+    import jittor as jt
+
     spans = []
+    pending = False
     for value in buffers:
-        if not value.is_finished or not value._mem_ptr_now or value.numel() == 0:
-            raise ValueError("prepared Triton bound outputs require ready, nonempty storage")
         begin = int(value._mem_ptr_now)
+        finished = value.is_finished
+        if value.numel() == 0:
+            raise ValueError("prepared Triton bound outputs require nonempty storage")
+        if not begin and not finished and not value._has_view_provenance() and not jt.core._state_capture_active():
+            pending = True
+            continue
+        if not begin or not finished:
+            raise ValueError("prepared Triton bound outputs require ready storage for views and capture")
         end = begin + value.nbytes
         if any(begin < hi and lo < end for lo, hi in spans):
             raise ValueError("prepared Triton bound outputs overlap")
         spans.append((begin, end))
+    if pending:
+        # Pending buffers have no addresses yet. Their storage identities can
+        # already expose duplicates, including aliases of a ready operand.
+        identities = [value._saved_storage_version()[1] for value in buffers]
+        if len(set(identities)) != len(identities):
+            raise ValueError("prepared Triton bound outputs overlap")
+    return pending
+
+
+@lru_cache(maxsize=128)
+def _pending_output_checks(bindings):
+    checks = [
+        f'USER_CHECK(out{output}_p == in{operand}_p) << "prepared Triton output lost its storage binding";'
+        for output, operand in bindings
+    ]
+    if len(bindings) > 1:
+        spans = ", ".join(
+            f"{{uintptr_t(out{output}_p), uintptr_t(out{output}_p) + out{output}->size}}"
+            for output, _ in bindings
+        )
+        checks.append(f"""
+        const uintptr_t pending_bound_spans[][2] = {{{spans}}};
+        for (size_t left = 0; left < {len(bindings)}; ++left)
+            for (size_t right = 0; right < left; ++right)
+                USER_CHECK(pending_bound_spans[left][1] <= pending_bound_spans[right][0]
+                        || pending_bound_spans[right][1] <= pending_bound_spans[left][0])
+                    << "prepared Triton bound outputs overlap";
+        """)
+    return "\n".join(checks) + "\n"
 
 
 def _submit_bound_outputs(inputs, outputs, shapes, dtypes, source, data):
@@ -290,8 +333,7 @@ def _prepare_and_submit(kernel, args, grid, options, *, reusable, align_16=False
         raise ValueError("prepared Triton requires inputs and explicit outputs")
     if reusable and copies:
         raise ValueError("Reusable Triton launch metadata does not support initialized outputs")
-    if bound_outputs:
-        _validate_bound_outputs(inputs[slot] for slot in bound_outputs.values())
+    pending = _validate_bound_outputs([inputs[slot] for slot in bound_outputs.values()])
 
     driver = backend._Driver.get(device)
     driver.ensure_ctx()
@@ -316,6 +358,8 @@ def _prepare_and_submit(kernel, args, grid, options, *, reusable, align_16=False
                                      tuple(bound_outputs.items()), device, source, data)
     if bound_outputs:
         targets = {i: inputs[slot] for i, slot in bound_outputs.items()}
+        if pending:
+            source = _pending_output_checks(tuple(bound_outputs.items())) + source
         result = _submit_bound_outputs(inputs, targets, shapes, dtypes, source, data)
     else:
         result = jt.code(shapes, dtypes, inputs, cuda_header=_PREPARED_HEADER,
