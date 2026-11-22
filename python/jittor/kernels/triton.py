@@ -58,7 +58,7 @@ class _InitializedOutput:
 
 
 @lru_cache(maxsize=128)
-def _prepared_source(layout, copies):
+def _prepared_source(layout, copies, aligned_pointers=()):
     declarations = []
     for index, kind in enumerate(layout):
         if kind.startswith(("in", "out")):
@@ -70,6 +70,10 @@ def _prepared_source(layout, copies):
             declarations.append(
                 f"uint{width}_t arg{index} = launch_word(data[\"arg{index}_low\"], data[\"arg{index}_high\"]);")
     parameters = ", ".join(f"&arg{index}" for index in range(len(layout)))
+    declarations.extend(
+        f'USER_CHECK(uintptr_t(arg{index}) % 16 == 0) << "unaligned prepared Triton pointer";'
+        for index in aligned_pointers
+    )
     initializers = "\n".join(
         f"USER_CHECK(cudaMemcpyAsync(out{destination}_p, in{source}_p, out{destination}->size,"
         f" cudaMemcpyDeviceToDevice, reinterpret_cast<cudaStream_t>(stream)) == cudaSuccess)"
@@ -92,12 +96,13 @@ def _prepared_source(layout, copies):
 
 
 @lru_cache(maxsize=128)
-def _prepared_launch_fields(driver, device, kernel, kinds, constants, options):
+def _prepared_launch_fields(driver, device, kernel, kinds, constants, options, aligned=()):
     """Resolve stable launch metadata for one kernel specialization and device."""
     import ctypes
     from jittor.compat.triton import backend
 
-    info = backend._compile(kernel, dict(kinds), dict(constants), dict(options), device=device)
+    info = backend._compile(kernel, dict(kinds), dict(constants), dict(options),
+                            device=device, aligned=aligned)
     if info["scratch"] or info["profile_scratch"]:
         raise NotImplementedError("prepared Triton does not support global scratch")
     function = driver.get_function(info["cubin"], info["name"])
@@ -133,6 +138,7 @@ class _PreparedTritonLaunch:
     _input_specs: tuple
     _output_shapes: tuple
     _output_dtypes: tuple
+    _bound_inputs: tuple
     _device: int
     _source: str
     _data: dict
@@ -151,23 +157,53 @@ class _PreparedTritonLaunch:
                     or tuple(value.shape) != shape or str(value.dtype) != dtype):
                 raise ValueError("Prepared Triton inputs must keep their CUDA device, shape and dtype "
                                  "and use contiguous storage")
-        result = jt.code(self._output_shapes, self._output_dtypes, list(inputs),
-                         cuda_header=_PREPARED_HEADER, cuda_src=self._source, data=self._data,
-                         backend="cuda")
+        if self._bound_inputs:
+            outputs = {index: inputs[slot] for index, slot in self._bound_inputs}
+            _validate_bound_outputs(outputs.values())
+            result = _submit_bound_outputs(list(inputs), outputs, self._output_shapes,
+                                           self._output_dtypes, self._source, self._data)
+        else:
+            result = jt.code(self._output_shapes, self._output_dtypes, list(inputs),
+                             cuda_header=_PREPARED_HEADER, cuda_src=self._source, data=self._data,
+                             backend="cuda")
         return result[0] if len(self._output_shapes) == 1 else tuple(result)
 
 
-def _prepare_triton_launch(kernel, *args, grid, **options):
-    """Bind fixed grid/scalars and fresh outputs, then accept new input Vars.
+def _prepare_triton_launch(kernel, *args, grid, align_16=False, **options):
+    """Bind fixed grid/scalars and output contracts, then accept new input Vars.
 
-    Pass inputs in the order listed in the returned descriptor's
-    `input_names`. Each call constructs a fresh executor node. Retained
-    metadata contains no exemplar tensor and no recorded execution graph.
+    Use `input_names` to bind read operands and, where declared with
+    `BoundOutput`, writable storage. Each call constructs a fresh executor node.
+    Use `align_16` when all specializable pointer operands are 16-byte aligned.
+    The executor checks those addresses before launching.
     """
-    return _prepare_and_submit(kernel, args, grid, options, reusable=True)
+    return _prepare_and_submit(kernel, args, grid, options, reusable=True, align_16=align_16)
 
 
-def _prepare_and_submit(kernel, args, grid, options, *, reusable):
+def _validate_bound_outputs(buffers):
+    spans = []
+    for value in buffers:
+        if not value.is_finished or not value._mem_ptr_now or value.numel() == 0:
+            raise ValueError("prepared Triton bound outputs require ready, nonempty storage")
+        begin = int(value._mem_ptr_now)
+        end = begin + value.nbytes
+        if any(begin < hi and lo < end for lo, hi in spans):
+            raise ValueError("prepared Triton bound outputs overlap")
+        spans.append((begin, end))
+
+
+def _submit_bound_outputs(inputs, outputs, shapes, dtypes, source, data):
+    import jittor as jt
+    from jittor._core.var import placement_scope_like
+
+    with placement_scope_like(inputs[0]):
+        buffers = [outputs[i] if i in outputs else jt.empty(shape, dtype)
+                   for i, (shape, dtype) in enumerate(zip(shapes, dtypes))]
+    return jt.code(inputs, buffers, cuda_header=_PREPARED_HEADER,
+                   cuda_src=source, data=data, backend="cuda")
+
+
+def _prepare_and_submit(kernel, args, grid, options, *, reusable, align_16=False):
     import jittor as jt
     from triton.runtime.jit import JITFunction
     from jittor.compat.triton import backend
@@ -192,6 +228,7 @@ def _prepare_and_submit(kernel, args, grid, options, *, reusable):
     inputs, outputs, layout, copies = [], [], [], []
     input_names = [] if reusable else None
     kinds, constants, scalar_bits, bound_outputs = {}, {}, {}, {}
+    aligned, aligned_pointers = [], []
 
     def add_input(value):
         if (not isinstance(value, jt.Var) or value.placement_backend != 1
@@ -201,7 +238,7 @@ def _prepare_and_submit(kernel, args, grid, options, *, reusable):
         inputs.append(value)
         return index
 
-    for parameter in kernel.params:
+    for index, parameter in enumerate(kernel.params):
         name = parameter.name
         value = bound[name]
         if value is None or parameter.is_constexpr:
@@ -221,15 +258,11 @@ def _prepare_and_submit(kernel, args, grid, options, *, reusable):
             kinds[name] = backend._ptr_sig(value.initial)
         elif isinstance(value, _BoundOutput):
             target = value.buffer
-            add_input(target)
-            if not target.is_finished or not target._mem_ptr_now or target.numel() == 0:
-                raise ValueError("prepared Triton bound outputs require ready, nonempty storage")
-            begin = int(target._mem_ptr_now)
-            end = begin + target.nbytes
-            if any(begin < hi and lo < end for _, lo, hi in bound_outputs.values()):
-                raise ValueError("prepared Triton bound outputs overlap")
+            target_index = add_input(target)
+            if input_names is not None:
+                input_names.append(name)
             slot = f"out{len(outputs)}"
-            bound_outputs[len(outputs)] = (target, begin, end)
+            bound_outputs[len(outputs)] = target_index
             outputs.append(TensorSpec(tuple(target.shape), target.dtype))
             kinds[name] = backend._ptr_sig(target)
         elif isinstance(value, TensorSpec):
@@ -241,40 +274,45 @@ def _prepare_and_submit(kernel, args, grid, options, *, reusable):
                 raise OverflowError("prepared Triton integer outside int64")
             slot = kinds[name] = backend._scalar_sig(value)
             scalar_bits.update(_launch_word(f"arg{len(layout)}", backend._scalar_bits(slot, value)))
+        if (align_16 and not getattr(parameter, "do_not_specialize", False)
+                and not getattr(parameter, "do_not_specialize_on_alignment", False)):
+            if kinds[name].startswith("*"):
+                aligned.append(index)
+                aligned_pointers.append(len(layout))
+            elif type(value) is int and value % 16 == 0:
+                aligned.append(index)
         layout.append(slot)
     if not inputs or not outputs:
         raise ValueError("prepared Triton requires inputs and explicit outputs")
-    if reusable and (bound_outputs or copies):
-        raise ValueError("Reusable Triton launch metadata requires fresh outputs")
+    if reusable and copies:
+        raise ValueError("Reusable Triton launch metadata does not support initialized outputs")
+    if bound_outputs:
+        _validate_bound_outputs(inputs[slot] for slot in bound_outputs.values())
 
     driver = backend._Driver.get(device)
     driver.ensure_ctx()
     # Runtime geometry and scalar values still belong to the current launch.
     fields, extra_slots, parameter_count = _prepared_launch_fields(
         driver, device, kernel, tuple(kinds.items()), tuple(constants.items()),
-        tuple(sorted(compiler.items())),
+        tuple(sorted(compiler.items())), tuple(aligned),
     )
     layout.extend(["null"] * extra_slots)
     if parameter_count and parameter_count != len(layout):
         raise RuntimeError("prepared Triton argument count differs from compiled kernel")
     gx, gy, gz = dims + (1,) * (3 - len(dims))
     data = dict(fields, device=device, gx=gx, gy=gy, gz=gz, **scalar_bits)
+    if bound_outputs:
+        data["_order_prepared_storage_writes"] = 1
     shapes = [spec.shape for spec in outputs]
     dtypes = [spec.dtype.removeprefix("torch.") for spec in outputs]
-    source = _prepared_source(tuple(layout), tuple(copies))
+    source = _prepared_source(tuple(layout), tuple(copies), tuple(aligned_pointers))
     if reusable:
         specs = tuple((tuple(value.shape), str(value.dtype)) for value in inputs)
         return _PreparedTritonLaunch(tuple(input_names), specs, tuple(shapes), tuple(dtypes),
-                                     device, source, data)
+                                     tuple(bound_outputs.items()), device, source, data)
     if bound_outputs:
-        from jittor._core.var import placement_scope_like
-
-        with placement_scope_like(inputs[0]):
-            buffers = [bound_outputs[i][0] if i in bound_outputs else jt.empty(shape, dtype)
-                       for i, (shape, dtype) in enumerate(zip(shapes, dtypes))]
-        data["_order_prepared_storage_writes"] = 1
-        result = jt.code(inputs, buffers, cuda_header=_PREPARED_HEADER,
-                         cuda_src=source, data=data, backend="cuda")
+        targets = {i: inputs[slot] for i, slot in bound_outputs.items()}
+        result = _submit_bound_outputs(inputs, targets, shapes, dtypes, source, data)
     else:
         result = jt.code(shapes, dtypes, inputs, cuda_header=_PREPARED_HEADER,
                          cuda_src=source, data=data, backend="cuda")

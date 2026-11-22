@@ -118,6 +118,46 @@ def test_reusable_triton_launch_uses_new_storage_and_fresh_outputs():
         assert jt.core.graph_launch_count() == graphs
 
 
+def test_reusable_triton_launch_orders_each_bound_state():
+    require_cuda()
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+    from jittor.kernels import BoundOutput
+    from jittor.kernels.triton import _prepare_triton_launch
+
+    @triton.jit
+    def advance(source, delta, state, output):
+        i = tl.arange(0, 16)
+        value = tl.load(source + i) + tl.load(delta + i)
+        tl.store(state + i, value)
+        tl.store(output + i, value)
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback="error"):
+        states = [torch.full((16,), float(value), device="cuda") for value in (10, 20, 30)]
+        delta = torch.arange(16, device="cuda", dtype=torch.float32)
+        jt.sync(states, False, False)
+        exemplar, *destinations = states
+        graphs = jt.core.graph_launch_count()
+        plan = _prepare_triton_launch(
+            advance, exemplar, delta, BoundOutput(exemplar), TensorSpec((16,)),
+            grid=(1,), align_16=True,
+        )
+        assert plan.input_names == ("source", "delta", "state")
+        previous = []
+        for state in destinations:
+            alias = jt.core._ready_step_gradient(state)
+            previous.append(alias.copy())
+            bound, fresh = plan(state, delta, state)
+            jt.sync([bound, fresh], False, False)
+            assert bound.location() == fresh.location() == "device"
+            np.testing.assert_array_equal(fresh.numpy(), state.numpy())
+        for value, state, prior in zip((20, 30), destinations, previous, strict=True):
+            np.testing.assert_array_equal(prior.numpy(), np.full(16, value))
+            np.testing.assert_array_equal(state.numpy(), np.arange(16) + value)
+        np.testing.assert_array_equal(exemplar.numpy(), np.full(16, 10))
+        assert jt.core.graph_launch_count() == graphs
+
+
 def test_prepared_triton_replays_indexed_state_updates():
     require_cuda()
     from jittor.compat.triton import backend
