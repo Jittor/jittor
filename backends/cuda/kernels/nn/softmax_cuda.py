@@ -345,6 +345,13 @@ CHECK(0 == cudaGetLastError());
 """
 
 
+_ROW_FLOOR_INPUT = r"""
+__device__ __forceinline__ static float softmax_floor_input(float value, float floor) {
+    return value < floor ? -CUDART_INF_F : value;
+}
+"""
+
+
 # Large vocabularies with only a few rows underutilize a one-block-per-row
 # reduction. Compute per-tile maxima and sums, then scale independent tiles.
 _TILED_FP32_SOFTMAX = r"""
@@ -423,16 +430,32 @@ CHECK(cudaGetLastError() == cudaSuccess);
 """
 
 
-def _wide_tiled_softmax(rows):
+@lru_cache(maxsize=2)
+def _wide_tiled_softmax_source(masked):
+    if not masked:
+        return _TILED_FP32_SOFTMAX
+    source = _TILED_FP32_SOFTMAX.replace("const float* input, ", "const float* input, const float* floors, ")
+    source = source.replace("    const int row = blockIdx.y;",
+                            "    const int row = blockIdx.y;\n    const float floor = floors[row];")
+    source = source.replace("input[row_base + i]", "softmax_floor_input(input[row_base + i], floor)")
+    source = source.replace("input[index]", "softmax_floor_input(input[index], floor)")
+    source = source.replace("(in0_p, out1_p,", "(in0_p, in1_p, out1_p,")
+    return source
+
+
+def _wide_tiled_softmax(rows, floors=None):
     count, width = rows.shape
     tiles = (width + 4095) // 4096
+    masked = floors is not None
     output, _ = jt.code(
-        [rows.shape, (count, 2 * tiles)], [rows.dtype, rows.dtype], [rows],
+        [rows.shape, (count, 2 * tiles)], [rows.dtype, rows.dtype],
+        [rows, floors] if masked else [rows],
         cuda_header=f'''
 #include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <math_constants.h>
 #include "runtime/device.h"
-''', cuda_src=_TILED_FP32_SOFTMAX, backend="cuda")
+''' + (_ROW_FLOOR_INPUT if masked else ""),
+        cuda_src=_wide_tiled_softmax_source(masked), backend="cuda")
     return output
 
 
@@ -508,6 +531,21 @@ CHECK(0 == cudaGetLastError());
             x = self.save_vars
             return _softmax_streaming_grad(x, grad_x, threads, log)
     return CodeSoftmaxStreaming
+
+
+def _softmax_fp32_with_row_floor(rows, floors):
+    """Apply a row floor before ordinary FP32 softmax, without a masked copy."""
+    if (not jt.flags.use_cuda or not jt.flags.no_grad
+            or rows.ndim != 2 or not 0 < rows.shape[0] <= 8
+            or not 65536 < rows.shape[1] <= 262144
+            or tuple(floors.shape) != (rows.shape[0], 1)
+            or str(rows.dtype) not in ("float32", "torch.float32")
+            or rows.dtype != floors.dtype
+            or rows.placement_backend != 1 or floors.placement_backend != 1
+            or rows.device_id != floors.device_id
+            or not rows._storage_is_contiguous() or not floors._storage_is_contiguous()):
+        return None
+    return _wide_tiled_softmax(rows, floors)
 
 
 @optional_kernel("nn.softmax", "cuda", dtypes=("float16", "bfloat16", "float32"),
