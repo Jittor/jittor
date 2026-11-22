@@ -118,7 +118,8 @@ def test_reusable_triton_launch_uses_new_storage_and_fresh_outputs():
         assert jt.core.graph_launch_count() == graphs
 
 
-def test_reusable_triton_launch_orders_each_bound_state():
+@pytest.mark.parametrize("bind_output", [False, True])
+def test_reusable_triton_launch_orders_each_bound_state(bind_output):
     require_cuda()
     triton = pytest.importorskip("triton")
     import triton.language as tl
@@ -135,22 +136,28 @@ def test_reusable_triton_launch_orders_each_bound_state():
     with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback="error"):
         states = [torch.full((16,), float(value), device="cuda") for value in (10, 20, 30)]
         delta = torch.arange(16, device="cuda", dtype=torch.float32)
-        jt.sync(states, False, False)
+        outputs = [torch.empty_like(states[0]) for _ in states] if bind_output else []
+        jt.sync(states + outputs, False, False)
         exemplar, *destinations = states
         graphs = jt.core.graph_launch_count()
+        output = BoundOutput(outputs[0]) if bind_output else TensorSpec((16,))
         plan = _prepare_triton_launch(
-            advance, exemplar, delta, BoundOutput(exemplar), TensorSpec((16,)),
+            advance, exemplar, delta, BoundOutput(exemplar), output,
             grid=(1,), align_16=True,
         )
-        assert plan.input_names == ("source", "delta", "state")
+        expected_names = ("source", "delta", "state", "output") if bind_output else ("source", "delta", "state")
+        assert plan.input_names == expected_names
         previous = []
-        for state in destinations:
+        for index, state in enumerate(destinations, 1):
             alias = jt.core._ready_step_gradient(state)
             previous.append(alias.copy())
-            bound, fresh = plan(state, delta, state)
-            jt.sync([bound, fresh], False, False)
-            assert bound.location() == fresh.location() == "device"
-            np.testing.assert_array_equal(fresh.numpy(), state.numpy())
+            buffers = (state, delta, state, outputs[index]) if bind_output else (state, delta, state)
+            bound, result = plan(*buffers)
+            jt.sync([bound, result], False, False)
+            assert bound.location() == result.location() == "device"
+            if bind_output:
+                assert result._mem_ptr_now == outputs[index]._mem_ptr_now
+            np.testing.assert_array_equal(result.numpy(), state.numpy())
         for value, state, prior in zip((20, 30), destinations, previous, strict=True):
             np.testing.assert_array_equal(prior.numpy(), np.full(16, value))
             np.testing.assert_array_equal(state.numpy(), np.arange(16) + value)

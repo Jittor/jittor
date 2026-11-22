@@ -194,11 +194,15 @@ def _validate_bound_outputs(buffers):
 
 def _submit_bound_outputs(inputs, outputs, shapes, dtypes, source, data):
     import jittor as jt
-    from jittor._core.var import placement_scope_like
 
-    with placement_scope_like(inputs[0]):
-        buffers = [outputs[i] if i in outputs else jt.empty(shape, dtype)
-                   for i, (shape, dtype) in enumerate(zip(shapes, dtypes))]
+    if len(outputs) == len(shapes):
+        buffers = [outputs[i] for i in range(len(shapes))]
+    else:
+        from jittor._core.var import placement_scope_like
+
+        with placement_scope_like(inputs[0]):
+            buffers = [outputs[i] if i in outputs else jt.empty(shape, dtype)
+                       for i, (shape, dtype) in enumerate(zip(shapes, dtypes))]
     return jt.code(inputs, buffers, cuda_header=_PREPARED_HEADER,
                    cuda_src=source, data=data, backend="cuda")
 
