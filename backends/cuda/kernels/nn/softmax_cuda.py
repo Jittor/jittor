@@ -280,7 +280,9 @@ CHECK(0 == cudaGetLastError());
             # their faster register-resident forward, but use the bounded
             # streaming reduction for backward. Aligned ILP paths such as
             # 65536 remain faster with the register kernel.
-            if length > 49152 and ILP == 1:
+            # The streaming kernel loads the saved output and cotangent
+            # using their own types. The vectorized loads assume one type.
+            if grad_x.dtype != x.dtype or (length > 49152 and ILP == 1):
                 return _softmax_streaming_grad(x, grad_x, 512, log)
             return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
 #include <{library_resource('cub', 'home')}cub/cub.cuh>

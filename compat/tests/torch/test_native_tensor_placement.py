@@ -109,6 +109,27 @@ def test_cpu_grid_operations_do_not_allocate_cuda_memory(spatial_shape):
         assert torch.cuda.max_memory_allocated() == baseline
 
 
+@pytest.mark.parametrize("name", ["RelaxedBernoulli", "RelaxedOneHotCategorical"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_relaxed_rsample_follows_parameter_placement(name, device):
+    import jittor as jt
+    import torch
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    with _cuda_runtime(), jt.runtime.scope(use_cuda=int(device == "cpu")), forbid_backend_fallbacks():
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        logits = torch.tensor([[0.1, -0.2, 0.3], [-0.3, 0.2, 0.4]],
+                              dtype=dtype, device=device, requires_grad=True)
+        distribution = getattr(torch.distributions, name)(temperature=1.0, logits=logits)
+        sample = distribution.rsample((4,))
+        assert sample.device == logits.device and sample.dtype == dtype
+        assert sample.shape == (4, 2, 3)
+        assert torch.isfinite(sample).all().item()
+        sample.float().square().sum().backward()
+        assert logits.grad.device == logits.device and torch.isfinite(logits.grad).all().item()
+        assert logits.grad.abs().sum().item() > 0
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
