@@ -202,6 +202,12 @@ def _try_captured_indexed_store(self, slices, value):
     return self._try_indexed_storage_write(value, indices, axes)
 
 
+def _strip_assignment_leading_axes(value, region_rank):
+    while value.ndim > region_rank and value.shape[0] == 1:
+        value = value.squeeze(0)
+    return value
+
+
 def _torch_setitem(self, slices, value):
     if _try_captured_indexed_store(self, slices, value):
         return self
@@ -267,6 +273,16 @@ def _torch_setitem(self, slices, value):
             value = _make_cuda_resident(value)
         elif not _var_is_cpu_resident(value) and _var_is_cpu_resident(self):
             value = _make_cpu_resident(value)
+        if value.ndim and value.shape[0] == 1:
+            parts = slices if isinstance(slices, tuple) else (slices,)
+            if all(not isinstance(part, tuple) and _is_basic_index(part) for part in parts):
+                # Integer indices remove axes and None inserts axes. Slices
+                # and Ellipsis preserve the rank of the axes they select.
+                removed = sum(isinstance(part, _owner.numbers.Integral) for part in parts)
+                inserted = sum(part is None for part in parts)
+                region_rank = self.ndim - removed + inserted
+                if region_rank >= 0:
+                    value = _strip_assignment_leading_axes(value, region_rank)
     try:
         mask = slices
         if isinstance(mask, _NativeVar) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
@@ -276,8 +292,7 @@ def _torch_setitem(self, slices, value):
             # (N, *self.shape[mask.ndim:]). Drop only provably redundant
             # leading singleton axes from value until ranks agree.
             region_rank = 1 + (len(self.shape) - len(mask.shape))
-            while len(value.shape) > region_rank and value.shape[0] == 1:
-                value = value.squeeze(0)
+            value = _strip_assignment_leading_axes(value, region_rank)
     except _owner.EXPECTED as exc:
         _owner.swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
     if (not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
