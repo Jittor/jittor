@@ -222,7 +222,8 @@ def grid_sampler_3d(X, grid, mode, padding_mode, align_corners):
     zid = z.reindex(shape, ["i0", "i2", "i3", "i4"])
 
     if mode == "nearest":
-        return X.reindex([nid, cid, zid.round_int(), yid.round_int(), xid.round_int()])
+        # Sampling at a half-integer coordinate selects the even index.
+        return X.reindex([nid, cid, zid.round().int32(), yid.round().int32(), xid.round().int32()])
     if mode == "bilinear":
         fx, fy, fz = xid.floor_int(), yid.floor_int(), zid.floor_int()
         cx, cy, cz = fx + 1, fy + 1, fz + 1
@@ -269,7 +270,8 @@ def grid_sampler_2d(X, grid, mode, padding_mode, align_corners):
     yid = y.reindex(shape, ["i0", "i2", "i3"])
 
     if mode == "nearest":
-        return X.reindex([nid, cid, yid.round_int(), xid.round_int()])
+        # Sampling at a half-integer coordinate selects the even index.
+        return X.reindex([nid, cid, yid.round().int32(), xid.round().int32()])
     if mode == "bilinear":
         # xid,yid = (xid+0.00001),(yid+0.00001)
         fx, fy = xid.floor_int(), yid.floor_int()
