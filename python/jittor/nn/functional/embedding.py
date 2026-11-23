@@ -55,8 +55,9 @@ def embedding(
             weight.stop_grad()
     result = weight[input]
     if padding_idx is not None:
-        keep = (input != padding_idx).unsqueeze(-1).float32()
-        result = result * keep + (result * (1.0 - keep)).stop_grad()
+        keep = (input != padding_idx).unsqueeze(-1)
+        # Padding rows retain their stored values without contributing weight gradients.
+        result = jt.ternary(keep, result, result.detach())
     return result
 
 
