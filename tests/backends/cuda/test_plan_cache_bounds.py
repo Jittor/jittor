@@ -88,8 +88,16 @@ class TestCufftPlanCacheBounds(unittest.TestCase):
 
 @_test_preserve_policy(jt, 'use_cuda')
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
-@unittest.skipIf(not _HAS_CUTT, "cuTT plan cache accessors not built")
 class TestCuttPlanCacheBounds(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # cuTT is built on first use, so the module-level lookup above finds
+        # nothing at collection and used to skip every test in this class.
+        global cutt
+        from _helpers.cutt import require_cutt_ops
+        require_cutt_ops()
+        cutt = jt.compile_extern.cutt
+
     def setUp(self):
         from contextlib import ExitStack as _TestPolicyStack
         _test_policy_stack = _TestPolicyStack()
@@ -101,7 +109,7 @@ class TestCuttPlanCacheBounds(unittest.TestCase):
         from contextlib import ExitStack as _TestPolicyStack
         with _TestPolicyStack() as _test_policy_stack:
             jt.sync_all()
-            cutt.cutt_set_plan_cache_size(64)
+            cutt.cutt_set_plan_cache_size(4096)
             _test_policy_stack.enter_context(jt.runtime.scope(use_cuda=self._use_cuda))
 
     def test_many_shapes_stay_within_the_limit(self):
@@ -122,6 +130,22 @@ class TestCuttPlanCacheBounds(unittest.TestCase):
             cutt.ops.cutt_transpose(jt.array(a), (2, 0, 1)).numpy(),
             np.transpose(a, (2, 0, 1)))
         self.assertEqual(cutt.cutt_plan_cache_size(), 1)
+
+    def test_a_hit_keeps_its_plan_over_older_ones(self):
+        # Least recently used, not least recently created: a step that reuses
+        # one transpose between others keeps that plan.
+        cutt.cutt_set_plan_cache_size(2)
+        a, b, c = (np.arange(n * (n + 1) * 2).reshape(n, n + 1, 2).astype("float32")
+                   for n in (4, 5, 6))
+        for x in (a, b, a, c):
+            cutt.ops.cutt_transpose(jt.array(x), (2, 0, 1)).sync()
+        before = cutt.cutt_plan_build_count()
+        np.testing.assert_allclose(
+            cutt.ops.cutt_transpose(jt.array(a), (2, 0, 1)).numpy(),
+            np.transpose(a, (2, 0, 1)))
+        self.assertEqual(cutt.cutt_plan_build_count(), before)
+        cutt.ops.cutt_transpose(jt.array(b), (2, 0, 1)).sync()
+        self.assertEqual(cutt.cutt_plan_build_count(), before + 1)
 
     def test_plan_miss_does_not_drain_an_unrelated_stream(self):
         # Compile the transpose kernel before the timeline starts. The shape is

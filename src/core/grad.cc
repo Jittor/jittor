@@ -13,9 +13,12 @@
 #include "core/graph.h"
 #include "runtime/node_index.h"
 #include "ops/op_register.h"
+#include "ops/composite/getitem_op.h"
+#include "core/var_slices.h"
 #include "core/var_holder.h"
 #include "runtime/submission_pipeline.h"
 #include <atomic>
+#include <limits>
 #include <algorithm>
 
 namespace jittor {
@@ -107,6 +110,30 @@ static auto make_binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 static auto make_number = op_constructor<VarPtr, float, Var*>("number");
 static auto make_reduce = op_constructor<VarPtr, Var*, NanoString, uint, uint>("reduce");
+static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+static auto make_array = op_constructor<VarPtr, const void*, NanoVector, NanoString>("array");
+static auto make_stack_scalars = op_constructor<VarPtr, vector<Var*>&&>("stack_scalars");
+static auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
+
+DEFINE_FLAG(int, batch_slice_grads, 4,
+    "Stack the gradients of this many or more one-element integer slices of "
+    "one var and add them with a single scatter. 0 disables it.");
+
+// The flat offset an all-integer `getitem` of `var` reads, or -1 when it is not
+// one element of `var` named by integers alone.
+static int64 constant_element_offset(GetitemOp* op, Var* var) {
+    const auto& shape = var->shape;
+    if (op->vs.n != (int)shape.size() || var->num <= 0) return -1;
+    int64 offset = 0;
+    for (int d = 0; d < op->vs.n; d++) {
+        const auto& s = op->vs.slices[d];
+        if (!s.is_int()) return -1;
+        int64 i = s.i < 0 ? s.i + shape[d] : s.i;
+        if (i < 0 || i >= shape[d]) return -1;
+        offset = offset * shape[d] + i;
+    }
+    return offset;
+}
 
 static VarPtr normalize_recorded_gradient(Var* target, VarPtr value) {
     if (!value || !target->recorded_gradient_shape) return value;
@@ -448,7 +475,65 @@ vector<VarPtr> grad(
         #ifdef PREVENT_LARGE_FUSED_OP
         int gsum = 0;
         #endif
-        for (const auto& snapshot : outgoing) {
+        // Many one-element slices of one var (a circuit reading its parameters
+        // one gate at a time): their gradients are stacked into one vector and
+        // added in a single scatter, rather than one setitem each.
+        vector<char> batched(outgoing.size(), 0);
+        if (batch_slice_grads > 0 && (int)outgoing.size() >= batch_slice_grads
+                && !var->recorded_gradient_shape
+                && var->dtype() != ns_bool) {
+            vector<int64> offsets;
+            vector<int> members;
+            for (uint k = 0; k < outgoing.size(); k++) {
+                const auto& snapshot = outgoing[k];
+                Op* op = snapshot.op;
+                if (snapshot.input_index != 0 || !op->is_op(op_ids::getitem())
+                        || op->flag(OpFlags::_grads) || snapshot.outputs.size() != 1)
+                    continue;
+                int id = snapshot.outputs[0].second;
+                if (id < 0 || !grads[id] || grads[id]->num != 1) continue;
+                int64 offset = constant_element_offset(static_cast<GetitemOp*>(op), var);
+                if (offset < 0) continue;
+                offsets.push_back(offset);
+                members.push_back(k);
+            }
+            if ((int)members.size() >= batch_slice_grads) {
+                Op* first = outgoing[members[0]].op;
+                trace_grad_op = first;
+                AmpGradGuard agg(first);
+                Float32PrecisionScope precision_scope(first->float32_precision);
+                LaunchOriginScope origin_scope(first->launch_origin);
+                BackwardStorageReadScope storage_reads(first);
+                vector<VarPtr> owned;
+                vector<Var*> values;
+                for (int k : members) {
+                    VarPtr value = grads[outgoing[k].outputs[0].second];
+                    if (value->dtype() != var->dtype()) value = make_unary(value, var->dtype());
+                    values.push_back(value.ptr);
+                    owned.push_back(move(value));
+                }
+                auto stacked = make_stack_scalars(move(values));
+                VarPtr index;
+                if (var->num <= std::numeric_limits<int32>::max()) {
+                    vector<int32> narrow(offsets.begin(), offsets.end());
+                    index = make_array(narrow.data(), {(int64)narrow.size()}, ns_int32);
+                } else {
+                    index = make_array(offsets.data(), {(int64)offsets.size()}, ns_int64);
+                }
+                VarPtr acc = grad ? move(grad) : make_number(0, var);
+                VarSlices vs(1);
+                vs.slices[0].set_var(index.ptr);
+                auto flat = make_setitem(make_reshape(acc, {var->num}), move(vs), stacked, ns_add);
+                grad = make_reshape(flat, var->shape);
+                check_backward_storage_read(grad.ptr);
+                if (var->loop_options) grad->loop_options = var->loop_options;
+                assign_attrs(grad.ptr, var);
+                for (int k : members) batched[k] = 1;
+            }
+        }
+        for (uint k = 0; k < outgoing.size(); k++) {
+            if (batched[k]) continue;
+            const auto& snapshot = outgoing[k];
             Op* op = snapshot.op;
             int n_o = snapshot.outputs.size();
 
@@ -491,6 +576,27 @@ vector<VarPtr> grad(
                     if (id<0) continue;
                     Var* dout = grads[id];
                     TraceGradGuard trace_guard(op);
+                    if (grad && dout && snapshot.input_index == 0
+                            && op->is_op(op_ids::getitem())
+                            && !var->recorded_gradient_shape
+                            && grad->shape == var->shape
+                            && grad->dtype() == var->dtype()) {
+                        // A slice's gradient goes straight into the running
+                        // sum: one in-place setitem instead of a zero-filled
+                        // input-sized buffer, a setitem into it and a
+                        // full-size add -- 400 scalar slices of one parameter
+                        // cost 3,186 kernels that way.
+                        AmpGradGuard agg(op);
+                        Float32PrecisionScope precision_scope(op->float32_precision);
+                        LaunchOriginScope origin_scope(op->launch_origin);
+                        BackwardStorageReadScope storage_reads(op);
+                        auto summed = static_cast<GetitemOp*>(op)->grad_into(grad, dout);
+                        check_backward_storage_read(summed.ptr);
+                        if (var->loop_options) summed->loop_options = var->loop_options;
+                        grad = move(summed);
+                        assign_attrs(grad.ptr, var);
+                        continue;
+                    }
                     VarPtr dvar = make_grad(
                         op, out, dout, var, snapshot.input_index);
                     dvar = normalize_recorded_gradient(var, move(dvar));

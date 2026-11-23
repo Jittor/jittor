@@ -6,12 +6,22 @@ cuFFT、cuTT 和 cuDNN 都要先构造一个 plan（或算法选择、执行计�
 动辄几毫秒，所以 Jittor 把它们缓存起来。这一页说明这些缓存**归谁所有**、**什么时候
 释放**、以及怎么从 Python 观察它们。
 
-## 每张卡一份，按创建顺序淘汰
+## 每张卡一份，按最近使用淘汰
 
-cuFFT 与 cuTT 的缓存**按 CUDA 设备分库**：每个设备的库拥有自己的计算流、创建顺序
+cuFFT 与 cuTT 的缓存**按 CUDA 设备分库**：每个设备的库拥有自己的计算流、使用顺序
 队列和 plan 句柄，容量上限也按设备计。一张卡上形状不断变化，**淘汰不到另一张卡的
-工作集**。缓存键是 POD 结构体，超出上限时淘汰最早创建的 plan。共同的实现在
-`backends/cuda/include/device_plan_cache.h`（`DevicePlanCache`）。
+工作集**。缓存键是 POD 结构体，命中会把条目移到队尾，超出上限时淘汰**最久未使用**的
+plan。共同的实现在 `backends/cuda/include/device_plan_cache.h`（`DevicePlanCache`）。
+
+- **cuTT 默认上限 4096。** 量子线路一步就有一百多个不同的 (shape, perm) 键；旧的 64
+  项上限让这样的步骤每次都重建 plan（每次约 200 µs）。plan 只是几段很小的设备数组。
+- **录制设备图期间不淘汰。** 销毁 plan 要等待它的流，而录制中的流不能被同步
+  （`cudaErrorStreamCaptureUnsupported`）。录制期间缓存可以暂时超过上限，录制之后的
+  下一次未命中再收回。
+- **录制中的 cuTT 未命中会拒绝这次录制，而且可以重试。** `cuttPlan` 从可分页内存拷贝
+  plan，不能放进图里；这次录制以 `graph_capture_refuse(..., retryable)` 拒绝，同时上限
+  翻倍（每次录制一次），随后的重放建好 plan，`capture_step`/`GraphReplay` 之后再录。
+  不可重试的拒绝原因见 `StepCapture.graph_refused`。
 
 - **SDK 构造一成功就归缓存所有。** cuFFT 用 `cufftCreate` 再 `cufftMakePlanMany`，
   因此配置 workspace 或绑定流失败时释放的是同一个句柄；不会在 `cufftCreate` 之后再
@@ -80,6 +90,6 @@ float。六处调用共用 `CudnnScalingType`；此前给 double 卷积传 float
 ## 维护参考
 
 - 状态：已实现
-- 上次复查：2026-10-05（基线 `e3c369acb`）
+- 上次复查：2026-11-12（基线 `031a50b94`）
 - Owner：CUDA 库维护者
 - 复查触发：计算流归属、后端 teardown 顺序或 cuFFT/cuTT/cuDNN 的 plan API 变化时

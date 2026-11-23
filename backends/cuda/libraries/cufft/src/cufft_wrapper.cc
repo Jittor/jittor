@@ -60,14 +60,13 @@ cufftHandle cufft_get_plan(const CufftPlanKey& key) {
     // invariant and not a caller-supplied value.
     ASSERT(device == key.device) << "cuFFT plan key must name the current device";
     auto& cache = cufft_cache(device);
-    auto found = cache.plans.find(key);
-    if (found != cache.plans.end()) {
-        CUFFT_CALL(cufftSetStream(found->second->value, cache.stream));
+    if (auto* found = cache.find(key)) {
+        CUFFT_CALL(cufftSetStream(found->value, cache.stream));
         cache.binds++;
-        return found->second->value;
+        return found->value;
     }
 
-    while ((int)cache.plans.size() >= cufft_max_cache_size) cache.evict();
+    cache.reserve_one(cufft_max_cache_size);
     int n[2] = {(int)key.n0, (int)key.n1};
     std::unique_ptr<CufftDeviceCache::Plan> plan(new CufftDeviceCache::Plan(&cache));
     // MakePlanMany initializes this existing handle (unlike PlanMany, which

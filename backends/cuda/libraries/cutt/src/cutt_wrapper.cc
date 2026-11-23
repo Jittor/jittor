@@ -6,6 +6,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <map>
 #include <unordered_map>
 #include "stream_compat.h"
@@ -51,7 +52,11 @@ void jt_free(void* p, size_t len, size_t& allocation) {
     }
 }
 
-int cutt_max_cache_size = 64;
+// A quantum-circuit step meets well over a hundred distinct (shape, perm)
+// keys; a plan is a few small device arrays, so a large bank is cheap while a
+// miss costs a host-built plan (~200 us) and cannot happen inside a recording.
+int cutt_max_cache_size = 4096;
+static bool cutt_grown_this_recording = false;
 struct DestroyCuttPlan {
     static bool destroy(cuttHandle plan) {
         uint64 before = cutt_callback_failures;
@@ -112,7 +117,7 @@ void cutt_set_plan_cache_size(int size) {
     for (auto& bank : cutt_devices) bank.second->trim(cutt_max_cache_size);
 }
 
-cuttHandle cutt_get_plan(const CuttPlanKey& key) {
+bool cutt_get_plan(const CuttPlanKey& key, cuttHandle& handle) {
     ExecutorEntryScope entry;
     int device = -1;
     checkCudaErrors(cudaGetDevice(&device));
@@ -121,8 +126,25 @@ cuttHandle cutt_get_plan(const CuttPlanKey& key) {
     // itself rather than anything the caller passed in.
     ASSERT(device == key.device) << "cuTT plan key must name the current device";
     auto& cache = cutt_cache(device);
-    auto found = cache.plans.find(key);
-    if (found != cache.plans.end()) return found->second->value;
+    if (auto* found = cache.find(key)) {
+        handle = found->value;
+        return true;
+    }
+    if (graph_capture_recording) {
+        // cuttPlan copies the plan from pageable host memory on the stream
+        // being recorded. Refuse this recording instead; the replay that
+        // follows builds the plan, and the next recording finds it -- once
+        // the bank holds the step's whole working set, so a miss here also
+        // doubles the limit (once per recording).
+        if (!cutt_grown_this_recording) {
+            cutt_grown_this_recording = true;
+            cutt_max_cache_size = std::max(cutt_max_cache_size,
+                (int)std::min<size_t>(2 * cache.plans.size() + 2, 1 << 16));
+        }
+        graph_capture_refuse("a cuTT transpose plan was not cached yet", true);
+        return false;
+    }
+    cutt_grown_this_recording = false;
 
     int rank = (int)key.rank;
     int shape[CUTT_PLAN_MAX_RANK], permutation[CUTT_PLAN_MAX_RANK];
@@ -130,14 +152,15 @@ cuttHandle cutt_get_plan(const CuttPlanKey& key) {
         shape[i] = (int)key.shape[i];
         permutation[i] = (int)key.permutation[i];
     }
-    while ((int)cache.plans.size() >= cutt_max_cache_size) cache.evict();
+    cache.reserve_one(cutt_max_cache_size);
     std::unique_ptr<CuttDeviceCache::Plan> plan(new CuttDeviceCache::Plan(&cache));
     auto status = cuttPlan(&plan->value, rank, shape, permutation,
                            (size_t)key.dsize, cache.stream);
     CHECK(status == CUTT_SUCCESS) << "cuttPlan failed with" << (int)status
         << "rank" << rank << "dsize" << key.dsize;
     plan->ready = true;
-    return cache.publish(key, std::move(plan));
+    handle = cache.publish(key, std::move(plan));
+    return true;
 }
 
 void cutt_clear_plan_cache(int device) {

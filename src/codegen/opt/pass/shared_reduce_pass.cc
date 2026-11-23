@@ -150,6 +150,8 @@ std::tuple<int, vector<int>, tn_range_map> plan_reduce_thread_order(unique_ptr<K
             dims.push_back(parse_int_at(rvalue, pos + 5));
             rvalue = rvalue.substr(pos + 5);
         }
+        // Compiled shapes put numbers where the range names were.
+        ASSERT(dims.size()) << "shared reduce needs named loop ranges, got" << define->get_attr(kir::rvalue);
         tns.push_back(tn);
         tn_ranges[tn] = dims;
     }

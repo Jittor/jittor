@@ -17,7 +17,7 @@ def test_cuda_math_policy_rejects_invalid_values_and_restores_scope():
 
 
 def test_cuda_math_compilation_uses_captured_key_not_current_policy():
-    with jt.flag_scope(use_cuda=0, cuda_kernel_math="default"):
+    with jt.flag_scope(use_cuda=0, cuda_kernel_math="fast"):
         result = jt.code([1], "int32", cpu_header=r'''
             #include "runtime/jit_policy.h"
             #include "runtime/runtime.h"
@@ -36,7 +36,7 @@ def test_cuda_math_compilation_uses_captured_key_not_current_policy():
             key << "probe";
             add_cuda_math_jit_define(key);
             const auto unchanged = cuda_math_flags_for_key(startup, key.to_string());
-            @out(0) = runtime_flag_cuda_kernel_math() == "default"
+            @out(0) = runtime_flag_cuda_kernel_math() == "fast"
                 && &runtime_jit_policy() == &native_runtime().jit_policy()
                 && strict.find("--use_fast_math") == string::npos
                 && strict.find("--fmad=false") != string::npos
@@ -53,11 +53,32 @@ def test_cuda_math_compilation_uses_captured_key_not_current_policy():
 def test_pending_graph_runs_under_old_math_policy():
     from contextlib import ExitStack as _TestPolicyStack
     with _TestPolicyStack() as _test_policy_stack:
-        with jt.flag_scope(use_cuda=0, cuda_kernel_math="default"):
+        with jt.flag_scope(use_cuda=0, cuda_kernel_math="fast"):
             result = jt.code([1], "int32", cpu_header=r'''
             #include "runtime/jit_policy.h"
         ''', cpu_src=r'''
-            @out(0) = jittor::runtime_flag_cuda_kernel_math() == "default";
+            @out(0) = jittor::runtime_flag_cuda_kernel_math() == "fast";
         ''')
             _test_policy_stack.enter_context(jt.runtime.scope(cuda_kernel_math="strict"))
             assert result.item() == 1
+
+
+def test_strict_is_the_default_and_default_names_fast():
+    # The compiled-in default, read by a fresh process: an earlier test in
+    # this one may have left a scope's value behind.
+    import os
+    import subprocess
+    from _helpers.child_process import child_env, python_executable
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("JT_CUDA_KERNEL_MATH", "cuda_kernel_math")}
+    out = subprocess.run(
+        [python_executable(), "-c", "import jittor as jt; print(jt.flags.cuda_kernel_math)"],
+        env=child_env(env, inherit=False), capture_output=True, text=True,
+        check=True).stdout.split()
+    assert out[-1] == "strict"
+    with jt.flag_scope(cuda_kernel_math="default"):
+        assert jt.flags.cuda_kernel_math == "fast"
+    with jt.flag_scope(cuda_kernel_math="fast"):
+        with jt.flag_scope(cuda_kernel_math="strict"):
+            assert jt.flags.cuda_kernel_math == "strict"
+        assert jt.flags.cuda_kernel_math == "fast"

@@ -36,12 +36,56 @@ _BLOCKS = 1024
 _THREADS = 256
 
 
+# A complex64 sum folds its two float parts the same way, one after the other
+# through the block's shared storage. Without it a complex sum went to the
+# generated kernel's atomics: the norm of a 2^20-amplitude state was 5e-7 off
+# where the float32 sum of the same magnitudes was 1e-7 off.
+_COMPLEX_SRC = """
+                __global__ static void full_reduce_partial(
+                        const in0_type* x, float* partial, int total) {{
+                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+                    __shared__ typename BlockReduce::TempStorage storage;
+                    float re = 0.0f, im = 0.0f;
+                    int stride = gridDim.x * blockDim.x;
+                    for (int i = blockIdx.x * blockDim.x + threadIdx.x;
+                         i < total; i += stride) {{
+                        re += x[i].real;
+                        im += x[i].imag;
+                    }}
+                    float fre = BlockReduce(storage).Sum(re);
+                    __syncthreads();
+                    float fim = BlockReduce(storage).Sum(im);
+                    if (threadIdx.x == 0) {{
+                        partial[2 * blockIdx.x] = fre;
+                        partial[2 * blockIdx.x + 1] = fim;
+                    }}
+                }}
+
+                __global__ static void full_reduce_finish(
+                        const float* partial, out0_type* out, int blocks) {{
+                    typedef cub::BlockReduce<float, {threads}> BlockReduce;
+                    __shared__ typename BlockReduce::TempStorage storage;
+                    float re = 0.0f, im = 0.0f;
+                    for (int i = threadIdx.x; i < blocks; i += blockDim.x) {{
+                        re += partial[2 * i];
+                        im += partial[2 * i + 1];
+                    }}
+                    float fre = BlockReduce(storage).Sum(re);
+                    __syncthreads();
+                    float fim = BlockReduce(storage).Sum(im);
+                    if (threadIdx.x == 0) out[0] = out0_type(fre{scale}, fim{scale});
+                }}
+"""
+
+
 @lru_cache(maxsize=8)
 def _full_sum_cuda_cls(dtype, divisor):
     header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
     # repr keeps the decimal point that a plain %g drops for round values;
     # "32768f" is not a float literal, "32768.0f" is.
     scale = "" if divisor is None else " / %rf" % float(divisor)
+    is_complex = dtype == "complex64"
+    parts = 2 if is_complex else 1
 
     class FullSumCUDA(jt.Function):
         def execute(self, x):
@@ -52,12 +96,13 @@ def _full_sum_cuda_cls(dtype, divisor):
                 total *= size
             # The partials are a second output rather than scratch memory: an
             # op's outputs are the only buffers it may allocate through.
+            kernels = _COMPLEX_SRC.format(threads=_THREADS, scale=scale) if is_complex else None
             out, _partial = jt.code(
-                [(1,), (_BLOCKS,)],
+                [(1,), (_BLOCKS * parts,)],
                 [dtype, "float32"],
                 [x],
                 cuda_header=header,
-                cuda_src=f"""
+                cuda_src=(kernels or f"""
                 __global__ static void full_reduce_partial(
                         const in0_type* x, float* partial, int total) {{
                     typedef cub::BlockReduce<float, {_THREADS}> BlockReduce;
@@ -81,7 +126,7 @@ def _full_sum_cuda_cls(dtype, divisor):
                     float folded = BlockReduce(storage).Sum(local);
                     if (threadIdx.x == 0) out[0] = out0_type(folded{scale});
                 }}
-
+                """) + f"""
                 int total = in0->num;
                 int blocks = {_BLOCKS};
                 if (blocks > (total + {_THREADS} - 1) / {_THREADS})
@@ -122,7 +167,7 @@ def _supports_full_reduce(x, divisor=None):
     return True
 
 
-@optional_kernel("nn.full_reduce", ("cuda", "corex_legacy"), dtypes=("float32",),
+@optional_kernel("nn.full_reduce", ("cuda", "corex_legacy"), dtypes=("float32", "complex64"),
                  supports=_supports_full_reduce)
 def _full_reduce_cuda(x, divisor=None):
     """Fold ``x`` to a scalar; ``divisor`` turns the sum into a mean."""
@@ -136,9 +181,12 @@ def _full_reduce_cuda(x, divisor=None):
             and jt.flags.para_opt_level >= 3
             and options.get("use_shared_reduce", 1) != 0):
         partial = jt.reduce(x, "add", [len(x.shape) - 1])
-        options.update(partial.compile_options or {})
-        options["use_shared_reduce"] = 2
-        partial.compile_options = options
+        if _jittor_dtype_name(x.dtype) != "complex64":
+            # The block-shared fold is written for real accumulators; a
+            # complex row partial keeps the generated reduction's own form.
+            options.update(partial.compile_options or {})
+            options["use_shared_reduce"] = 2
+            partial.compile_options = options
         return _full_sum_cuda_cls(_jittor_dtype_name(x.dtype), divisor).apply(partial)
     return _full_sum_cuda_cls(_jittor_dtype_name(x.dtype), divisor).apply(x)
 

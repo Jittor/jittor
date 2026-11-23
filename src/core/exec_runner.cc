@@ -1009,7 +1009,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         bool is_cuda = execution_backend != BackendId::Cpu;
         if (PREDICT_BRANCH_NOT_TAKEN(graph_capture_recording) && !is_cuda
                 && !graph_capture_launches_nothing(op))
-            graph_capture_saw_host_work = true;
+            graph_capture_refuse(string("a host kernel ran inside the recording: ") + op->name());
         // Array staging and explicit transfers are not CPU implementations of
         // a requested accelerator computation. Reject a real fallback before
         // moving its inputs or executing any CPU kernel.
