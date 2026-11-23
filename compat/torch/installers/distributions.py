@@ -1,6 +1,6 @@
 """Distribution installation binds stable implementation owners and module paths."""
 import types as _types_dist
-from ..distribution_api import CONSTRAINTS, _Constraint, Gumbel, RelaxedBernoulli, RelaxedOneHotCategorical, Wishart, unsupported_register_kl
+from ..distribution_api import CONSTRAINTS, _Constraint, Gumbel, RelaxedBernoulli, RelaxedOneHotCategorical, unsupported_register_kl
 from ..fidelity import Fidelity, register_api_bindings
 
 
@@ -32,11 +32,6 @@ def _install_distribution_surface(ctx):
     _dist_utils.broadcast_all = getattr(_dist, "broadcast_all")
     _modules["torch.distributions.utils"] = _dist_utils
     _dist.utils = _dist_utils
-    _wishart_module = _types_dist.ModuleType("torch.distributions.wishart")
-    _wishart_module.Wishart = Wishart
-    _dist.Wishart = Wishart
-    _dist.wishart = _wishart_module
-    _modules["torch.distributions.wishart"] = _wishart_module
     for _cls_name, _mod_suffix in (
         ("Distribution", "distribution"),
         ("Bernoulli", "bernoulli"),
@@ -54,6 +49,7 @@ def _install_distribution_surface(ctx):
         ("LogNormal", "log_normal"),
         ("LogisticNormal", "logistic_normal"),
         ("MultivariateNormal", "multivariate_normal"),
+        ("Wishart", "wishart"),
     ):
         if hasattr(_dist, _cls_name):
             _sub = ctx.registry.ensure("torch.distributions." + _mod_suffix)
@@ -96,7 +92,7 @@ def _install_distribution_surface(ctx):
                                 "Normal", "Uniform", "Distribution", "Bernoulli", "Beta",
                                 "Categorical", "Dirichlet", "Exponential", "Gamma", "Geometric",
                                 "Independent", "LogNormal", "LogisticNormal", "MultivariateNormal",
-                                "OneHotCategorical", "Poisson") if hasattr(_dist, name)),
+                                "OneHotCategorical", "Poisson", "Wishart") if hasattr(_dist, name)),
         Fidelity.APPROXIMATE,
         "Native distributions retain their backend limits; sampling fallbacks clamp random values and have limited validation")
     register_api_bindings(_dist.constraints, "torch.distributions.constraints", ("Constraint",),
@@ -104,7 +100,7 @@ def _install_distribution_surface(ctx):
     for class_name in (
         "Distribution", "Normal", "Uniform", "Bernoulli", "Beta", "Categorical",
         "Dirichlet", "Exponential", "Gamma", "Geometric", "Independent", "LogNormal",
-        "LogisticNormal", "MultivariateNormal", "OneHotCategorical", "Poisson",
+        "LogisticNormal", "MultivariateNormal", "OneHotCategorical", "Poisson", "Wishart",
         "Gumbel", "RelaxedBernoulli", "RelaxedOneHotCategorical",
     ):
         distribution_type = getattr(_dist, class_name, None)

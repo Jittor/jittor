@@ -27,6 +27,7 @@ from _helpers import capability as _test_capability
 import math
 import unittest
 import numpy as np
+import pytest
 import torch
 import jittor as jt
 from jittor import distributions as D
@@ -85,6 +86,69 @@ def test_cuda_gamma_rsample_and_gradient_stay_on_device(monkeypatch):
     assert not np.array_equal(distribution.rsample((8192,)).detach().cpu().numpy(), values)
     torch.manual_seed(721)
     np.testing.assert_array_equal(distribution.rsample((8192,)).detach().cpu().numpy(), values)
+
+
+@pytest.mark.parametrize("device", ("cpu", "cuda"))
+def test_wishart_batched_sampling_and_density(device, monkeypatch):
+    from torch.distributions.wishart import Wishart
+
+    if device == "cuda":
+        _test_capability.require_accelerator("cuda")
+        from jittor.contrib.math_util import gamma
+
+        def unexpected_host_call(*args, **kwargs):
+            raise AssertionError("Wishart moved CUDA Gamma sampling or its gradient to NumPy")
+
+        monkeypatch.setattr(np.random, "gamma", unexpected_host_call)
+        monkeypatch.setattr(gamma, "_standard_gamma_grad_vec", unexpected_host_call)
+
+    assert Wishart is torch.distributions.Wishart
+    torch.manual_seed(341)
+    options = {"device": device, "dtype": torch.float64}
+    df = torch.tensor([7.0, 12.0], **options, requires_grad=True)
+    scale = torch.tensor([[2.0, 0.0], [0.3, 1.5]], **options)
+    distribution = Wishart(df, scale_tril=scale)
+    draws = distribution._bartlett_sampling((4096,))
+    assert draws.device == df.device and draws.dtype == df.dtype
+    assert tuple(draws.shape) == (4096, 2, 2, 2)
+    values = draws.detach().cpu().numpy()
+    assert np.isfinite(values).all() and np.linalg.eigvalsh(values).min() > 0
+    sigma = np.array([[4.0, 0.6], [0.6, 2.34]])
+    degrees = np.array([7.0, 12.0])[:, None, None]
+    np.testing.assert_allclose(values.mean(0), degrees * sigma, atol=0.55, rtol=0.06)
+    variance = degrees * (sigma**2 + np.outer(sigma.diagonal(), sigma.diagonal()))
+    np.testing.assert_allclose(values.var(0), variance, atol=0.6, rtol=0.15)
+    draws.diagonal(dim1=-2, dim2=-1).sum(-1).mean(0).sum().backward()
+    assert df.grad.device == df.device
+    np.testing.assert_allclose(df.grad.cpu().numpy(), np.full(2, sigma.trace()), rtol=0.065)
+
+    value = torch.tensor([[4.8, 0.3], [0.3, 3.9]], **options)
+    cov = scale @ scale.T
+    for parameters in ({"scale_tril": scale}, {"covariance_matrix": cov},
+                       {"precision_matrix": torch.linalg.inv(cov)}):
+        form = Wishart(df.detach(), **parameters)
+        np.testing.assert_allclose(form.log_prob(value).cpu().numpy(),
+                                   [-10.6299223079, -19.1279716200], atol=3e-7, rtol=3e-7)
+        np.testing.assert_allclose(form.entropy().cpu().numpy(),
+                                   [10.7898821820, 11.7655003844], atol=3e-7, rtol=3e-7)
+    expanded = distribution.expand((3, 2))
+    assert tuple(expanded.rsample((4,)).shape) == (4, 3, 2, 2, 2)
+
+
+def test_wishart_bartlett_refill_inherits_parameter_device():
+    _test_capability.require_accelerator("cuda")
+    from jittor.compat.torch.frontend import tensor_frontend
+
+    for device, ambient in (("cuda", "cpu"), ("cpu", "cuda")):
+        scale = torch.eye(8, device=device)
+        distribution = torch.distributions.Wishart(8, scale_tril=scale)
+        distribution._bartlett_sampling().sum().item()
+        with tensor_frontend(torch.Tensor, device=ambient), torch.no_grad():
+            placement = jt.core._current_tensor_placement()
+            draw = distribution._bartlett_sampling()
+            assert draw.device == scale.device
+            assert torch.isfinite(draw).all().item()
+            assert jt.core._current_tensor_placement() == placement
 
 
 # ------------------------------------------------------------------------- Normal
