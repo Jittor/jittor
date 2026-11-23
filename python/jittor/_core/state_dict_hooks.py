@@ -91,11 +91,17 @@ def prepare_load(root, state, strict):
     missing, unexpected, errors = [], [], []
     for name, module in _walk(root):
         prefix = name + "." if name else ""
-        for hook, options in _hooks(module, "_load_state_dict_pre_hooks"):
-            args = (copied, prefix, _metadata(copied, prefix, module),
-                    strict, missing, unexpected, errors)
-            if options.get("with_module", False):
-                hook(module, *args)
-            else:
-                hook(*args)
+        apply_load_pre(module, copied, prefix, _metadata(copied, prefix, module),
+                       strict, missing, unexpected, errors)
     return copied, missing, unexpected, errors
+
+
+def apply_load_pre(module, state, prefix, metadata, strict, missing, unexpected, errors):
+    if not _enabled.get():
+        return
+    args = (state, prefix, metadata, strict, missing, unexpected, errors)
+    for hook, options in _hooks(module, "_load_state_dict_pre_hooks"):
+        if options.get("with_module", False):
+            hook(module, *args)
+        else:
+            hook(*args)
