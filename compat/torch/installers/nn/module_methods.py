@@ -1,5 +1,7 @@
 from ...fidelity import register_api_bindings
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.module import _walk
+from jittor._core.state_dict_hooks import apply_load_pre
 import collections as _collections
 from collections.abc import MutableMapping as _MutableMapping
 import functools as _functools
@@ -47,6 +49,7 @@ _ORIG_MODULE_NAMED_PARAMETERS = nn.Module.named_parameters
 _ORIG_MODULE_NAMED_BUFFERS = nn.Module.named_buffers
 _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
+_ORIG_MODULE_LOAD_FROM_STATE_DICT = nn.Module._load_from_state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
 _ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
 _ORIG_MODULE_GETATTR = nn.Module.__getattr__
@@ -542,6 +545,9 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
             self, state_dict, strict)
         if fsdp_result is not None:
             return fsdp_result
+    if any(getattr(module._load_from_state_dict, "__func__", None) is not _load_from_state_dict
+           for _, module in _walk(self)):
+        return _load_state_dict_with_overrides(self, state_dict, strict, assign)
     state_dict, hook_missing, hook_unexpected, hook_errors = (
         self._prepare_load_state_dict(state_dict, strict))
     if hook_errors:
@@ -560,34 +566,49 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                    "size mismatch for %s: copying a param with shape %s "
                    "from checkpoint, the shape in current model is %s."
                    % (k, list(a), list(b)) for k, a, b in mismatched)))
-    if strict and (missing or unexpected):
-        parts = []
-        if missing:
-            parts.append("Missing key(s) in state_dict: %s. "
-                         % ", ".join('"%s"' % k for k in sorted(missing)))
-        if unexpected:
-            parts.append("Unexpected key(s) in state_dict: %s. "
-                         % ", ".join('"%s"' % k for k in sorted(unexpected)))
+    result = _load_incompatible_keys(self, strict, missing, unexpected, [])
+    if unexpected:
+        # The native loader warns about unknown keys even for strict=False.
+        state_dict = {k: v for k, v in state_dict.items() if str(k) not in set(unexpected)}
+    _apply_loaded_parameters(self, state_dict, assign)
+    return result
+
+
+def _load_incompatible_keys(module, strict, missing, unexpected, errors):
+    messages = list(errors)
+    if strict and unexpected:
+        keys = ", ".join('"%s"' % key for key in sorted(unexpected))
+        messages.insert(0, f"Unexpected key(s) in state_dict: {keys}.")
+    if strict and missing:
+        keys = ", ".join('"%s"' % key for key in sorted(missing))
+        messages.insert(0, f"Missing key(s) in state_dict: {keys}.")
+    if messages:
         raise RuntimeError(
             "Error(s) in loading state_dict for %s:\n\t%s"
-            % (type(self).__name__, "\n\t".join(parts)))
+            % (type(module).__name__, "\n\t".join(messages)))
+    return _IncompatibleKeys(missing, unexpected)
+
+
+def _apply_loaded_parameters(self, state_dict, assign, recurse=True):
+    if not recurse and not state_dict:
+        return
     # preserve trainable flags: jittor assign can flip stop_grad
+    def named_parameters():
+        if recurse:
+            return self.named_parameters()
+        return self._named_vars("parameters", recurse=False)
+
     trainable = set()
     try:
-        for n, p in self.named_parameters():
-            if p.requires_grad:
-                trainable.add(n)
+        for name, parameter in named_parameters():
+            if parameter.requires_grad:
+                trainable.add(name)
     except EXPECTED as exc:
-        swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
+        swallowed("torch/installers/nn.py _load_state_dict: read trainable parameters", exc)
     # A lazy-to-lazy checkpoint carries no tensor contents to copy.
     if any(is_lazy(value) for value in state_dict.values()):
         state_dict = {key: value for key, value in state_dict.items() if not is_lazy(value)}
     load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
-    if unexpected:
-        # jittor's load_parameters LOG.w's on every unknown key; drop them
-        # here so a strict=False load stays quiet, exactly like torch.
-        load_state = {k: v for k, v in load_state.items()
-                      if str(k) not in set(unexpected)}
     if not assign:
         # Native loading rebinds each holder. Torch's copying form preserves
         # allocations shared with flat optimizer buffers and detached aliases.
@@ -615,12 +636,69 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
     with self._state_dict_hook_scope(False):
         _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
     try:
-        for n, p in self.named_parameters():
-            if n in trainable and p.is_stop_grad():
-                p.start_grad()
+        for name, parameter in named_parameters():
+            if name in trainable and parameter.is_stop_grad():
+                parameter.start_grad()
     except EXPECTED as exc:
-        swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
-    return _IncompatibleKeys(missing, unexpected)
+        swallowed("torch/installers/nn.py _load_state_dict: restore trainable parameters", exc)
+
+
+def _load_state_dict_with_overrides(root, state_dict, strict, assign):
+    metadata = getattr(state_dict, "_metadata", None)
+    missing, unexpected, errors = [], [], []
+    stack = [("", _collections.OrderedDict(state_dict))]
+    for name, module in _walk(root):
+        prefix = name + "." if name else ""
+        if name:
+            while not prefix.startswith(stack[-1][0]):
+                stack.pop()
+            parent_state = stack[-1][1]
+            local_state = {key: value for key, value in parent_state.items()
+                           if key.startswith(prefix)}
+            stack.append((prefix, local_state))
+        local_metadata = {} if metadata is None else dict(metadata.get(name, {}))
+        if assign:
+            local_metadata["assign_to_params_buffers"] = True
+        # The module override can migrate its entire subtree before the next
+        # child sees its portion of the state. Each child validates its own keys.
+        module._load_from_state_dict(
+            stack[-1][1], prefix, local_metadata, True, missing, unexpected, errors)
+    return _load_incompatible_keys(root, strict, missing, unexpected, errors)
+
+
+def _load_from_state_dict(self, state, prefix="", local_metadata=None, strict=True,
+                          missing_keys=None, unexpected_keys=None, error_msgs=None):
+    if missing_keys is None:
+        return _ORIG_MODULE_LOAD_FROM_STATE_DICT(self, state, prefix)
+    metadata = local_metadata if local_metadata is not None else {}
+    apply_load_pre(self, state, prefix, metadata, strict, missing_keys, unexpected_keys, error_msgs)
+    own_state = dict(self._named_vars("state", recurse=False, remove_duplicate=False))
+    local_values = {}
+    for name, target in own_state.items():
+        key = prefix + name
+        if key not in state:
+            if strict and name != "num_batches_tracked":
+                missing_keys.append(key)
+            continue
+        value = _state_source_to_var(state[key])
+        if value.shape != target.shape:
+            error_msgs.append(
+                f"size mismatch for {key}: copying a param with shape {list(value.shape)} "
+                f"from checkpoint, the shape in current model is {list(target.shape)}.")
+        else:
+            local_values[name] = value
+    if strict:
+        for key in state:
+            if not key.startswith(prefix):
+                continue
+            name, dot, _ = key[len(prefix):].partition(".")
+            if dot:
+                if not isinstance(_find_state_target(self, name), nn.Module):
+                    unexpected_keys.append(key)
+            elif name not in own_state:
+                unexpected_keys.append(key)
+    _apply_loaded_parameters(
+        self, local_values, metadata.get("assign_to_params_buffers", False), recurse=False)
 
 
 # torch's Module.parameters() returns an *iterator*; peft does
@@ -1598,6 +1676,7 @@ def _install_module_methods(nn, registry=None):
     M.register_backward_hook = _register_backward_hook
     M.remove_backward_hook = _remove_backward_hook
     M.load_state_dict = _load_state_dict
+    M._load_from_state_dict = _load_from_state_dict
     M._parameters = property(_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
     M.train = _train
