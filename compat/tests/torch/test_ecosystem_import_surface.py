@@ -1,4 +1,5 @@
 """The import-time API surface torchao, transformers and peft touch."""
+import importlib
 import typing
 from types import SimpleNamespace
 
@@ -14,8 +15,13 @@ def test_optimizer_required_is_a_module_level_sentinel():
 
 
 def test_triton_ops_meta_reports_no_tuned_entry():
+    from torch.sparse import _triton_ops_meta, SparseSemiStructuredTensor
     from torch.sparse._triton_ops_meta import get_meta, minimize, update
 
+    assert torch.sparse is importlib.import_module("torch.sparse")
+    assert torch.sparse._triton_ops_meta is _triton_ops_meta
+    assert _triton_ops_meta is importlib.import_module("torch.sparse._triton_ops_meta")
+    assert torch.sparse.SparseSemiStructuredTensor is SparseSemiStructuredTensor
     assert get_meta("bsr_dense_addmm", (1024, 1024)) is None
     assert update("bsr_dense_addmm", (1024, 1024), (0, "float32", 0.5), {}) is None
     with pytest.raises(NotImplementedError):
