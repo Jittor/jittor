@@ -1031,6 +1031,11 @@ def install_flash(ctx):
     _install_flash_attn_shim(ctx.registry)
 
 
+def _return_and_correct_aliasing(func, args, kwargs, out):
+    """Return the eager result; the frontend does not rewrite wrapper aliases."""
+    return out
+
+
 def install_parity(ctx):
     g = ctx.jittor_module
     registry = ctx.registry
@@ -1052,14 +1057,6 @@ def install_parity(ctx):
         python_dispatch, "TorchDispatchMode", TorchDispatchMode
     )
     python_dispatch._get_current_dispatch_mode = _api_python_dispatch__get_current_dispatch_mode
-    # torch.utils._python_dispatch.return_and_correct_aliasing: after an op
-    # dispatched through a wrapper subclass, torch rewrites the output so its
-    # alias metadata matches the inputs. There is no wrapper-subclass dispatch
-    # here, so the output already is what the op returned; hand it back
-    # unchanged. torchao imports this at module scope.
-    def _return_and_correct_aliasing(func, args, kwargs, out):
-        return out
-
     python_dispatch.return_and_correct_aliasing = _return_and_correct_aliasing
     g.utils._python_dispatch = python_dispatch
     _register_utility_fidelity(ctx)

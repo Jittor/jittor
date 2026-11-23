@@ -679,6 +679,46 @@ def _register_compiler_fidelity(ctx):
                               Fidelity.UNIMPLEMENTED if placeholder else Fidelity.APPROXIMATE, detail)
 
 
+def _inductor_register_decomposition(fn=None, *args, **kwargs):
+    def decorator(function):
+        return function
+    return decorator(fn) if callable(fn) else decorator
+
+def _prims_suggest_memory_format(tensor):
+    g = get_install_context(jt).target_namespace
+    # Decide from the strides: Jittor's is_contiguous ignores the
+    # memory_format argument, so asking it reported channels_last for every
+    # contiguous 4D tensor. The channels-last stride tuple for (N, C, H, W)
+    # is (H*W*C, 1, W*C, C).
+    try:
+        shape = tuple(int(size) for size in tensor.shape)
+        if len(shape) == 4:
+            n, c, h, w = shape
+            strides = tuple(int(step) for step in tensor.stride())
+            if strides == (h * w * c, 1, w * c, c):
+                return g.channels_last
+    except (AttributeError, TypeError, ValueError) as exc:
+        swallowed("torch._prims_common.suggest_memory_format: read shape and strides", exc)
+    return g.contiguous_format
+
+def _prims_make_contiguous_strides_for(shape, memory_format=None):
+    strides = []
+    acc = 1
+    for size in reversed(tuple(shape)):
+        strides.append(acc)
+        acc *= int(size)
+    return tuple(reversed(strides))
+
+def _prims_maybe_convert_to_dtype(value, dtype):
+    current = getattr(value, "dtype", None)
+    if current is not None and dtype is not None and current != dtype:
+        return value.to(dtype)
+    return value
+
+def _api_jit_overload(fn):
+    return fn
+
+
 def install(ctx):
     _modules = ctx.registry.module_map
     g = ctx.jittor_module
@@ -756,11 +796,6 @@ def install(ctx):
     # shim, so registering one records nothing and the decorator hands the
     # function back; torchao calls it while defining its custom ops.
     _inductor_decomposition = _types2.ModuleType("torch._inductor.decomposition")
-
-    def _inductor_register_decomposition(fn=None, *args, **kwargs):
-        def decorator(function):
-            return function
-        return decorator(fn) if callable(fn) else decorator
 
     _inductor_decomposition.register_decomposition = _inductor_register_decomposition
     _inductor.decomposition = _inductor_decomposition
@@ -841,39 +876,9 @@ def install(ctx):
     # arithmetic and do not need a prims interpreter.
     _prims_common = _types2.ModuleType("torch._prims_common")
 
-    def _prims_suggest_memory_format(tensor):
-        # Decide from the strides: Jittor's is_contiguous ignores the
-        # memory_format argument, so asking it reported channels_last for every
-        # contiguous 4D tensor. The channels-last stride tuple for (N, C, H, W)
-        # is (H*W*C, 1, W*C, C).
-        try:
-            shape = tuple(int(size) for size in tensor.shape)
-            if len(shape) == 4:
-                n, c, h, w = shape
-                strides = tuple(int(step) for step in tensor.stride())
-                if strides == (h * w * c, 1, w * c, c):
-                    return g.channels_last
-        except (AttributeError, TypeError, ValueError) as exc:
-            swallowed("torch._prims_common.suggest_memory_format: read shape and strides", exc)
-        return g.contiguous_format
-
-    def _prims_make_contiguous_strides_for(shape, memory_format=None):
-        strides = []
-        acc = 1
-        for size in reversed(tuple(shape)):
-            strides.append(acc)
-            acc *= int(size)
-        return tuple(reversed(strides))
-
     _prims_common.suggest_memory_format = _prims_suggest_memory_format
     _prims_common.make_contiguous_strides_for = _prims_make_contiguous_strides_for
     _prims_wrappers = _types2.ModuleType("torch._prims_common.wrappers")
-
-    def _prims_maybe_convert_to_dtype(value, dtype):
-        current = getattr(value, "dtype", None)
-        if current is not None and dtype is not None and current != dtype:
-            return value.to(dtype)
-        return value
 
     _prims_wrappers._maybe_convert_to_dtype = _prims_maybe_convert_to_dtype
     _prims_common.wrappers = _prims_wrappers
@@ -924,8 +929,8 @@ def install(ctx):
     # The private spelling torchvision applies at module scope.
     _jit._script_if_tracing = _api_jit_script_if_tracing
     # Script overload decorators are registration-only in eager execution.
-    _jit._overload = lambda fn: fn
-    _jit._overload_method = lambda fn: fn
+    _jit._overload = _api_jit_overload
+    _jit._overload_method = _api_jit_overload
     _jit.ignore = _api_jit_ignore
     _jit.unused = _api_jit_unused
     _jit.export = _api_jit_export

@@ -1154,6 +1154,49 @@ def _vinv(self):
     import jittor.linalg as _la; return _la.inv(self)
 
 
+def _has_compatible_shallow_copy_type(a, b):
+    try:
+        return (a.dtype == b.dtype
+                and a.device == b.device
+                and getattr(a, "layout", None) == getattr(b, "layout", None))
+    except (AttributeError, TypeError) as exc:
+        swallowed("torch._has_compatible_shallow_copy_type: compare tensor metadata", exc)
+        return False
+
+def _out_dtype(dtype, op, *args, **kwargs):
+    result = op(*args, **kwargs)
+    try:
+        return result.to(dtype)
+    except AttributeError:
+        return result
+
+def _triton_ops_meta_get_meta(opname, key, version=None, exact=False,
+                              device_name=None):
+    return None
+
+def _triton_ops_meta_update(opname, key, version, config, speedup=None,
+                            timing=None):
+    return None
+
+def _triton_ops_meta_minimize(opname, key, version, configs, input, out,
+                              index, dense, *, force=False, verbose=False):
+    raise NotImplementedError(
+        "torch.sparse._triton_ops_meta.minimize: Triton BSR kernel "
+        "autotuning is not part of jittor-compat")
+
+class _SemiStructuredSparseTensorUnavailable:
+    def __init__(self, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.sparse.SparseSemiStructuredTensor: semi-structured "
+            "sparse tensors are not implemented in jittor-compat")
+
+    @classmethod
+    def from_dense(cls, *args, **kwargs):
+        raise NotImplementedError(
+            "torch.sparse.SparseSemiStructuredTensor.from_dense: "
+            "semi-structured sparse tensors are not implemented in "
+            "jittor-compat")
+
 def install(ctx):
     from .shape import fliplr
     ctx.jittor_module.fliplr = fliplr
@@ -1357,28 +1400,12 @@ def install(ctx):
 
     # torch._has_compatible_shallow_copy_type: autograd and wrapper-subclass
     # code asks whether two tensors can be copied without changing meaning.
-    def _has_compatible_shallow_copy_type(a, b):
-        try:
-            return (a.dtype == b.dtype
-                    and a.device == b.device
-                    and getattr(a, "layout", None) == getattr(b, "layout", None))
-        except (AttributeError, TypeError) as exc:
-            swallowed("torch._has_compatible_shallow_copy_type: compare tensor metadata", exc)
-            return False
-
     _bind_missing(g, "_has_compatible_shallow_copy_type",
                   _has_compatible_shallow_copy_type)
 
     # torch._higher_order_ops.out_dtype(dtype, op, *args): eager semantics are
     # "run the op, deliver the result in dtype". torchao names it at module
     # scope.
-    def _out_dtype(dtype, op, *args, **kwargs):
-        result = op(*args, **kwargs)
-        try:
-            return result.to(dtype)
-        except AttributeError:
-            return result
-
     _hops = ctx.registry.ensure("torch._higher_order_ops")
     # `from torch._higher_order_ops.out_dtype import out_dtype` names the
     # submodule; the function lives inside it, as it does upstream.
@@ -1403,20 +1430,6 @@ def install(ctx):
     # and takes lm-eval, peft and transformers model loading with it.
     _triton_ops_meta = ctx.registry.ensure("torch.sparse._triton_ops_meta")
 
-    def _triton_ops_meta_get_meta(opname, key, version=None, exact=False,
-                                  device_name=None):
-        return None
-
-    def _triton_ops_meta_update(opname, key, version, config, speedup=None,
-                                timing=None):
-        return None
-
-    def _triton_ops_meta_minimize(opname, key, version, configs, input, out,
-                                  index, dense, *, force=False, verbose=False):
-        raise NotImplementedError(
-            "torch.sparse._triton_ops_meta.minimize: Triton BSR kernel "
-            "autotuning is not part of jittor-compat")
-
     _triton_ops_meta.get_meta = _triton_ops_meta_get_meta
     _triton_ops_meta.update = _triton_ops_meta_update
     _triton_ops_meta.minimize = _triton_ops_meta_minimize
@@ -1426,19 +1439,6 @@ def install(ctx):
     # torchao names these classes in module-scope tables; the names have to
     # exist for the import, and every construction raises, so nothing can
     # silently treat a dense tensor as semi-structured.
-    class _SemiStructuredSparseTensorUnavailable:
-        def __init__(self, *args, **kwargs):
-            raise NotImplementedError(
-                "torch.sparse.SparseSemiStructuredTensor: semi-structured "
-                "sparse tensors are not implemented in jittor-compat")
-
-        @classmethod
-        def from_dense(cls, *args, **kwargs):
-            raise NotImplementedError(
-                "torch.sparse.SparseSemiStructuredTensor.from_dense: "
-                "semi-structured sparse tensors are not implemented in "
-                "jittor-compat")
-
     sparse_namespace.SparseSemiStructuredTensor = _SemiStructuredSparseTensorUnavailable
     sparse_namespace.SparseSemiStructuredTensorCUSPARSELT = _SemiStructuredSparseTensorUnavailable
     sparse_namespace.SparseSemiStructuredTensorCUTLASS = _SemiStructuredSparseTensorUnavailable

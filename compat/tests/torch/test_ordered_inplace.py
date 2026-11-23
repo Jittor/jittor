@@ -48,7 +48,7 @@ def test_allocated_update_preserves_readers_without_global_drain(device, dtype, 
         rhs = value + increment
         calls = _count_global_sync(monkeypatch)
         assert value.copy_(rhs) is value
-        assert len(calls) == (0 if device == 'cuda' else 1)
+        assert not calls
         assert value._saved_storage_version()[1:] == [token, version + 1]
         np.testing.assert_array_equal(value.float().numpy(), expected + increment)
         np.testing.assert_array_equal(snapshot.float().numpy(), expected)
@@ -58,6 +58,20 @@ def test_allocated_update_preserves_readers_without_global_drain(device, dtype, 
         assert value.location() == ('device' if device == 'cuda' else 'cpu')
         rhs.add_(3)
         np.testing.assert_array_equal(value.float().numpy(), expected + increment)
+
+
+def test_pending_parameter_snapshot_keeps_the_old_value(device, monkeypatch):
+    value = torch.nn.Parameter(torch.tensor([1., -2.], device=device))
+    value.sync()
+    snapshot = torch.nn.Parameter(value.detach().clone())
+    assert not snapshot._mem_ptr_now
+
+    calls = _count_global_sync(monkeypatch)
+    with torch.no_grad():
+        value.add_(1)
+    assert not calls
+    np.testing.assert_array_equal(snapshot.detach().cpu().numpy(), [1., -2.])
+    np.testing.assert_array_equal(value.detach().cpu().numpy(), [2., -1.])
 
 
 @pytest.mark.parametrize('kind', ['detach', 'data', 'view', 'transpose', 'holder'])
@@ -77,7 +91,7 @@ def test_existing_alias_keeps_imperative_write(device, storage_dtype, kind, monk
             alias = value._alias()
         calls = _count_global_sync(monkeypatch)
         value.add_(1)
-        assert len(calls) == 1
+        assert not calls
         np.testing.assert_array_equal(value.numpy(), expected + 1)
         alias_expected = (expected + 1).T if kind == 'transpose' else expected + 1
         np.testing.assert_array_equal(alias.numpy(), alias_expected.reshape(tuple(alias.shape)))
@@ -89,7 +103,7 @@ def test_grad_enabled_call_keeps_imperative_write(device, storage_dtype, monkeyp
         value, expected = _allocated(device, storage_dtype)
         calls = _count_global_sync(monkeypatch)
         value.add_(2)
-        assert len(calls) == 1
+        assert not calls
         np.testing.assert_array_equal(value.numpy(), expected + 2)
 
 
@@ -131,7 +145,7 @@ def test_exported_cuda_pointer_keeps_external_reads_current(device, storage_dtyp
         del exporter
         calls = _count_global_sync(monkeypatch)
         value.add_(1)
-        assert len(calls) == 1
+        assert not calls
         host = np.empty_like(expected)
         assert runtime.cudaMemcpy(host.ctypes.data, pointer, host.nbytes, 2) == 0
         np.testing.assert_array_equal(host, expected + 1)
@@ -148,7 +162,7 @@ def test_foreign_dlpack_storage_keeps_external_owner_current(device, storage_dty
         assert isinstance(borrowed, torch.Tensor)
         calls = _count_global_sync(monkeypatch)
         borrowed.add_(1)
-        assert len(calls) == 1
+        assert not calls
         np.testing.assert_array_equal(owner.numpy(), expected + 1)
         np.testing.assert_array_equal(borrowed.numpy(), expected + 1)
 

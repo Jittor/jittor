@@ -523,6 +523,10 @@ void Op::init() {
 
 vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     vector<Var*> pending(written), saved;
+    auto preserve = [&](Var* value) {
+        if (std::find(saved.begin(), saved.end(), value) == saved.end())
+            saved.push_back(value);
+    };
     // A fused optimizer has hundreds of inputs and outputs. Reuse a scan
     // with no pending output or sharing expansion for any written input.
     // This cache belongs only to this read-only walk.
@@ -578,6 +582,17 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
                 if (out->share_src || (!out->mem_ptr && out->liveness.backward.active()))
                     settled = false;
                 if (out->share_src == value) {
+                    if (!writer && out->holder && !out->mem_ptr && !out->is_finished()) {
+                        // A pending snapshot may be held only through views
+                        // of its copy (for example a detached Parameter).
+                        // Preserve the copy, while direct aliases of the
+                        // written storage continue to observe the write.
+                        Var* source = value;
+                        while (source->share_src) source = source->share_src;
+                        if (!source->mem_ptr && !source->is_finished()
+                                && std::find(written.begin(), written.end(), source) == written.end())
+                            preserve(source);
+                    }
                     visit(out);
                 } else if (!out->mem_ptr && out->liveness.backward.active()) {
                     if (out->flag(VarFlags::_needed_by_backward)
@@ -587,8 +602,7 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
                         // into control inputs of a pending update: unlike a
                         // backward-saved activation, a copied gradient can be
                         // rematerialized after that update during capture.
-                        if (std::find(saved.begin(), saved.end(), out) == saved.end())
-                            saved.push_back(out);
+                        preserve(out);
                     } else {
                         // A nonsaved intermediate such as x+1 still connects
                         // the written allocation to a later saved/readout value.

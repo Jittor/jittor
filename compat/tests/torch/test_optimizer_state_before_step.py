@@ -47,12 +47,21 @@ class TestOptimizerStateBeforeStep(unittest.TestCase):
         self.assertEqual(optimizer.state[weight]["step"], 1.0)
         self.assertIn("exp_avg", optimizer.state[weight])
 
-    def test_unknown_parameter_still_raises(self):
+    def test_unregistered_tensor_has_an_independent_state_entry(self):
         parameter = torch.nn.Parameter(torch.ones(3))
         optimizer = torch.optim.SGD([parameter], lr=0.1)
         stranger = torch.nn.Parameter(torch.ones(3))
+        self.assertNotIn(stranger, optimizer.state)
+
+        state = optimizer.state[stranger]
+        self.assertEqual(state, {})
+        state["step"] = 7
+        self.assertIs(optimizer.state[stranger], state)
+        self.assertEqual(optimizer.state[stranger]["step"], 7)
+        self.assertNotIn(parameter, optimizer.state)
+        # Torch cannot assign a checkpoint parameter ID to this tensor.
         with self.assertRaises(KeyError):
-            optimizer.state[stranger]
+            optimizer.state_dict()
 
 
 if __name__ == "__main__":

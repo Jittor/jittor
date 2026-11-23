@@ -613,6 +613,9 @@ UNPROBED_REASONS = {
     # cross-backend cell cannot be formed. Its own coverage is tests/ops/test_fft_op.py.
     "cufft_fft": "no declared CPU FFT to compare against; covered by tests/ops/test_fft_op.py",
     "fused_adamw": "fused optimizer step is compared by tests/optim, not by an op cell",
+    "indexed_storage_write": "CUDA-only captured storage write; the alias and replay "
+                             "contracts are exercised in "
+                             "compat/tests/torch/test_captured_indexed_storage_write.py",
     "write_back": "an in-place write into existing storage, stateful like fused_sgd; "
                   "covered by compat/tests/torch/test_torch_compile_replay.py",
     # Graph plumbing with no standalone value: `tapes` is only reachable from a
