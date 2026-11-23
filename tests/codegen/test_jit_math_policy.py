@@ -51,21 +51,20 @@ def test_cuda_math_compilation_uses_captured_key_not_current_policy():
 
 
 def test_pending_graph_runs_under_old_math_policy():
-    from contextlib import ExitStack as _TestPolicyStack
-    with _TestPolicyStack() as _test_policy_stack:
-        with jt.flag_scope(use_cuda=0, cuda_kernel_math="fast"):
-            result = jt.code([1], "int32", cpu_header=r'''
+    before = jt.flags.cuda_kernel_math
+    with jt.flag_scope(use_cuda=0, cuda_kernel_math="fast"):
+        result = jt.code([1], "int32", cpu_header=r'''
             #include "runtime/jit_policy.h"
         ''', cpu_src=r'''
             @out(0) = jittor::runtime_flag_cuda_kernel_math() == "fast";
         ''')
-            _test_policy_stack.enter_context(jt.runtime.scope(cuda_kernel_math="strict"))
+        with jt.runtime.scope(cuda_kernel_math="strict"):
             assert result.item() == 1
+    assert jt.flags.cuda_kernel_math == before
 
 
 def test_strict_is_the_default_and_default_names_fast():
-    # The compiled-in default, read by a fresh process: an earlier test in
-    # this one may have left a scope's value behind.
+    # Read the compiled default before any runtime scopes can override it.
     import os
     import subprocess
     from _helpers.child_process import child_env, python_executable
