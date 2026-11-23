@@ -924,16 +924,29 @@ def embedding_init(self, num_embeddings, embedding_dim, padding_idx=None,
                    max_norm=None, norm_type=2.0,
                    scale_grad_by_freq=False, sparse=False,
                    _weight=None, _freeze=False, device=None, dtype=None):
+    from jittor._core.var import device_scope_like
+
     _context = get_install_context(jt)
     _torch_target = _context.target_namespace
     native_embedding_init = _context.state["nn_extra_native"]['native_embedding_init']
     target_dtype = dtype if dtype is not None else _torch_target.get_default_dtype()
+    needs_initialization = _weight is None
+    if needs_initialization:
+        # The Torch constructor dispatches initialization through the module
+        # hook once the weight exists. A subclass can defer the initialization.
+        _weight = _torch_target.empty(
+            (num_embeddings, embedding_dim), dtype=target_dtype,
+            device=device, requires_grad=not _freeze,
+        )
     native_embedding_init(
         self, num_embeddings, embedding_dim, padding_idx,
         _dtype_to_str(target_dtype), max_norm, norm_type,
         scale_grad_by_freq, sparse, _weight, _freeze, device,
     )
     self.to(device=device, dtype=target_dtype)
+    if needs_initialization:
+        with device_scope_like(self.weight):
+            self.reset_parameters()
 
 
 
