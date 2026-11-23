@@ -414,12 +414,12 @@ def _standard_gamma_grad_one(alpha, x):
 
 _standard_gamma_grad_vec = np.vectorize(_standard_gamma_grad_one, otypes=[np.float64])
 
-def sample_gamma(alpha, shape):
+def sample_gamma(alpha, shape, *, dtype="float32"):
     r'''Draw Gamma(concentration=alpha, rate=1) with an implicit gradient in alpha.'''
     import jittor as jt
 
     alpha = alpha if isinstance(alpha, jt.Var) else jt.array(alpha)
-    alpha = alpha.float32()
+    alpha = alpha.cast(dtype)
     # broadcast alpha to the requested sample shape (grad flows back, summed)
     alpha_b = alpha if tuple(alpha.shape) == tuple(shape) else alpha.broadcast(shape)
 
@@ -434,7 +434,7 @@ def sample_gamma(alpha, shape):
     def forward_code(xp, data):
         a = _host(data["inputs"][0]).astype(np.float64)
         out = data["outputs"][0]
-        samp = np.random.gamma(np.maximum(a, 1e-8)).astype(np.float32)
+        samp = np.random.gamma(np.maximum(a, 1e-8)).astype(out.dtype)
         xp.copyto(out, xp.asarray(samp) if hasattr(xp, "asarray") else samp)
 
     def backward_code(xp, data):
@@ -442,7 +442,7 @@ def sample_gamma(alpha, shape):
         x = _host(data["f_outputs"][0]).astype(np.float64)
         dout = _host(data["dout"]).astype(np.float64)
         out = data["outputs"][0]
-        res = (dout * _standard_gamma_grad_vec(a, x)).astype(np.float32)
+        res = (dout * _standard_gamma_grad_vec(a, x)).astype(out.dtype)
         xp.copyto(out, xp.asarray(res) if hasattr(xp, "asarray") else res)
 
     return jt.numpy_code([alpha_b.shape], [alpha_b.dtype], [alpha_b],

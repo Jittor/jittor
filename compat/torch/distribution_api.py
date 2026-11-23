@@ -59,15 +59,6 @@ def unsupported_register_kl(*args, **kwargs):
     raise NotImplementedError("this distribution backend has no KL registration support")
 
 
-class Wishart:
-    """Import-compatible placeholder for the unsupported Wishart family."""
-
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "torch.distributions.Wishart: the Wishart distribution is not "
-            "implemented in jittor-compat")
-
-
 class _Constraint:
     def __init__(self, *a, **k): pass
     def check(self, x):

@@ -87,6 +87,7 @@ from .multivariate import (
     LogisticNormal,
     MultivariateNormal,
 )
+from .wishart import Wishart
 
 from .divergence import (
     kl_divergence,
@@ -117,5 +118,6 @@ __all__ = [
     'Dirichlet',
     'LogisticNormal',
     'MultivariateNormal',
+    'Wishart',
     'kl_divergence',
 ]
