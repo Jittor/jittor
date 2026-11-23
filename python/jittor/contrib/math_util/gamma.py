@@ -113,8 +113,7 @@ def _polygamma_cpu(owner, x, n):
     source = f'''
         @alias(x, in0)
         @alias(px, out0)
-        int numel = x_shape0 * x_stride0;
-        for(int i=0;i<numel;i++) {{
+        for(index_t i=0;i<in0->num;i++) {{
         px_p[i] = (({n} % 2) ? 1.0 : -1.0) * ::exp(::lgamma(static_cast<scalar_t>({n}) + 1.0)) *
         zeta<scalar_t>(static_cast<scalar_t>({n} + 1), x_p[i]);
         }}
@@ -146,8 +145,7 @@ class lgamma(Function):
         self.cpu_src = '''
         @alias(x, in0)
         @alias(di_x, out0)
-        int numel = x_shape0 * x_stride0;
-        for(int i=0;i<numel;i++)
+        for(index_t i=0;i<in0->num;i++)
             di_x_p[i] = ::lgamma(x_p[i]);
         '''
         self.cuda_header = _cuda_gamma.LGAMMA_CUDA_HEADER
@@ -341,8 +339,7 @@ class digamma(Function):
         // A wide input is accumulated in double; anything narrower keeps the
         // float path it always had.
         using acc_t = typename std::conditional<(sizeof(x_p[0]) >= 8), double, float>::type;
-        int numel = x_shape0 * x_stride0;
-        for(int i=0;i<numel;i++)
+        for(index_t i=0;i<in0->num;i++)
             di_x_p[i] = calc_digamma<acc_t>((acc_t)x_p[i]);
         '''
         self.cuda_header = _cuda_gamma.DIGAMMA_CUDA_HEADER
