@@ -549,16 +549,21 @@ class _Cholesky(Function):
 
 
 @_batching_aware("single")
-def qr(x):
+def qr(x, mode="reduced"):
     r"""
     do the qr factorization of x in the below formula:
     x = QR where Q has orthonormal columns and R is upper-triangular.
     :param x (...,M,N): forward and backward both work for any M, N (tall/square M>=N and wide M<N).
+    :param mode: reduced, complete, or r. Complete tall and R-only QR are forward-only.
     :return: q (...,M,K), r (...,K,N), K=min(M,N).
     """
     from ..nn import ComplexNumber
     from .complex import complex_qr
+    if mode not in ("reduced", "complete", "r"):
+        raise ValueError(f"Invalid QR decomposition mode {mode!r}")
     if isinstance(x, ComplexNumber):
+        if mode != "reduced":
+            raise NotImplementedError("Legacy complex QR supports reduced mode")
         return complex_qr(x)
     # Native complex takes the real path below with conjugate transposes:
     # its gradient then differentiates again, which the ComplexNumber callback
@@ -567,17 +572,25 @@ def qr(x):
     # execute(); convert back to a tuple to preserve qr()'s established
     # (q, r) return contract (e.g. `isinstance(..., tuple)` checks and
     # code doing `q, r = qr(x)` both keep working identically).
-    q, r = _QR(x)(x)
+    q, r = _QR(x, mode)(x)
     return q, r
 
 
 @_host_lapack
 def _qr_forward(np, data):
     a = data["inputs"][0]
-    q, r = data["outputs"]
-    Q, R = np.linalg.qr(a)
-    np.copyto(q,Q)
-    np.copyto(r,R)
+    outputs = data["outputs"]
+    if len(outputs) == 1:
+        mode = "r"
+    elif a.shape[-2] > a.shape[-1] and outputs[0].shape[-1] == a.shape[-2]:
+        mode = "complete"
+    else:
+        mode = "reduced"
+    factors = np.linalg.qr(a, mode=mode)
+    if mode == "r":
+        factors = (factors,)
+    for output, factor in zip(outputs, factors):
+        np.copyto(output, factor)
 
 
 def _copyltu(X):
@@ -635,18 +648,26 @@ class _QR(Function):
     # `self.r`) is what makes this work.
     #
     # Defined once, with the live input set in `__init__`: see `_SVD`.
-    def __init__(self, x):
+    def __init__(self, x, mode):
         self.x = x
+        self.mode = mode
 
     def execute(self, xt):
         import jittor as jt
-        kernel = select_kernel("linalg_qr", xt)
+        m, n = xt.shape[-2:]
+        batch = list(xt.shape[:-2])
+        k = min(m, n)
+        if self.mode == "r":
+            self.r, = jt.numpy_code([batch + [k, n]], [xt.dtype], [xt], _qr_forward)
+            self.q = self.r.reshape((-1,))[:0]
+            return self.q, self.r
+        complete_tall = self.mode == "complete" and m > n
+        kernel = None if complete_tall else select_kernel("linalg_qr", xt)
         if kernel is not None:
             self.q, self.r = kernel(xt)
         else:
-            m, n = xt.shape[-2:]
-            k = min(m, n)
-            batch = list(xt.shape[:-2])
+            if complete_tall:
+                k = m
             self.q, self.r = jt.numpy_code(
                 [batch + [m, k], batch + [k, n]], [xt.dtype, xt.dtype], [xt], _qr_forward)
         return self.q, self.r
@@ -655,6 +676,10 @@ class _QR(Function):
         import jittor as jt
         x = self.x
         m, n = x.shape[-2:]
+        if self.mode == "r":
+            raise RuntimeError("QR gradients require Q. Use mode='reduced'.")
+        if self.mode == "complete" and m > n:
+            raise RuntimeError("Complete QR is not differentiable when the matrix has more rows than columns")
         q_live, r_live = qr(x)
         q = _reconnect(self.q, q_live)
         r = _reconnect(self.r, r_live)
