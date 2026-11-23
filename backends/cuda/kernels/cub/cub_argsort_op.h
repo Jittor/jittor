@@ -15,9 +15,13 @@ namespace jittor {
 
 struct CubArgsortOp : Op {
     Var* x, * indexes, * offsets, * y, * y_key;
-    bool descending;
+    bool descending, rowwise;
     // @attrs(multiple_outputs)
     CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending=false, NanoString dtype=ns_int32);
+    // @pybind(None)
+    // @attrs(multiple_outputs)
+    CubArgsortOp(Var* x, Var* indexes, Var* offsets, bool descending, NanoString dtype,
+                 bool uniform_rows);
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;
     

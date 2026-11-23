@@ -117,6 +117,28 @@ def _acl_sdpa_kernel(implementation):
 
 
 class TestSDPA(Base):
+    @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
+    def test_explicit_cudnn_backend_accepts_grouped_query_attention(self):
+        import importlib.util
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        if importlib.util.find_spec("cudnn") is None:
+            self.skipTest("needs cuDNN frontend headers")
+
+        steps = np.arange(32, dtype=np.float32)[None, None, :, None] / 32
+        groups = np.array([0, 1], dtype=np.float32)[None, :, None, None]
+        shape = (1, 2, 32, 64)
+        values = np.broadcast_to(steps + groups, shape).copy()
+        expected = np.repeat(np.broadcast_to(steps * 0.5 + groups, shape), 2, axis=1)
+        with torch.no_grad(), sdpa_kernel(SDPBackend.CUDNN_ATTENTION):
+            query = torch.zeros((1, 4, 32, 64), dtype=torch.float16, device="cuda")
+            key = torch.zeros(shape, dtype=torch.float16, device="cuda")
+            value = torch.tensor(values, dtype=torch.float16, device="cuda")
+            out = nn.functional.scaled_dot_product_attention(
+                query, key, value, is_causal=True, enable_gqa=True)
+            self.assertEqual(out.device.type, "cuda")
+            self.ac(out.cpu().numpy(), expected, atol=2e-3, rtol=2e-3)
+
     def test_flash_statistics_follow_the_producer_owner(self):
         from jittor._runtime.state import RuntimeContext, RuntimeState
         owner = ModuleType("attention_stats_owner")

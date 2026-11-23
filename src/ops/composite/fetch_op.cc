@@ -159,12 +159,16 @@ void FetchOp::run() {
             // cannot be recorded on it at all.
             auto source = allocation_device(v->allocator);
             int src = source.index;
+            uint64 src_bit = src >= 0 && src < 64 ? 1ull << src : 0;
             if (src >= 0) {
                 if (src != current_device()) set_current_device(src);
-                if (src < 64) src_devices |= 1ull << src;
             }
-            backend_side_stream_wait_default(
-                BackendStreamKind::Copy, copy_device, src);
+            // All source tensors were produced before this fetch runs. Once
+            // the copy stream waits for a device, the same wait orders that
+            // device's remaining copies in this fetch.
+            if (!src_bit || !(src_devices & src_bit))
+                backend_side_stream_wait_default(BackendStreamKind::Copy, copy_device, src);
+            src_devices |= src_bit;
             new (&allocation) Allocation(&cuda_dual_allocator, v->size);
             // mostly device to device
             // This staging copy is the only read of the source var's own

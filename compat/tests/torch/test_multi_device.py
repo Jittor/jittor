@@ -171,6 +171,7 @@ class TestDeviceObject(_Case):
         self.assertEqual(torch.device("cpu").type, "cpu")
         self.assertIsNone(torch.device("cpu").index)
         self.assertEqual(torch.device("cpu", 0).index, 0)
+        self.assertIsNot(torch.device("cuda", 0), torch.device("cuda", 0))
         self.assertEqual(str(torch.device("cuda:1")), "cuda:1")
         self.assertEqual(str(torch.device("cuda")), "cuda")
         self.assertEqual(repr(torch.device("cuda", 3)),
@@ -614,9 +615,10 @@ class TestMultiDeviceFacade(_Case):
         with torch.cuda.stream(side):
             self.assertEqual(torch.cuda.current_device(), 1)
             self.assertIs(torch.cuda.current_stream(), side)
-            self.assertEqual(torch.ones(2).device.index, 1)
+            self.assertEqual(torch.ones(2).device, torch.device("cpu"))
+            self.assertEqual(torch.ones(2, device="cuda").device, torch.device("cuda:1"))
         self.assertEqual(torch.cuda.current_device(), 0)
-        self.assertEqual(torch.ones(2).device.index, 0)
+        self.assertEqual(torch.ones(2, device="cuda").device, torch.device("cuda:0"))
 
     def test_pin_memory_and_is_pinned_agree(self):
         """`x.pin_memory()` is a host buffer, and `is_pinned()` says so.

@@ -98,6 +98,44 @@ class TestTorchFactoryFidelity(unittest.TestCase):
 
 
 @pytest.mark.parametrize('ambient_cuda', [0, 1])
+def test_lightweight_cuda_empty_retains_layout_and_gradient_policy(monkeypatch, ambient_cuda):
+    if not jt.has_cuda:
+        pytest.skip("real CUDA required for lightweight allocation")
+    from jittor.compat.torch.installers import factories
+
+    original = factories._fresh_cuda_empty
+    optimized = []
+
+    def check(namespace, name, *args):
+        result = original(namespace, name, *args)
+        if result is not None:
+            optimized.append(name)
+        return result
+
+    monkeypatch.setattr(factories, "_fresh_cuda_empty", check)
+    with jt.flag_scope(use_cuda=ambient_cuda, auto_graph_replay=0, backend_fallback="error"):
+        source = torch.ones((3, 5), dtype=torch.float32, device="cuda", requires_grad=True).t()
+        allocated = torch.empty(2, 3, dtype=torch.bfloat16, device="cuda")
+        grad_mode_empty = torch.empty_like(source)
+        with torch.no_grad():
+            strided = torch.empty_like(source)
+        grad_leaf = torch.empty_like(source, requires_grad=True)
+        host = torch.empty_like(source, device="cpu")
+        assert optimized == ["empty", "empty_like"]
+        assert allocated.dtype == torch.bfloat16 and allocated.device.type == "cuda"
+        assert allocated.shape == (2, 3) and not allocated.requires_grad
+        assert strided.is_leaf and not strided.requires_grad and strided.device.type == "cuda"
+        assert strided.stride() == source.stride()
+        assert grad_mode_empty.is_leaf and not grad_mode_empty.requires_grad
+        assert grad_mode_empty.stride() == source.stride()
+        assert grad_leaf.requires_grad and grad_leaf.is_leaf
+        assert host.device.type == "cpu" and host.stride() == source.stride()
+        strided.fill_(2)
+        np.testing.assert_array_equal(strided.cpu().numpy(), np.full((5, 3), 2.0))
+        np.testing.assert_array_equal(source.detach().cpu().numpy(), np.ones((5, 3)))
+
+
+@pytest.mark.parametrize('ambient_cuda', [0, 1])
 @pytest.mark.parametrize('host_allocator', [0, 1])
 @pytest.mark.parametrize('device', ['cpu', 'cuda'])
 @pytest.mark.parametrize('shape', [(), (1,), (8,), (0, 3)])

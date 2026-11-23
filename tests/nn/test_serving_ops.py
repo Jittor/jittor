@@ -176,6 +176,45 @@ class TestRmsNorm(unittest.TestCase):
                     np.testing.assert_array_equal(value.float32().numpy(), reference)
 
 
+    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
+    def test_bfloat16_single_round_wide_rows_with_float32_weight(self):
+        # Exercise a partially filled block and an unrounded float32 weight.
+        hidden = np.tile(np.array([0.25, 0.5, -1.0, 2.0], dtype=np.float32), (9, 1024))
+        weight = np.linspace(0.8, 1.2, hidden.shape[1], dtype=np.float32)
+        normal = hidden / np.sqrt(np.mean(hidden * hidden, axis=-1, keepdims=True) + 1e-6)
+        expected = (normal * weight).copy()
+        bits = expected.view(np.uint32)
+        bits[:] = (bits + 0x7fff + ((bits >> 16) & 1)) & 0xffff0000
+        with jt.flag_scope(use_cuda=1, backend_fallback="error"), jt.no_grad():
+            value = jt.array(hidden).bfloat16()
+            normalized = jt.nn.rms_norm(value, jt.array(weight), round_before_weight=False)
+            normalized.sync(True, False)
+            self.assertEqual(normalized.location(), "device")
+            self.assertEqual(str(normalized.dtype).split(".")[-1], "bfloat16")
+            np.testing.assert_array_equal(normalized.float32().numpy(), expected)
+
+    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
+    def test_bfloat16_wide_residual_norm_rounds_after_scaling(self):
+        data = np.tile(np.array([0.25, -0.5, 1.0, 2.0], dtype=np.float32), (9, 1024))
+        residual = np.float32(0.125)
+        weight = np.float32(0.0625)
+        total = data + residual
+        expected = total / np.sqrt(np.mean(total * total, axis=-1, keepdims=True) + 1e-6)
+        expected *= 1.0 + weight
+        bits = expected.view(np.uint32)
+        bits[:] = (bits + 0x7fff + ((bits >> 16) & 1)) & 0xffff0000
+        with jt.flag_scope(use_cuda=1, backend_fallback="error"), jt.no_grad():
+            value = jt.array(data).bfloat16()
+            carried = jt.full(value.shape, float(residual), dtype=jt.bfloat16)
+            gamma = jt.full((data.shape[1],), float(weight), dtype=jt.bfloat16)
+            result, residual_sum = jt.nn.fused_add_rms_norm(
+                value, carried, gamma, fp32_residual=True, weight_offset=1.0)
+            jt.sync([result, residual_sum], True, False)
+            self.assertEqual(result.location(), "device")
+            self.assertEqual(residual_sum.location(), "device")
+            np.testing.assert_array_equal(result.float32().numpy(), expected)
+            np.testing.assert_array_equal(residual_sum.float32().numpy(), total)
+
     def _check_fp32_residual(self, use_cuda):
         rng = np.random.default_rng(91)
         with jt.flag_scope(use_cuda=use_cuda, backend_fallback="error"), jt.no_grad():

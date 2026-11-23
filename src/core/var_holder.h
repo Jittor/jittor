@@ -379,6 +379,10 @@ struct VarHolder {
         return (int64)var->mem_ptr;
     }
 
+    // Exact physical region and layout, including a pending zero-offset alias.
+    // @pyjt(_same_step_storage)
+    bool same_step_storage(VarHolder* other);
+
     // @pyjt(__get__flags)
     inline int32 flags() {
         return (int32)(var->flags.flags);
@@ -785,6 +789,10 @@ public:
     // @pyjt(_copy_into)
     void copy_into(VarHolder* src, bool sync_src=true);
 
+    // Keep contiguous CUDA bool storage and its physical aliases in place.
+    // @pyjt(_try_fill_bool_cuda)
+    bool try_fill_bool_cuda(bool value);
+
     /**
         No-grad frontend writeback when retained views include materialized
         permutations. Stage the existing view-assignment mathematics and all
@@ -929,6 +937,10 @@ public:
     // in-place update then writes into it rather than beside it.
     // @pyjt(_capture_owned)
     bool capture_owned() { return var->capture_owners != 0; }
+    // Read-only operand for a native kernel that honors the original strides.
+    // @pyjt(_physical_storage_window)
+    VarHolder* physical_storage_window();
+
     // @pyjt(_storage_offset)
     int64 storage_offset() { return var->storage_offset_bytes / var->dsize(); }
     // @pyjt(_storage_strides)
@@ -1101,6 +1113,13 @@ vector<ArrayArgs> fetch_sync(const vector<VarHolder*>& vh);
 void sync_all(bool device_sync=false);
 
 /**
+ * Submit pending asynchronous fetches and deliver completed callbacks.
+ * This does not wait for the device or submit unrelated pending operations.
+ */
+// @pyjt(poll_fetches)
+void poll_fetches();
+
+/**
  * Index of the first of `vars` already computed, or -1. A captured step checks
  * its roots with this before every replay: 1,400 of them for a UNet training
  * step, a Python attribute read each, 0.15 ms a replay.
@@ -1174,6 +1193,12 @@ void materialize_step_readouts(const vector<VarHolder*>& roots, bool device_sync
     the ordinary frontend write path. Successful batches use copy_into's
     reader, alias and mutation checks for every pair, in the supplied order.
  */
+// Stage disjoint inference inputs on their CUDA compute stream. Replay can
+// materialize independent pending sources together before copying their bytes.
+// @pyjt(_try_stage_cuda_step_inputs)
+bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
+                               const vector<VarHolder*>& sources, bool resolve_pending=false);
+
 // @pyjt(_commit_shared_updates)
 bool commit_shared_updates(const vector<VarHolder*>& targets,
                            const vector<VarHolder*>& sources);

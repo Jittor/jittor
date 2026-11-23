@@ -22,6 +22,7 @@ struct CodeOp : Op {
     string cuda_header;
     DataMap data;
     string backend;
+    bool order_bound_outputs = false;
     /**
     Code Operator for easily customized op.
 
@@ -305,6 +306,7 @@ struct CodeOp : Op {
     CodeOp(vector<Var*>&& inputs, vector<Var*>&& outputs, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={}, string&& backend="");
 
 
+    void infer_shape() override;
     const char* name() const override { return "code"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void grads(Var** douts, VarPtr* dins) override;

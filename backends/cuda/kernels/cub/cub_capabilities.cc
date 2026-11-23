@@ -11,7 +11,7 @@ bool supports_where(Var* condition, NanoString) {
 
 RegisterOpCapability<vector<VarPtr>, Var*, Var*, NanoString, bool> arg_reduce(
     accelerator_backend_id(), OpCapability::SegmentedArgReduce, "cub_arg_reduce");
-RegisterOpCapability<vector<VarPtr>, Var*, Var*, Var*, bool, NanoString> argsort(
+RegisterOpCapability<vector<VarPtr>, Var*, Var*, Var*, bool, NanoString, bool> argsort(
     accelerator_backend_id(), OpCapability::SegmentedArgsort, "cub_argsort");
 RegisterOpCapability<vector<VarPtr>, Var*, NanoString> where(
     accelerator_backend_id(), OpCapability::Where, "cub_where", supports_where);
