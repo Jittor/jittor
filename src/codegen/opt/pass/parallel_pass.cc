@@ -450,6 +450,18 @@ void ParallelPass::run() {
         ir->push_front("#include \"type/cuda_limits.h\"", &ir->before);
         ir->push_front("#include <jittor_accelerator.h>", &ir->before);
         max_parallel_depth = op->get_loop_option("max_parallel_depth", 4);
+        // A nest that MergeLoopVar could not flatten -- a [2]*20 state times
+        // broadcasts that each vary along a different axis -- keeps one loop
+        // per axis. Four parallel levels of extent 2 are 16 threads, each
+        // walking the other 2^16 iterations alone (a 50-op fused kernel took
+        // 9.4 ms). Parallelize the whole nest instead, as fuse_transpose does:
+        // the thread budget goes to the innermost loops first, so loops with
+        // large extents are unaffected.
+        if (!op->loop_options->count("max_parallel_depth")) {
+            auto* lva = pm->get_pass<LoopVarAnalyzePass>();
+            if (lva->number_of_ranges > max_parallel_depth)
+                max_parallel_depth = std::min(lva->number_of_ranges, 32);
+        }
     }
     ir->push_back("#pragma GCC diagnostic ignored \"-Wunused-function\"", &ir->before, true);
     ir->push_back(get_thread_range_log_src, &ir->before, true);

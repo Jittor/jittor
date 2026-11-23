@@ -19,7 +19,7 @@ Indexed by symptom:
 | --- | --- |
 | BF16 RMSNorm differs in the last bits when rounding moves across the weight multiply | [RMSNorm rounding order](#rmsnorm-rounding-order) |
 | `1/0` gives `nan`, and a fully masked attention row does not become `nan` | {ref}`IEEE special-value arithmetic <numerics-ieee-en>` |
-| A tiny positive number becomes 0 on CUDA, `log` gives `-inf`, `count_nonzero` is off by one | {ref}`CUDA subnormals <numerics-subnormal-en>` |
+| Under `fast`, a tiny positive number becomes 0, `log` gives `-inf`, `sin`/`exp` are only about 1e-7 accurate | {ref}`CUDA kernel math tiers <numerics-subnormal-en>` |
 | `x.max()` cannot see a NaN in the tensor; the sign of `maximum(-0.0, 0.0)` | {ref}`maximum/minimum vs max/min <numerics-minmax-en>` |
 | float64 `log`/`sin` only have float32 precision on CUDA | {ref}`float64 unary math <numerics-float64-en>` |
 | Only `auto_flush_ops` changed; the loss is bit-identical but the gradients differ | {ref}`convolution algorithm auto-selection <numerics-autotune-en>` |
@@ -79,70 +79,76 @@ present — otherwise "delete the flag and put nothing in its place" would satis
 the first assertion while making things worse.
 
 (numerics-subnormal-en)=
-## CUDA subnormals are flushed to zero
+## CUDA kernels compile under `strict` by default; fast math is opt-in
 
-This is a **decision**, not a defect, but it was not written down anywhere, so
-every device comparison that hits it reads like a defect.
+**Status**: since 2026-11-12 `jt.flags.cuda_kernel_math` defaults to `"strict"`
+(before, kernels were compiled with `--use_fast_math` by default; the old name
+`"default"` now means `"fast"`).
 
-**What you see.** The smallest normal number in float32 is `1.18e-38`. Nonzero
-values below it (subnormals) are preserved per IEEE-754 on CPU and **flushed to
-zero by default** on CUDA:
+**What you see.** Under the default, CUDA treats subnormals per IEEE-754 like CPU
+and NumPy, and `sin`/`exp`/division/square root are the precise implementations.
+Only code that explicitly selects `fast` sees the "CUDA `fast`" column:
 
-| Value | CPU | CUDA default | CUDA `strict` | NumPy |
+| Value | CPU | CUDA default (`strict`) | CUDA `fast` | NumPy |
 | --- | --- | --- | --- | --- |
-| `1e-45` (subnormal) | preserved | **0.0** | preserved | preserved |
-| `1e-40` (subnormal) | preserved | **0.0** | preserved | preserved |
+| `1e-45` (subnormal) | preserved | preserved | **0.0** | preserved |
+| `1e-40` (subnormal) | preserved | preserved | **0.0** | preserved |
 | `1e-30` (normal) | preserved | preserved | preserved | preserved |
 
-**Why.** The root cause is nvcc's `--use_fast_math`, which implies `-ftz=true`.
-The consequence goes beyond the value itself: the input is already zero **before**
-it enters the function, so `log(1e-45)` gives the correct `-103.28` on CPU and
-`-inf` on the CUDA default; `count_nonzero([1e-45])` is 1 on CPU and 0 on the CUDA
-default. A gradient that underflows into the subnormal range is exactly zero on
-CUDA and a tiny nonzero on CPU, so the two devices take different update paths for
-the same model — invisible until someone compares them side by side.
+**Why.** `--use_fast_math` implies `-ftz=true` and swaps `sinf`/`cosf`/`expf` for
+approximate instructions (`__sinf` and friends, about 1e-7 absolute error). The
+flush goes beyond the value itself: under `fast`, `log(1e-45)` is `-inf` and
+`count_nonzero([1e-45])` is 0. The approximate trigonometry shows most clearly in
+quantum circuits: in a 20-qubit, 400-gate TFIM VQE whose gate matrices are built
+from `cos`/`sin` of the parameters, every gate has the same angle, the error
+accumulates in one direction, the state norm drifts to 0.99998, and the energy is
+9.2e-4 from the complex128 reference; under `strict` it is 1.47e-4, the same as
+JAX (PyTorch 1.35e-4). The default is therefore the tier that does not lose
+precision silently.
 
-**What to do.**
+**What to do.** A computation whose fast-math error has been measured and accepted
+opts in explicitly:
 
 ```python
-jt.flags.cuda_kernel_math = "strict"     # 去掉 --use_fast_math
+jt.flags.cuda_kernel_math = "fast"            # the whole process
+with jt.flag_scope(cuda_kernel_math="fast"):  # just this computation
+    ...
 ```
 
-This switch takes effect per process (`src/runtime/jit_policy.cc`), and switching
-drains the pending graph first. Measurements show it **fully restores**
-subnormals: the `strict` column in the table above is measured, not inferred.
+Quantum-circuit libraries, by agreement, enable `fast` for their computations.
+The switch is per process (`src/runtime/jit_policy.cc`) and drains the pending
+graph first; the policy is part of every op's JIT key, so the two tiers never
+share kernels. `JT_CUDA_KERNEL_MATH=fast` sets it at startup. The Torch
+compatibility layer has always used `strict`; `JITTOR_TORCH_KEEP_FAST_MATH=1`
+switches it to `fast` explicitly.
 
-Cost: measured on 2026-09-10 on an RTX 4090, two alternating rounds, minima taken:
+Cost: measured on 2026-11-12 on an RTX 4090 (16M float32, p50):
 
-| Operator (16M float32) | Default | strict |
+| Operator | `strict` | `fast` |
 | --- | --- | --- |
-| `divide` | 218.6 µs | 218.8 µs |
-| `sqrt` | 148.1 | 148.8 |
-| `exp` | 150.0 | 150.2 |
-| `log` | 148.1 | 148.2 |
-| `mul-add` (control, unaffected by fast-math) | 218.6 | 218.6 |
+| `x / (x + 1)` | 163.5 µs | 163.1 µs |
+| `sqrt` / `exp` / `sin` | 156.4 / 156.2 / 156.1 | 156.6 / 156.2 / 155.5 |
+| `sum` | 81.2 | 81.8 |
+| 4-layer fused `sin/exp/sqrt/divide` chain | 239.3 | 241.4 |
+| the same chain, 16 layers | **851.9** | **548.0** |
+| 2048² matmul | 358.8 | 360.5 |
+| one TFIM VQE step (capture / eager) | 81.2 / 141.3 ms | 80.9 / 138.4 ms |
 
-**At this scale the cost is not measurable**: the differences are 0.1–0.8 %, the
-same order as the control group unaffected by fast-math. The reason is that these
-kernels are memory-bandwidth bound, so the ALU cycles fast-math saves were already
-hidden behind memory access.
-
-For compute-dense cases **no conclusion was reached**: after chaining
-`exp/log/sqrt` into 8-layer and 32-layer chains, the difference between the same
-tier across two rounds (1.01e-3 versus 4.16e-4, 2.4×) was **larger** than the
-difference between the two tiers — that is variation in how fusion happens, not an
-effect of the policy. So all we can say here is **not measurable**, not "no cost".
-A reliable number needs a benchmark with a fixed fusion shape. The default was
-therefore left alone: there is no evidence that flushing is the wrong trade-off.
+**Memory-bound kernels show no measurable cost**; **a compute-dense fused chain
+is about 1.55× slower** (16 layers: `strict` drops the approximate instructions
+and multiply-add contraction). That is why `fast` remains an explicit choice: a
+compute-dense workload that has measured its error turns it on. The earlier
+measurement of 2026-09-10 (`divide`/`sqrt`/`exp`/`log` within 0.1–0.8 %) agrees.
 
 **Tests**: [`tests/backends/parity/test_subnormal_contract.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/backends/parity/test_subnormal_contract.py)
-asserts the table above. It is not saying which behavior is more correct, but
-**what the current behavior is**: flushed by default, preserved under `strict`,
-always preserved on CPU. If any of those three changes, that test goes red —
-including for a good change such as "someone made strict the default", in which
-case what should change is this document and that test, not letting them keep
-describing a world that no longer holds. Its teeth are that the two tiers **must
-actually differ**: pointing the `strict` case at the default tier makes it red.
+asserts the table: preserved under the default, flushed under `fast`, preserved by
+an explicit `strict` inside a `fast` region, always preserved on CPU. The two
+tiers **must actually differ** — pointing the `fast` case at the default makes it
+red. [`tests/codegen/test_jit_math_policy.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/codegen/test_jit_math_policy.py)
+asserts in a fresh process that the default is `strict` and that the old name
+`default` means `fast`;
+[`tests/backends/cuda/test_cuda_kernel_math_policy.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/backends/cuda/test_cuda_kernel_math_policy.py)
+asserts that the tiers compile distinct kernels and really round differently.
 
 (numerics-minmax-en)=
 ## maximum/minimum vs max/min: NaN and signed zero
@@ -219,8 +225,10 @@ off" — gone.
 same dtype dispatch to those nineteen entries. The text emitted by the float32
 operand template is **word-for-word identical** to before, so the single-precision
 path is unchanged by construction — measured float32 `log`/`exp`/`sqrt`/`sin`/`tanh`
-on 1,000,000 elements show the same gap to NumPy (about 1e-7, caused by
-`--use_fast_math`, before and after), and 23–25 µs per call, also unchanged.
+on 1,000,000 elements show the same gap to NumPy (then about 1e-7, caused by the
+`--use_fast_math` that was the default at the time; the default is now `strict`,
+see {ref}`CUDA kernel math tiers <numerics-subnormal-en>`), and 23–25 µs per call,
+also unchanged.
 
 **Tests**: [`tests/ops/test_float64_unary_math.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/ops/test_float64_unary_math.py),
 two devices. The inputs are chosen so the float32 answer is **qualitatively** wrong

@@ -85,29 +85,41 @@ class TestSubnormalContractCpu(unittest.TestCase):
 @unittest.skipIf(not _has_cuda(), "no CUDA device")
 class TestSubnormalContractCuda(unittest.TestCase):
 
-    def test_cuda_flushes_subnormals_by_default(self):
+    def test_cuda_keeps_subnormals_by_default(self):
+        """Kernels compile under `strict` unless a workload opts into `fast`."""
+        with jt.flag_scope(use_cuda=1):
+            self.assertEqual(jt.flags.cuda_kernel_math, "strict")
+        for value in SUBNORMALS:
+            with self.subTest(value=value):
+                self.assertNotEqual(
+                    _survives(value, 1), 0.0,
+                    "CUDA flushed %g under the default policy; only "
+                    "cuda_kernel_math='fast' may" % value)
+
+    def test_cuda_fast_math_flushes_subnormals(self):
         for value in SUBNORMALS:
             with self.subTest(value=value):
                 self.assertEqual(
-                    _survives(value, 1, "default"), 0.0,
-                    "CUDA kept %g. That is better than the documented "
-                    "behaviour, not worse -- update this test and "
+                    _survives(value, 1, "fast"), 0.0,
+                    "CUDA kept %g under fast math. That is better than the "
+                    "documented behaviour, not worse -- update this test and "
                     "docs/notes/numerics/numerics-contract.md rather than "
                     "reverting it." % value)
 
     def test_cuda_keeps_normals(self):
         """The flush is limited to subnormals, not to everything small."""
-        self.assertNotEqual(_survives(NORMAL, 1, "default"), 0.0)
+        self.assertNotEqual(_survives(NORMAL, 1, "fast"), 0.0)
 
     def test_strict_policy_restores_subnormals(self):
-        """The escape hatch has to actually work, or the row above is a dead end."""
-        for value in SUBNORMALS:
-            with self.subTest(value=value):
-                self.assertNotEqual(
-                    _survives(value, 1, "strict"), 0.0,
-                    "cuda_kernel_math='strict' did not stop the flush for %g; "
-                    "the policy switch is not reaching the kernel flags"
-                    % value)
+        """An explicit `strict` inside a fast-math region keeps them too."""
+        with jt.flag_scope(cuda_kernel_math="fast"):
+            for value in SUBNORMALS:
+                with self.subTest(value=value):
+                    self.assertNotEqual(
+                        _survives(value, 1, "strict"), 0.0,
+                        "cuda_kernel_math='strict' did not stop the flush for %g; "
+                        "the policy switch is not reaching the kernel flags"
+                        % value)
 
     def test_the_flush_reaches_functions_not_just_values(self):
         """The expensive half: the input is already zero when the op sees it.
@@ -116,7 +128,7 @@ class TestSubnormalContractCuda(unittest.TestCase):
         flushed at the boundary and computed correctly inside, which is not
         what happens and not what callers experience.
         """
-        with jt.flag_scope(use_cuda=1, cuda_kernel_math="default"):
+        with jt.flag_scope(use_cuda=1, cuda_kernel_math="fast"):
             flushed = float(jt.log(jt.array(
                 np.full(8, 1e-45, dtype="float32"))).numpy()[0])
         with jt.flag_scope(use_cuda=1, cuda_kernel_math="strict"):

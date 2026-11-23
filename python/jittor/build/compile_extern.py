@@ -607,6 +607,40 @@ def _setup_fake_cuda_lib(lib_name=None, link=True, extra_flags=""):
 if setup_fake_cuda_lib:
     _setup_fake_cuda_lib()
 
+def _patch_cutt_for_cuda13(cutt_dir):
+    # CUDA 13 removed the clock fields from cudaDeviceProp. Adapt only the
+    # bundled cuTT 1.2 source, which install_cutt freshly extracts each time.
+    replacements = {
+        "cuttplan.cpp": {
+            "  double freq_SM = (double)(prop.clockRate*1000)*(double)prop.multiProcessorCount;": (
+                "  int device = 0, clock_rate = 0;\n"
+                "  cudaCheck(cudaGetDevice(&device));\n"
+                "  cudaCheck(cudaDeviceGetAttribute(&clock_rate, cudaDevAttrClockRate, device));\n"
+                "  double freq_SM = (double)(clock_rate*1000)*(double)prop.multiProcessorCount;"),
+        },
+        "cuttGpuModel.cpp": {
+            '#include "cuttGpuModel.h"': '#include "cuttGpuModel.h"\n#include "CudaUtils.h"',
+            "  double active_SM = prop.multiProcessorCount;": (
+                "  int device = 0, memory_clock_rate = 0, clock_rate = 0;\n"
+                "  cudaCheck(cudaGetDevice(&device));\n"
+                "  cudaCheck(cudaDeviceGetAttribute(&memory_clock_rate, cudaDevAttrMemoryClockRate, device));\n"
+                "  cudaCheck(cudaDeviceGetAttribute(&clock_rate, cudaDevAttrClockRate, device));\n"
+                "  double active_SM = prop.multiProcessorCount;"),
+            "prop.memoryClockRate": "memory_clock_rate",
+            "prop.clockRate": "clock_rate",
+        },
+    }
+    for filename, changes in replacements.items():
+        path = os.path.join(cutt_dir, "src", filename)
+        with open(path, encoding="utf-8") as source:
+            contents = source.read()
+        for old, new in changes.items():
+            if contents.count(old) != 1:
+                raise RuntimeError(f"Unexpected cuTT 1.2 source in {filename}: {old}")
+            contents = contents.replace(old, new)
+        with open(path, "w", encoding="utf-8") as source:
+            source.write(contents)
+
 def install_cutt(root_folder):
     # Modified from: https://github.com/ap-hynninen/cutt
     asset = manifest.CUTT
@@ -631,12 +665,10 @@ def install_cutt(root_folder):
 
             import zipfile
 
-            zf = zipfile.ZipFile(fullname)
-            try:
+            with zipfile.ZipFile(fullname) as zf:
                 zf.extractall(path=root_folder)
-            except RuntimeError:
-                raise
-            zf.close()
+            if is_cuda and int(get_version(nvcc_path)[1:-1].split(".")[0]) >= 13:
+                _patch_cutt_for_cuda13(dirname)
 
         LOG.i("installing cutt...")
         # -Xptxas -dlcm=ca actually not work
@@ -676,8 +708,7 @@ def setup_cutt():
         cutt_path = os.path.join(jit_utils.home(), ".cache", "jittor", "cutt")
 
         make_cache_dir(cutt_path)
-        install_cutt(cutt_path)
-        cutt_home = os.path.join(cutt_path, "cutt-1.2")
+        cutt_home = install_cutt(cutt_path)
         cutt_include_path = os.path.join(cutt_home, "src")
         cutt_lib_path = cache_path
 

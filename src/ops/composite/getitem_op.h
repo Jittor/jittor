@@ -34,6 +34,10 @@ struct GetitemOp : Op {
     
     const char* name() const override { return "getitem"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
+    /** `acc` with this op's gradient added in place of the slice: the
+        gradient grad() returns, plus `acc`, without the zero-filled
+        input-sized buffer and the add that summing the two would take. */
+    VarPtr grad_into(Var* acc, Var* dout);
     void grads(Var** dout, VarPtr* dins) override;
     void infer_shape() override;
 #ifdef HAS_ACCELERATOR

@@ -235,13 +235,31 @@ def flip(x, dim=0, dims=None):
         return result
     dim = set(dim)
 
-    tar_dims = []
-    for i in range(len(x.shape)):
-        if i in dim:
-            tar_dims.append(f"xshape{i}-1-i{i}")
+    # Reindex pays index arithmetic for every dimension it is given, and its
+    # loops are never merged (they carry a bounds branch): a [2]*20 state
+    # flipped on one axis ran 370x slower than the same bytes seen as rank 3.
+    # Adjacent dims flipped alike are one dim flipped (or not) as a whole, and
+    # unit dims flip to themselves, so reindex the coalesced shape instead.
+    shape = list(x.shape)
+    groups = []                   # [extent, flipped]
+    for i, extent in enumerate(shape):
+        if extent == 1:
+            continue
+        flipped = i in dim
+        if groups and groups[-1][1] == flipped:
+            groups[-1][0] *= extent
         else:
-            tar_dims.append(f"i{i}")
-    return x.reindex(x.shape, tar_dims)
+            groups.append([extent, flipped])
+    if len(groups) == len(shape):
+        tar_dims = [f"xshape{i}-1-i{i}" if i in dim else f"i{i}"
+                    for i in range(len(shape))]
+        return x.reindex(shape, tar_dims)
+    if not groups:
+        groups = [[1, False]]
+    merged = [extent for extent, _ in groups]
+    tar_dims = [f"xshape{i}-1-i{i}" if flipped else f"i{i}"
+                for i, (_, flipped) in enumerate(groups)]
+    return x.reshape(merged).reindex(merged, tar_dims).reshape(shape)
 
 
 def unbind(x, dim=0):
@@ -394,7 +412,10 @@ def diag(x,diagonal=0):
         return x.reindex(output_shape,[f'i0+{d}' if diagonal<=0 else 'i0',f'i0+{d}' if diagonal>=0 else 'i0'])
 
 
-def diagonal(x, offset=0, dim1=0, dim2=1):
+def diagonal(input, offset=0, dim1=0, dim2=1):
+    # Torch names the operand ``input`` and accepts it by keyword
+    # (``torch.diagonal(input=x)``); torch.diagonal re-exports this owner.
+    x = input
     def __normalize_dim(d, rank):
         if d < 0:
             d += rank

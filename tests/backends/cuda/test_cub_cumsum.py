@@ -178,6 +178,29 @@ class TestCubToolchain(unittest.TestCase):
             np.testing.assert_array_equal(scan.numpy(), np.cumsum(values, axis=-1))
             np.testing.assert_array_equal(grad.numpy(), np.cumsum(upstream[:, ::-1], axis=-1)[:, ::-1])
 
+    @jt.flag_scope(use_cuda=1)
+    def test_long_single_row_float32_stays_at_element_rounding(self):
+        # `jt.cumsum` flattens a 1-D scan to one row. The per-row block kernel
+        # scanned it on one block and added the running prefix before each
+        # tile's scan, so every later partial was rounded at the magnitude of
+        # the whole prefix: a normalized 2**22-element probability vector was
+        # 1.3e-6 off its float64 CDF (a 24-qubit sampling CDF drew 8170 of
+        # 8192 shots off the exact index). The device-wide scan stays near
+        # float32 rounding of each output, forward and reversed.
+        rng = np.random.RandomState(5)
+        p = rng.rand(1 << 22).astype("float32")
+        p /= p.sum()
+        want = np.cumsum(p.astype("float64"))
+        with forbid_backend_fallbacks():
+            x = jt.array(p)
+            forward = jt.cumsum(x, 0)
+            reverse = jt.cumsum(x[::-1], 0)
+            jt.sync_all()
+            self.assertEqual(forward.location(), "device")
+        self.assertLess(np.abs(forward.numpy().astype("float64") - want).max(), 6e-7)
+        want_reverse = np.cumsum(p[::-1].astype("float64"))
+        self.assertLess(np.abs(reverse.numpy().astype("float64") - want_reverse).max(), 6e-7)
+
 
 if __name__ == "__main__":
     unittest.main()

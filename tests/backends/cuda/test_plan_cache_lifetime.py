@@ -199,4 +199,4 @@ def test_cutt_plan_banks_own_devices_and_survive_targeted_clear(cache_libraries)
         assert cutt.cutt_plan_destroy_failures() == 0
     finally:
         cutt.cutt_clear_plan_cache()
-        cutt.cutt_set_plan_cache_size(64)
+        cutt.cutt_set_plan_cache_size(4096)

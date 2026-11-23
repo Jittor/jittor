@@ -62,7 +62,7 @@ void lu_solve_batch(cusolverDnHandle_t handle, cudaStream_t stream, int64 batch,
                                                rhs + m * (int64)n * k, status_dev + 2 * m + 1));
     }
     if (graph_capture_recording) {
-        graph_capture_saw_host_work = true;
+        graph_capture_refuse("LU solve reads its factorization statuses back on the host");
         return;
     }
     vector<int> status(2 * batch);

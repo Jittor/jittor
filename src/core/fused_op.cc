@@ -27,6 +27,21 @@ std::ostream& operator<<(std::ostream& os, const VarInfo& vi) {
     return os << vi.var << " type:" << vi.type;
 }
 
+// A fused kernel reads a strided or broadcast operand by recovering each axis'
+// coordinate from the flat index, one division and one modulo per axis that
+// moves it, for every such operand of every op. Over a [2]*20 state with
+// broadcasts along different axes that was ~700 runtime divisions per element
+// (a 50-op Ising-energy backward: 9.3 ms for 2^20 floats). With the shapes
+// compiled in, every divisor is a constant -- a power of two here, so a shift
+// -- at the price of one kernel per distinct shape, which a high-rank operand
+// (a state, not a batch) rarely varies.
+EXTERN_LIB int para_opt_level;
+
+DEFINE_FLAG(int, auto_compile_shapes_rank, 8,
+    "Compile the shapes into an accelerator kernel that reads a strided or "
+    "broadcast operand of at least this rank, so its index arithmetic folds. "
+    "0 disables it.");
+
 int FusedOp::get_loop_option(const string& key, const int& _default) {
     auto iter = loop_options->find(key);
     return iter == loop_options->end() ? _default : iter->second;
@@ -297,6 +312,30 @@ void FusedOp::prepare_fused_key(JK& jk) {
     jk << "«JIT:1";
     const bool on_accelerator = uniform
         ? execution_backend_for(requested) != BackendId::Cpu : executes_on_accelerator();
+    // SharedReducePass reads the thread split's `rangeN` names, which compiled
+    // shapes replace with numbers; a kernel it will rewrite keeps its ranges.
+    const int shared_reduce = get_loop_option("use_shared_reduce", 1);
+    const bool shared_reduce_runs = shared_reduce != 0
+        && (para_opt_level >= 4 || shared_reduce == 2);
+    if (on_accelerator && auto_compile_shapes_rank > 0 && !shared_reduce_runs
+            && !get_loop_option("compile_shapes")) {
+        bool high_rank_strided = false;
+        for (auto& vi : vars)
+            if (vi.type == 0 && (int)vi.var->shape.size() >= auto_compile_shapes_rank
+                    && !vi.var->is_contiguous()) {
+                high_rank_strided = true;
+                break;
+            }
+        if (high_rank_strided) {
+            if (loop_options_origin != &loop_options_merged) {
+                for (auto& kv : *loop_options_origin) loop_options_merged.emplace(kv);
+                loop_options_origin = &loop_options_merged;
+            }
+            loop_options_merged["compile_shapes"] = 1;
+            if (loop_options == &loop_options_tuned) loop_options_tuned["compile_shapes"] = 1;
+            else loop_options = loop_options_origin;
+        }
+    }
     if (!on_accelerator) {
         // only cpu
         jk << "«JIT_cpu:1";

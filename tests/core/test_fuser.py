@@ -263,24 +263,69 @@ class TestScalarChainsFuse(JittorTestCase):
     def test_a_number_in_scalar_arithmetic_is_not_a_kernel(self, device):
         s = jt.array(np.array([3.0], "float32"))
         s.sync()
-        # `s * 2` and `> 1`, each with its number; four kernels before.
+        # `s * 2` and `> 1`, each with its number; four kernels before, two
+        # before scalar chains fused, one now.
         count, value = kernel_launches(lambda: bool(s * 2 > 1))
         self.assertTrue(value)
-        self.assertEqual(count, 2)
+        self.assertEqual(count, 1)
         count, value = kernel_launches(lambda: (s - 1).item())
         self.assertEqual(value, 2.0)
         self.assertEqual(count, 1)
 
-    def test_scalar_ops_do_not_chain(self, device):
-        # Only numbers fuse: scalar ops stay one kernel each, so a loop that
-        # accumulates scalars cannot grow a kernel per chain length -- and a
-        # scalar Var someone holds is still computed (`test_for_fuse`).
+    def test_scalar_ops_chain_into_one_kernel(self, device):
+        # One-element elementwise ops fuse (`fuse_scalar_chains`): a gate
+        # built from one parameter was a kernel per op.
         s = jt.array(np.array([3.0], "float32"))
         t = jt.array(np.array([4.0], "float32"))
         jt.sync([s, t])
         count, value = kernel_launches(lambda: ((s * t) * t).item())
         self.assertEqual(value, 48.0)
+        self.assertEqual(count, 1)
+        with jt.flag_scope(fuse_scalar_chains=0):
+            count, value = kernel_launches(lambda: ((s * t) * t).item())
+        self.assertEqual(value, 48.0)
         self.assertEqual(count, 2)
+
+    def test_a_scalar_chain_feeds_a_tiny_broadcast(self, device):
+        p = jt.array(np.array([0.1, 0.2, 0.3], "float32"))
+        eye = jt.array(np.eye(2, dtype="float32"))
+        flip = jt.array(np.array([[0, 1], [1, 0]], "float32"))
+        jt.sync([p, eye, flip])
+
+        def gate():
+            h = p[1] / 2
+            return (jt.cos(h) * eye + jt.sin(h) * flip).numpy()
+        count, value = kernel_launches(gate)
+        np.testing.assert_allclose(
+            value, np.cos(0.1) * np.eye(2) + np.sin(0.1) * np.array([[0, 1], [1, 0]]),
+            rtol=1e-5)
+        with jt.flag_scope(fuse_scalar_chains=0):
+            unfused, _ = kernel_launches(gate)
+        self.assertLess(count, unfused)
+
+    def test_a_scalar_accumulation_loop_is_bounded(self, device):
+        # `x += a[i]` in a loop: the chain fuses, but `fuse_tiny_op_limit` bounds
+        # each kernel, so the kernels a loop compiles do not grow with its
+        # length (the Python numbers it reads join through their own rule).
+        a = jt.array(np.arange(200, dtype="float32"))
+        a.sync()
+
+        def accumulate(n):
+            x = 0
+            for i in range(n):
+                x = x + a[i] * 2
+            return x.item()
+        widest = []
+        for n in (100, 200):
+            with jt.profile_scope() as rep:
+                value = accumulate(n)
+                jt.sync_all(True)
+            self.assertEqual(value, float(n * (n - 1)))
+            widest.append(max(row[0].count("opkey") for row in rep[1:]))
+        self.assertEqual(widest[0], widest[1])
+        self.assertLessEqual(widest[1], 2 * jt.flags.fuse_tiny_op_limit)
+        count, _ = kernel_launches(lambda: accumulate(100))
+        self.assertLess(count, 100)
 
     def test_a_reduction_still_writes_its_scalar_out(self, device):
         u = jt.array(np.arange(240).astype("int32"))
@@ -301,7 +346,44 @@ class TestScalarChainsFuse(JittorTestCase):
         self.assertEqual(count, 2)
 
 
+class TestGateGradientsStayBounded(JittorTestCase):
+    """Forty gates built from one parameter each, differentiated together.
+
+    Their backward passes share only constants, and with the per-slice
+    gradients stacked into one scatter nothing kept them apart: the fuser made
+    one ~700-operator kernel the code generator never finished. Every kernel
+    now stays under `fuse_op_hard_limit`, and the gradient is the vectorised one.
+    """
+
+    def test_forty_gates(self, device):
+        K = 40
+        eye = jt.array(np.eye(2).astype(np.complex64))
+        flip = jt.array(np.array([[0, 1], [1, 0]], np.complex64))
+        neg_i = jt.array(np.complex64(-1j))
+        theta = np.linspace(0.1, 1.2, K).astype(np.float32)
+        p = jt.array(theta)
+
+        def gates(p, per_slice):
+            if per_slice:
+                acc = 0
+                for k in range(K):
+                    h = p[k].astype("complex64") / 2
+                    u = jt.cos(h) * eye + neg_i * jt.sin(h) * flip
+                    acc = acc + (u * u).real.sum()
+                return acc
+            h = (p.astype("complex64") / 2).reshape(K, 1, 1)
+            u = jt.cos(h) * eye + neg_i * jt.sin(h) * flip
+            return (u * u).real.sum()
+        want = jt.grad(gates(p, False), p).numpy()
+        with jt.profile_scope() as rep:
+            got = jt.grad(gates(p, True), p).numpy()
+        np.testing.assert_allclose(got, want, rtol=1e-4, atol=1e-5)
+        widest = max(row[0].count("opkey") for row in rep[1:])
+        self.assertLessEqual(widest, jt.flags.fuse_op_hard_limit)
+
+
 instantiate_device_type_tests(TestScalarChainsFuse, globals())
+instantiate_device_type_tests(TestGateGradientsStayBounded, globals())
 
 
 if __name__ == "__main__":

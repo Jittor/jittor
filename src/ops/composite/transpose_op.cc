@@ -4,6 +4,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include "ops/composite/transpose_op.h"
 #include "ops/layout_propagation.h"
 #include "core/var.h"
@@ -98,6 +99,67 @@ TransposeOp::TransposeOp(Var* x, NanoVector axes_) : x(x), axes(axes_) {
         auto dense = contiguous_storage(x);
         forward(make_transpose(dense, axes));
         return;
+    }
+    // Axes that stay adjacent and in order are one axis to every transpose
+    // kernel, and unit axes none: each kernel below pays per-element index
+    // arithmetic (and cuTT a plan) per axis it is given. Moving one axis of
+    // a [2]*20 state to the front is a rank-2 or rank-3 transpose of the
+    // same bytes; at rank 20 it ran at a third of copy bandwidth.
+    if (!as_view && x->num >= 0 && axes.size() == xdim && xdim > 2) {
+        int pos[NanoVector::max_tensor_rank];
+        int nonunit = 0;
+        for (uint i=0; i<xdim; i++)
+            pos[i] = x->shape[i] == 1 ? -1 : nonunit++;
+        int64 seen = 0;
+        bool valid = true;
+        for (uint i=0; i<xdim && valid; i++) {
+            int a = axes[i];
+            valid = a >= 0 && a < (int)xdim && !(seen >> a & 1);
+            if (valid) seen |= 1ll << a;
+        }
+        // An invalid permutation is infer_shape's to report.
+        if (valid) {
+            // start[g]: first non-unit input axis of output group g; groups in
+            // output order are runs of consecutive non-unit input axes.
+            vector<int> start, len;
+            int prev = -2;
+            for (uint i=0; i<xdim; i++) {
+                int p = pos[axes[i]];
+                if (p < 0) continue;
+                if (p == prev + 1 && start.size()) len.back()++;
+                else { start.push_back(p); len.push_back(1); }
+                prev = p;
+            }
+            int groups = start.size();
+            // Only down to a few axes: those are the kernels every such
+            // transpose shares (moving one axis is two or three), while a
+            // reduction to some intermediate rank would compile one more
+            // kernel per rank for little gain.
+            if (groups >= 2 && groups <= 4 && groups < (int)xdim) {
+                vector<int64> extent(nonunit);
+                for (uint i=0; i<xdim; i++)
+                    if (pos[i] >= 0) extent[pos[i]] = x->shape[i];
+                vector<int> order(groups);
+                for (int g=0; g<groups; g++) order[g] = g;
+                std::sort(order.begin(), order.end(),
+                          [&](int a, int b) { return start[a] < start[b]; });
+                NanoVector in_shape, red_axes, out_shape;
+                vector<int> rank_of(groups);
+                for (int r=0; r<groups; r++) {
+                    int g = order[r];
+                    rank_of[g] = r;
+                    int64 size = 1;
+                    for (int k=0; k<len[g]; k++) size *= extent[start[g] + k];
+                    in_shape.push_back(size);
+                }
+                for (int g=0; g<groups; g++) red_axes.push_back(rank_of[g]);
+                for (uint i=0; i<xdim; i++) out_shape.push_back(x->shape[axes[i]]);
+                static auto make_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
+                auto reduced = make_transpose(make_reshape(x, in_shape), red_axes);
+                forward(make_reshape(reduced, out_shape));
+                return;
+            }
+        }
     }
     if (!as_view && (axes.size() < xdim || (axes.size() == xdim && axes[xdim-1]==xdim-1))) {
         static VarPtr(*fuse_transpose)(Var*, NanoVector) = get_op_info("fuse_transpose").get_constructor<VarPtr, Var*, NanoVector>();

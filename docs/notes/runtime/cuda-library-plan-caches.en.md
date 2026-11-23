@@ -7,15 +7,29 @@ before executing, and a single construction costs several milliseconds, so Jitto
 caches them. This page explains **who owns** these caches, **when** they are
 released, and how to observe them from Python.
 
-## One per device, evicted in creation order
+## One per device, least recently used evicted
 
 The cuFFT and cuTT caches are **partitioned by CUDA device**: each device's cache
-owns its own compute stream, creation-order queue and plan handles, and the
+owns its own compute stream, use-order queue and plan handles, and the
 capacity limit is counted per device. Shapes changing endlessly on one device
-**never evict another device's working set**. Cache keys are POD structs, and
-once the limit is exceeded the earliest-created plan is evicted. The shared
-implementation lives in `backends/cuda/include/device_plan_cache.h`
-(`DevicePlanCache`).
+**never evict another device's working set**. Cache keys are POD structs; a hit
+moves its entry to the back, and once the limit is exceeded the **least recently
+used** plan is evicted. The shared implementation lives in
+`backends/cuda/include/device_plan_cache.h` (`DevicePlanCache`).
+
+- **cuTT holds up to 4096 plans by default.** One quantum-circuit step meets well
+  over a hundred distinct (shape, perm) keys; the old limit of 64 rebuilt plans
+  on every step (about 200 us each). A plan is a few small device arrays.
+- **Nothing is evicted while a device graph is being recorded.** Destroying a
+  plan waits for its stream, and a recording stream cannot be synchronized
+  (`cudaErrorStreamCaptureUnsupported`). During a recording the cache may grow
+  past its limit; the next miss after the recording trims it back.
+- **A cuTT miss inside a recording refuses that recording, retryably.**
+  `cuttPlan` copies the plan from pageable memory, which a graph cannot contain;
+  the recording is refused with `graph_capture_refuse(..., retryable)` and the
+  limit doubles (once per recording). The replay that follows builds the plan,
+  and `capture_step`/`GraphReplay` record again later. A final refusal reason is
+  available as `StepCapture.graph_refused`.
 
 - **The cache takes ownership as soon as the SDK construction succeeds.** cuFFT
   uses `cufftCreate` followed by `cufftMakePlanMany`, so configuring the
@@ -110,7 +124,7 @@ convolution produced wrong values.
 ## Maintenance reference
 
 - Status: implemented
-- Last reviewed: 2026-10-05 (baseline `e3c369acb`)
+- Last reviewed: 2026-11-12 (baseline `031a50b94`)
 - Owner: CUDA library maintainers
 - Review trigger: compute-stream ownership, backend teardown order, or changes to the
   cuFFT/cuTT/cuDNN plan APIs

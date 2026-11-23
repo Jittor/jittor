@@ -5,7 +5,7 @@
 namespace jittor {
 
 struct RuntimeJitPolicy {
-    string cuda_kernel_math = "default";
+    string cuda_kernel_math = "strict";
     int float32_matmul_precision_tier = 0;
     int float32_cudnn_precision_tier = 0;
 };

@@ -116,7 +116,9 @@ void CuttTransposeOp::jit_run() {
         key.permutation[i] = reverse[i];
     }
     LOGvvv << "Run cutt_transpose with key rank=" >> dim >> " dsize=" >> key.dsize;
-    cuttExecute(cutt_get_plan(key), xp, yp);
+    cuttHandle plan;
+    if (!cutt_get_plan(key, plan)) return;
+    cuttExecute(plan, xp, yp);
 }
 #endif // JIT
 

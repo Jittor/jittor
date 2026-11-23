@@ -99,7 +99,16 @@ void WarpReducePass::run() {
         } catch (const std::exception&) {
             return;
         }
-        if (!shuffleable(var->dtype())) return;
+        // A complex sum shuffles its two float parts: without the warp tree
+        // every lane's partial went to the output by two float atomics, and a
+        // complex64 sum of 2^20 terms was 200x less accurate than the float
+        // sum of the same magnitudes (9e-6 against 4e-8).
+        bool complex = var->dtype() == ns_complex64 || var->dtype() == ns_complex128;
+        if (!shuffleable(var->dtype()) && !complex) return;
+        string shuffle = complex
+            ? " { _wr_value.real += __shfl_down_sync(_wr_mask, _wr_value.real, _wr_off);"
+              " _wr_value.imag += __shfl_down_sync(_wr_mask, _wr_value.imag, _wr_off); }"
+            : " _wr_value += __shfl_down_sync(_wr_mask, _wr_value, _wr_off);";
         string fallback = "atomicAdd(&(" + pointer + "[" + index + "]), " + value + ");";
         code =
             "{ auto _wr_mask = __activemask();"
@@ -112,7 +121,7 @@ void WarpReducePass::run() {
             " if (_wr_mask == 0xffffffffu && __all_sync(_wr_mask,"
             " " + index + " == __shfl_sync(_wr_mask, " + index + ", 0))) {"
             " for (int _wr_off = 16; _wr_off > 0; _wr_off >>= 1)"
-            " _wr_value += __shfl_down_sync(_wr_mask, _wr_value, _wr_off);"
+            + shuffle +
             " if ((_wr_tid & 31) == 0)"
             " atomicAdd(&(" + pointer + "[" + index + "]), _wr_value);"
             " } else " + fallback + " }";

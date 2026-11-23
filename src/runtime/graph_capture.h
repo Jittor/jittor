@@ -173,6 +173,24 @@ bool graph_capture_launches_nothing(Op* op);
 EXTERN_LIB bool graph_capture_recording;
 EXTERN_LIB bool graph_capture_saw_host_work;
 
+/**
+    Refuse the open recording, saying why. Like setting
+    `graph_capture_saw_host_work`, but the reason reaches the caller through
+    `graph_capture_refusal`. A `retryable` refusal is one a later recording of
+    the same step may not hit again -- work that only the first run of a key
+    does, such as building a library plan -- so the caller may record again.
+    The first reason of a recording is kept.
+ */
+void graph_capture_refuse(const string& reason, bool retryable=false);
+
+/**
+    Why the last recording was refused by work inside it, or "" if it was not:
+    the reason given to `graph_capture_refuse`, or a generic one for host work.
+    A reason starting with "retryable: " may succeed on a later recording.
+ */
+// @pyjt(graph_capture_refusal)
+string graph_capture_refusal();
+
 /** Whether any leaf bound to `graph` has moved since. */
 // @pyjt(graph_leaves_moved)
 bool graph_leaves_moved(int64 graph);
