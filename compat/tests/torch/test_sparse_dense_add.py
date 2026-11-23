@@ -121,3 +121,38 @@ def test_no_grad_sparse_write_preserves_allocation_and_alias(device, operation, 
         np.testing.assert_array_equal(actual.cpu().numpy(), expected)
         np.testing.assert_array_equal(alias.cpu().numpy(), expected)
     assert jt.core.backend_fallback_count() == before
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_coalesce_and_sparse_mm_preserve_duplicate_value_gradients(device):
+    if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("no usable CUDA in this build")
+    with jt.flag_scope(use_cuda=int(device == "cuda"), backend_fallback="error"):
+        values = torch.tensor([-4., 2., 3.], device=device, requires_grad=True)
+        rhs = torch.tensor([[1., 2.], [3., 4.]], device=device, requires_grad=True)
+        sparse = torch.sparse_coo_tensor([[1, 0, 0], [0, 1, 1]], values, (2, 2))
+        assert not sparse.is_coalesced() and sparse._nnz() == 3
+        coalesced = sparse.coalesce()
+        assert coalesced.is_coalesced() and coalesced._nnz() == 2
+        assert coalesced.coalesce() is coalesced
+        np.testing.assert_array_equal(coalesced.indices().cpu().numpy(), [[0, 1], [1, 0]])
+        np.testing.assert_array_equal(coalesced.values().detach().cpu().numpy(), [5., -4.])
+        output = torch.sparse.mm(coalesced, rhs)
+        assert output.device == rhs.device
+        np.testing.assert_array_equal(output.detach().cpu().numpy(), [[15., 20.], [-4., -8.]])
+        output.sum().backward()
+        np.testing.assert_array_equal(values.grad.cpu().numpy(), [3., 7., 7.])
+        np.testing.assert_array_equal(rhs.grad.cpu().numpy(), [[-4., -4.], [5., 5.]])
+
+
+def test_empty_coo_matrix_product_exposes_zero_gradients():
+    values = torch.empty(0, requires_grad=True)
+    indices = torch.empty((2, 0), dtype=torch.long)
+    rhs = torch.tensor([[float("nan"), 2.], [3., 4.]], requires_grad=True)
+    sparse = torch.sparse_coo_tensor(indices, values, (2, 2))
+    assert sparse.is_coalesced() and sparse._nnz() == 0
+    output = torch.sparse.mm(sparse, rhs)
+    np.testing.assert_array_equal(output.detach().numpy(), [[0., 0.], [0., 0.]])
+    output.sum().backward()
+    assert values.grad is not None and values.grad.numel() == 0
+    np.testing.assert_array_equal(rhs.grad.numpy(), [[0., 0.], [0., 0.]])
