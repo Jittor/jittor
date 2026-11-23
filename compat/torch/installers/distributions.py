@@ -1,6 +1,6 @@
 """Distribution installation binds stable implementation owners and module paths."""
 import types as _types_dist
-from ..distribution_api import CONSTRAINTS, _Constraint, Gumbel, RelaxedBernoulli, RelaxedOneHotCategorical, unsupported_register_kl
+from ..distribution_api import CONSTRAINTS, _Constraint, Gumbel, RelaxedBernoulli, RelaxedOneHotCategorical, Wishart, unsupported_register_kl
 from ..fidelity import Fidelity, register_api_bindings
 
 
@@ -32,18 +32,7 @@ def _install_distribution_surface(ctx):
     _dist_utils.broadcast_all = getattr(_dist, "broadcast_all")
     _modules["torch.distributions.utils"] = _dist_utils
     _dist.utils = _dist_utils
-    # torch.distributions.Wishart: declared, not implemented. peft imports it
-    # at module scope for the Monteclora sampler; the Wishart sampler needs a
-    # Bartlett decomposition and multivariate gamma functions this layer does
-    # not carry, so construction raises instead of sampling wrongly.
     _wishart_module = _types_dist.ModuleType("torch.distributions.wishart")
-
-    class Wishart:
-        def __init__(self, *args, **kwargs):
-            raise NotImplementedError(
-                "torch.distributions.Wishart: the Wishart distribution is not "
-                "implemented in jittor-compat")
-
     _wishart_module.Wishart = Wishart
     _dist.Wishart = Wishart
     _dist.wishart = _wishart_module

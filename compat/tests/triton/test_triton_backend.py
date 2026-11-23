@@ -675,8 +675,11 @@ class TestOptionalPointerPacking(unittest.TestCase):
             self.assertEqual(len(compiled), 4)
             self.assertEqual(len(bridge._COMPILE_CACHE), 4)
             # bind.apply_defaults must specialize an omitted optional value,
-            # too, and reuse the already compiled None/None variant.
-            bridge._run(kernel, (src, None, 3, out, 8, 7), {"BLOCK": 64}, (1,))
+            # too, and reuse the already compiled None/None variant without
+            # resolving the compiler again.
+            with mock.patch.object(bridge, "real_triton", side_effect=AssertionError(
+                    "warm specializations should not resolve the compiler")):
+                bridge._run(kernel, (src, None, 3, out, 8, 7), {"BLOCK": 64}, (1,))
             self.assertEqual(len(compiled), 4)
             self.assertIsNone(launches[-1][0].constants["tail"])
 

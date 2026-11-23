@@ -8,6 +8,7 @@ import weakref
 import os
 import jittor as jt
 from jittor import nn
+from jittor._core.hooks import _RemovableHandle
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
@@ -19,6 +20,7 @@ from ...types import _DEVICE_CTX_STACK, _device_is_cpu, _device_is_cuda, _is_ind
 from ....diagnostics import EXPECTED, swallowed
 from ....stub_policy import unimplemented as _unimplemented
 from .... import fsdp_hooks as _fsdp_hooks
+from .lazy import is_lazy
 
 def _pipelining_from_environment():
     """Initial execution-pipelining threshold, read from the environment.
@@ -47,6 +49,39 @@ _ORIG_MODULE_NAMED_MODULES = nn.Module.named_modules
 _ORIG_MODULE_LOAD_STATE_DICT = nn.Module.load_state_dict
 _ORIG_MODULE_PARAMETERS = nn.Module.parameters
 _ORIG_MODULE_PARAMETER_MAP = nn.Module.__dict__["_parameters"].fget
+_ORIG_MODULE_GETATTR = nn.Module.__getattr__
+_ORIG_MODULE_REGISTER_BACKWARD_HOOK = nn.Module.register_backward_hook
+_ORIG_MODULE_REMOVE_BACKWARD_HOOK = nn.Module.remove_backward_hook
+
+_TORCH_HOOK_TABLES = {
+    "_forward_hooks", "_forward_pre_hooks", "_backward_hooks", "_backward_pre_hooks",
+}
+
+
+def _getattr(self, name):
+    if name in _TORCH_HOOK_TABLES:
+        return self._hooks(name, create=True)
+    return _ORIG_MODULE_GETATTR(self, name)
+
+
+def _register_backward_hook(self, hook):
+    native_handle = _ORIG_MODULE_REGISTER_BACKWARD_HOOK(self, hook)
+    hooks = self._hooks("_backward_hooks", create=True)
+    key = next(nn.Module._hook_serial)
+    hooks[key] = hook
+
+    def remove():
+        native_handle.remove()
+        hooks.pop(key, None)
+
+    return _RemovableHandle(remove)
+
+
+def _remove_backward_hook(self):
+    _ORIG_MODULE_REMOVE_BACKWARD_HOOK(self)
+    hooks = self._hooks("_backward_hooks")
+    if hooks is not None:
+        hooks.clear()
 
 
 # torch models define forward(); jittor calls execute(). Make the base
@@ -486,6 +521,8 @@ def _state_dict_key_diff(root, state_dict):
         if not isinstance(target, jt.Var):
             continue
         src = state_dict[key]
+        if is_lazy(src) and is_lazy(target):
+            continue
         src_shape = getattr(src, "shape", None)
         if src_shape is None:
             continue
@@ -542,6 +579,9 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
                 trainable.add(n)
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _load_state_dict: for n, p in self.named_parameters():", exc)
+    # A lazy-to-lazy checkpoint carries no tensor contents to copy.
+    if any(is_lazy(value) for value in state_dict.values()):
+        state_dict = {key: value for key, value in state_dict.items() if not is_lazy(value)}
     load_state = state_dict if assign else _preserve_target_dtypes_for_load(self, state_dict)
     if unexpected:
         # jittor's load_parameters LOG.w's on every unknown key; drop them
@@ -1190,6 +1230,32 @@ def _get_submodule(self, target):
     return mod
 
 
+def _set_submodule(self, target, module, strict=False):
+    """Replace or add a child module at a dotted path."""
+    if not target:
+        raise ValueError("Cannot set a submodule without a target name")
+    if not isinstance(module, jt.Module):
+        raise ValueError("module must be an instance of torch.nn.Module")
+    parts = target.split(".")
+    parent = self
+    for name in parts[:-1]:
+        parent = getattr(parent, name)
+        if not isinstance(parent, jt.Module):
+            raise AttributeError(f"{name!r} is not an nn.Module")
+    name = parts[-1]
+    if not name:
+        raise AttributeError("The submodule name is empty")
+    try:
+        previous = getattr(parent, name)
+    except AttributeError:
+        if strict:
+            raise
+    else:
+        if not isinstance(previous, jt.Module):
+            raise AttributeError(f"{name!r} is not an nn.Module")
+    setattr(parent, name, module)
+
+
 def _get_parameter(self, target):
     """Torch's ``get_parameter``: a parameter, never a buffer."""
     mod = self
@@ -1528,6 +1594,9 @@ def _install_module_methods(nn, registry=None):
     M.named_parameters = _named_parameters
     M.named_buffers = _named_buffers
     M.named_modules = _named_modules
+    M.__getattr__ = _getattr
+    M.register_backward_hook = _register_backward_hook
+    M.remove_backward_hook = _remove_backward_hook
     M.load_state_dict = _load_state_dict
     M._parameters = property(_parameter_map_get, _parameter_map_set)
     M.parameters = _parameters
@@ -1552,6 +1621,8 @@ def _install_module_methods(nn, registry=None):
         M.buffers = _buffers
     if not hasattr(M, "get_submodule"):
         M.get_submodule = _get_submodule
+    if not hasattr(M, "set_submodule"):
+        M.set_submodule = _set_submodule
     if not hasattr(M, "get_parameter"):
         M.get_parameter = _get_parameter
     if not hasattr(M, "get_buffer"):
@@ -1567,7 +1638,7 @@ def _install_module_methods(nn, registry=None):
         M._non_persistent_buffers_set = property(_nonpersist_set)
 
     register_api_bindings(M, 'torch.nn.Module',
-        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
+        ('__setattr__', 'buffers', 'cpu', 'cuda', 'double', 'eval', 'execute', 'float', 'forward', 'get_buffer', 'get_execution_pipelining', 'get_parameter', 'get_submodule', 'half', 'load_state_dict', 'named_buffers', 'named_modules', 'named_parameters', 'npu', 'parameters', 'register_parameter', 'set_execution_pipelining', 'set_submodule', 'to', 'to_empty', 'train', 'type', 'zero_grad') + tuple(()),
         Fidelity.APPROXIMATE, 'Module state and parameter management over native holders; Torch lazy iterator, meta, and layout semantics are approximate')
     register_api_bindings(M, 'torch.nn.Module', ('extra_repr',),
         Fidelity.EXACT, 'Torch Module default extra_repr is empty; explicit subclass overrides retain normal MRO precedence')

@@ -280,7 +280,9 @@ CHECK(0 == cudaGetLastError());
             # their faster register-resident forward, but use the bounded
             # streaming reduction for backward. Aligned ILP paths such as
             # 65536 remain faster with the register kernel.
-            if length > 49152 and ILP == 1:
+            # The streaming kernel loads the saved output and cotangent
+            # using their own types. The vectorized loads assume one type.
+            if grad_x.dtype != x.dtype or (length > 49152 and ILP == 1):
                 return _softmax_streaming_grad(x, grad_x, 512, log)
             return jt.code(x.shape, x.dtype, [x, grad_x], cuda_header=f'''
 #include <{library_resource('cub', 'home')}cub/cub.cuh>
@@ -345,6 +347,120 @@ CHECK(0 == cudaGetLastError());
 """
 
 
+_ROW_FLOOR_INPUT = r"""
+__device__ __forceinline__ static float softmax_floor_input(float value, float floor) {
+    return value < floor ? -CUDART_INF_F : value;
+}
+"""
+
+
+# Large vocabularies with only a few rows underutilize a one-block-per-row
+# reduction. Compute per-tile maxima and sums, then scale independent tiles.
+_TILED_FP32_SOFTMAX = r"""
+__global__ static void tiled_softmax_stats(const float* input, float* stats, int width, int tiles) {
+    using Reduce = cub::BlockReduce<float, 256>;
+    __shared__ typename Reduce::TempStorage scratch;
+    __shared__ float maximum;
+    const int row = blockIdx.y;
+    const int start = blockIdx.x * 4096;
+    const int end = min(start + 4096, width);
+    const int row_base = row * width;
+    float partial_max = -CUDART_INF_F;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x)
+        partial_max = fmaxf(partial_max, input[row_base + i]);
+    #if CUB_VERSION >= 300000
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cuda::maximum<>{});
+    #else
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cub::Max());
+    #endif
+    if (threadIdx.x == 0) maximum = reduced_max;
+    __syncthreads();
+    float partial_sum = 0.0f;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
+        const float value = input[row_base + i];
+        // A fully masked tile contributes zero; a NaN still propagates.
+        partial_sum += (maximum == -CUDART_INF_F && value == maximum) ? 0.0f : expf(value - maximum);
+    }
+    const float reduced_sum = Reduce(scratch).Sum(partial_sum);
+    if (threadIdx.x == 0) {
+        int index = 2 * (row * tiles + blockIdx.x);
+        stats[index] = maximum;
+        stats[index + 1] = reduced_sum;
+    }
+}
+__global__ static void tiled_softmax_out(const float* input, const float* stats, float* output,
+                                         int width, int tiles) {
+    using Reduce = cub::BlockReduce<float, 256>;
+    __shared__ typename Reduce::TempStorage scratch;
+    __shared__ float maximum, total;
+    const int row = blockIdx.y;
+    const int base = 2 * row * tiles;
+    const int start = blockIdx.x * 4096;
+    const int end = min(start + 4096, width);
+    float partial_max = -CUDART_INF_F;
+    for (int i = threadIdx.x; i < tiles; i += blockDim.x)
+        partial_max = fmaxf(partial_max, stats[base + 2*i]);
+    #if CUB_VERSION >= 300000
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cuda::maximum<>{});
+    #else
+    const float reduced_max = Reduce(scratch).Reduce(partial_max, cub::Max());
+    #endif
+    if (threadIdx.x == 0) maximum = reduced_max;
+    __syncthreads();
+    float partial_sum = 0.0f;
+    for (int i = threadIdx.x; i < tiles; i += blockDim.x) {
+        const float tile_max = stats[base + 2*i];
+        const float tile_sum = stats[base + 2*i + 1];
+        partial_sum += tile_max == -CUDART_INF_F ? tile_sum : tile_sum * expf(tile_max - maximum);
+    }
+    const float reduced_sum = Reduce(scratch).Sum(partial_sum);
+    if (threadIdx.x == 0) total = reduced_sum;
+    __syncthreads();
+    const float reciprocal = 1.0f / total;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
+        const int index = row * width + i;
+        output[index] = expf(input[index] - maximum) * reciprocal;
+    }
+}
+const int width = in0_shape1;
+const int tiles = (width + 4095) / 4096;
+auto stream = reinterpret_cast<cudaStream_t>(
+    backend_stream({BackendId::Cuda, current_device()}, BackendStreamKind::Compute).handle);
+tiled_softmax_stats<<<dim3(tiles, in0_shape0), 256, 0, stream>>>(in0_p, out1_p, width, tiles);
+tiled_softmax_out<<<dim3(tiles, in0_shape0), 256, 0, stream>>>(in0_p, out1_p, out0_p, width, tiles);
+CHECK(cudaGetLastError() == cudaSuccess);
+"""
+
+
+@lru_cache(maxsize=2)
+def _wide_tiled_softmax_source(masked):
+    if not masked:
+        return _TILED_FP32_SOFTMAX
+    source = _TILED_FP32_SOFTMAX.replace("const float* input, ", "const float* input, const float* floors, ")
+    source = source.replace("    const int row = blockIdx.y;",
+                            "    const int row = blockIdx.y;\n    const float floor = floors[row];")
+    source = source.replace("input[row_base + i]", "softmax_floor_input(input[row_base + i], floor)")
+    source = source.replace("input[index]", "softmax_floor_input(input[index], floor)")
+    source = source.replace("(in0_p, out1_p,", "(in0_p, in1_p, out1_p,")
+    return source
+
+
+def _wide_tiled_softmax(rows, floors=None):
+    count, width = rows.shape
+    tiles = (width + 4095) // 4096
+    masked = floors is not None
+    output, _ = jt.code(
+        [rows.shape, (count, 2 * tiles)], [rows.dtype, rows.dtype],
+        [rows, floors] if masked else [rows],
+        cuda_header=f'''
+#include <{library_resource('cub', 'home')}cub/cub.cuh>
+#include <math_constants.h>
+#include "runtime/device.h"
+''' + (_ROW_FLOOR_INPUT if masked else ""),
+        cuda_src=_wide_tiled_softmax_source(masked), backend="cuda")
+    return output
+
+
 @lru_cache(maxsize=8)
 def _softmax_streaming_cls(threads, log=False, zero_all_neg_inf=False):
     # Large vocabularies cannot keep a complete row in registers without
@@ -396,6 +512,11 @@ CHECK(0 == cudaGetLastError());
 
     class CodeSoftmaxStreaming(jt.Function):
         def execute(self, x):
+            if (not log and not zero_all_neg_inf and str(x.dtype) in ("float32", "torch.float32")
+                    and x.ndim == 2 and 0 < x.shape[0] <= 8 and x.shape[1] <= 262144
+                    and x._storage_is_contiguous()):
+                self.save_vars = _wide_tiled_softmax(x)
+                return self.save_vars
             self.save_vars = jt.code(
                 x.shape,
                 x.dtype,
@@ -412,6 +533,21 @@ CHECK(0 == cudaGetLastError());
             x = self.save_vars
             return _softmax_streaming_grad(x, grad_x, threads, log)
     return CodeSoftmaxStreaming
+
+
+def _softmax_fp32_with_row_floor(rows, floors):
+    """Apply a row floor before ordinary FP32 softmax, without a masked copy."""
+    if (not jt.flags.use_cuda or not jt.flags.no_grad
+            or rows.ndim != 2 or not 0 < rows.shape[0] <= 8
+            or not 65536 < rows.shape[1] <= 262144
+            or tuple(floors.shape) != (rows.shape[0], 1)
+            or str(rows.dtype) not in ("float32", "torch.float32")
+            or rows.dtype != floors.dtype
+            or rows.placement_backend != 1 or floors.placement_backend != 1
+            or rows.device_id != floors.device_id
+            or not rows._storage_is_contiguous() or not floors._storage_is_contiguous()):
+        return None
+    return _wide_tiled_softmax(rows, floors)
 
 
 @optional_kernel("nn.softmax", "cuda", dtypes=("float16", "bfloat16", "float32"),

@@ -4,6 +4,7 @@ import sys as _sys
 
 import jittor as jt
 
+from ...diagnostics import swallowed
 from ...permissive import install_permissive_package
 from ...transaction import active_transaction
 from ..fidelity import Fidelity, register_fidelity
@@ -380,10 +381,6 @@ class _BroadcastingList:
         return typing.List
 
 
-def onnx_export(*args, **kwargs):
-    raise NotImplementedError("ONNX export is not supported on the jittor torch shim")
-
-
 def _api_rsqrt(x):
     return 1.0 / jt.sqrt(x)
 
@@ -598,10 +595,6 @@ def _api_func_ns_functionalize(fn, **k):
     return fn
 
 
-def _api_onnx_is_in_onnx_export():
-    return False
-
-
 def _api_onnx_parse_args(*arg_descriptors, **kwargs):
     return _identity
 
@@ -661,7 +654,7 @@ def _register_fx_fidelity(graph_module_cls):
         "Reports membership in the side-effectful callable registry.")
 
 
-_COMPILER_PLACEHOLDERS = frozenset((OptimizedModule, onnx_export))
+_COMPILER_PLACEHOLDERS = frozenset((OptimizedModule,))
 
 
 def _register_compiler_fidelity(ctx):
@@ -860,8 +853,8 @@ def install(ctx):
                 strides = tuple(int(step) for step in tensor.stride())
                 if strides == (h * w * c, 1, w * c, c):
                     return g.channels_last
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            swallowed("torch._prims_common.suggest_memory_format: read shape and strides", exc)
         return g.contiguous_format
 
     def _prims_make_contiguous_strides_for(shape, memory_format=None):
@@ -1141,8 +1134,11 @@ def install_parity(ctx):
     annotations.Future = typing.Any
     g.jit.annotations = annotations
 
+    from .. import onnx as onnx_implementation
+
     onnx = module("torch.onnx")
-    onnx.is_in_onnx_export = _api_onnx_is_in_onnx_export
+    onnx.is_in_onnx_export = onnx_implementation.is_in_onnx_export
+    onnx.TrainingMode = onnx_implementation.TrainingMode
     # These names let libraries register export metadata during import.
     symbolic_helper = module("torch.onnx.symbolic_helper")
     symbolic_helper.parse_args = _api_onnx_parse_args
@@ -1157,7 +1153,11 @@ def install_parity(ctx):
         onnx._jittor_custom_symbolics = {}
         onnx.register_custom_op_symbolic = _api_onnx_register_custom_op_symbolic
     _bind_missing(onnx, "TensorProtoDataType", _TensorProtoDataType)
-    onnx.export = onnx_export
+    onnx.export = onnx_implementation.export
+    register_fidelity(
+        "torch.onnx.export", onnx.export, Fidelity.APPROXIMATE,
+        "Inference export via FX for supported tensor operations and modules.",
+    )
     onnx.OperatorExportTypes = getattr(
         onnx,
         "OperatorExportTypes",

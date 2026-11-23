@@ -106,6 +106,40 @@ class TestTensorInplaceStorage:
             np.testing.assert_array_equal(root.cpu().numpy(), [1, 2, 3, 4])
             np.testing.assert_array_equal(alias.cpu().numpy(), [2, 4])
 
+    def test_mul_preserves_low_precision_storage_with_float32_rhs(self, device):
+        for dtype in (torch.float16, torch.bfloat16):
+            root = torch.tensor([1, 2, 3, 4], dtype=dtype, device=device)
+            target = root[1::2]
+            alias = target.detach()
+            pointer = target.data_ptr()
+            scale = torch.tensor([0.5, 3], dtype=torch.float32, device=device)
+
+            assert target.mul_(scale) is target
+            assert target.dtype == alias.dtype == dtype
+            assert target.data_ptr() == alias.data_ptr() == pointer
+            np.testing.assert_array_equal(alias.float().cpu().numpy(), [1, 12])
+            np.testing.assert_array_equal(root.float().cpu().numpy(), [1, 1, 3, 12])
+
+    def test_mul_preserves_mixed_precision_gradients(self, device):
+        base = torch.tensor([1, 2], dtype=torch.float16, device=device, requires_grad=True)
+        scale = torch.tensor([0.5, 3], dtype=torch.float32, device=device, requires_grad=True)
+
+        value = base.clone().mul_(scale)
+        assert value.dtype == torch.float16
+        value.sum().backward()
+
+        assert base.grad.dtype == torch.float16 and scale.grad.dtype == torch.float32
+        np.testing.assert_array_equal(base.grad.float().cpu().numpy(), [0.5, 3])
+        np.testing.assert_array_equal(scale.grad.cpu().numpy(), [1, 2])
+
+    def test_mul_rejects_incompatible_result_without_mutating(self, device):
+        value = torch.tensor([2], dtype=torch.int32, device=device)
+        with pytest.raises(RuntimeError, match="cast"):
+            value.mul_(torch.tensor([0.5], dtype=torch.float32, device=device))
+        with pytest.raises(RuntimeError, match="shape"):
+            value.mul_(torch.tensor([1, 2], dtype=torch.int32, device=device))
+        np.testing.assert_array_equal(value.cpu().numpy(), [2])
+
     def test_low_precision_slice_mutations_preserve_aliases(self, device):
         for dtype in (torch.float16, torch.bfloat16):
             for operation, expected in ((lambda x: x.copy_(torch.tensor([6., 8.], device=device)), [6., 8.]),

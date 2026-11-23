@@ -458,6 +458,17 @@ class TestCuda13Toolchain(unittest.TestCase):
         self.assertEqual(stack.include_dirs("cudnn"), [str(cudnn / "include")])
         self.assertEqual(stack.lib_dirs("cudnn"), [str(cudnn / "lib")])
         self.assertEqual(stack.preload_paths("cudnn"), [str(library)])
+
+    def test_optional_nvrtc_uses_the_selected_cuda13_prefix(self):
+        stack = self.resolve()
+        self.assertEqual(stack.preload_paths("nvrtc"), [])
+        library = self.root / "lib/libnvrtc.so.13"
+        library.touch()
+        unselected = self.site / "nvidia/cuda_nvrtc/lib/libnvrtc.so"
+        unselected.parent.mkdir(parents=True)
+        unselected.touch()
+        self.assertEqual(stack.find_library("nvrtc"), str(library))
+        self.assertEqual(stack.preload_paths("nvrtc"), [str(library)])
         # The optional math library does not move the pinned toolchain.
         self.assertEqual(stack.component_dir("cuda_nvcc"), str(self.root))
         self.assertEqual(stack.lib_dirs(), [str(self.root / "lib")])

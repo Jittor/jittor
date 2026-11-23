@@ -9,7 +9,7 @@ from ..context import get_install_context
 from ..types import _make_cpu_resident, _make_cuda_resident, _move_to_cuda_index
 from ...diagnostics import EXPECTED, swallowed
 from .security import _portable_pickle_load
-from .torch_archive import _load_torch_pt
+from .torch_archive import _load_parameter, _load_torch_pt, _meta_tensor
 
 _VAR_TAG = "__jt_var__"
 
@@ -203,6 +203,12 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
         with tensor_frontend(g.Var):
             return _preserve_parameter(obj, _make_cpu_resident(
                 obj, inplace=isinstance(obj, g.nn.Parameter)), g)
+    if name == "meta":
+        if obj.is_meta:
+            return obj
+        moved = _meta_tensor(tuple(obj.shape), obj.dtype, obj.stride(),
+                             obj.storage_offset(), obj.requires_grad)
+        return _load_parameter(moved, obj.requires_grad) if isinstance(obj, g.nn.Parameter) else moved
     if name in ("cuda", "npu", "gpu"):
         # `placement_backend` is 0 for an *explicitly CPU-placed* Var and > 0 for
         # an accelerator one (`types.py` reads it the same way: `== 0` is CPU).
@@ -244,7 +250,7 @@ def _apply_map_location(obj, map_location, _depth=0, source_devices=None):
         "torch.load(map_location=%r)" % (name,),
         "leave the tensors on whichever device happens to be current "
         "instead of the requested one",
-        "Only 'cpu' and 'cuda' map_location targets are supported.",
+        "Supported map_location targets include 'cpu', 'cuda' and 'meta'.",
         stub_result=obj)
 
 
@@ -299,7 +305,8 @@ def load(f, map_location=None, pickle_module=None, *, weights_only=None,
     if _zip:
         source_devices = {}
         return _apply_map_location(
-            _load_torch_pt(f, weights_only=weights_only, source_devices=source_devices),
+            _load_torch_pt(f, weights_only=weights_only, source_devices=source_devices,
+                           map_location=map_location),
             map_location, source_devices=source_devices)
     if path is not None and path.lower().endswith((".pth", ".pt", ".bin")) and _is_legacy_torch_pickle(path):
         if weights_only:

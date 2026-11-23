@@ -35,6 +35,8 @@ with jt.flag_scope(use_cuda=1):
 
 Upstream JIT specialization and persistent compiler caching, constexpr arguments, compiler options, callable grids, and multiple outputs are supported. Noncontiguous inputs retain their actual strides: the kernel must explicitly accept and use them. A linear-addressing kernel does not automatically support arbitrary layouts. Autotuners, interpreters, and kernels requiring global scratch are not yet accepted.
 
+Use `jittor.kernels.BoundOutput(buffer)` in a Triton output slot to update an existing CUDA allocation during inference. Bound outputs keep their addresses, and the executor orders the writes after existing readers. The call accepts fresh `TensorSpec` outputs alongside bound outputs. This path prepares the launch before CUDA recording and requires `jt.no_grad()`, contiguous CUDA inputs on the current device, ready nonempty bound buffers, and positive grid dimensions. Output buffers cannot overlap each other. If a kernel also reads a buffer it writes, it must avoid races within the launch.
+
 ## TileLang
 
 Keep the upstream `T.prim_func`, select the TVM-FFI execution backend, and pass all outputs explicitly:

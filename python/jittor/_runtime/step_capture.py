@@ -717,16 +717,17 @@ class StepCapture:
         cap.exact = self._exact_random
         working = _WorkingSet()
         before = jt.flags.keep_graph
-        # The step is built whole, as a replay runs it. CUDA's auto-flush
-        # otherwise launches what is pending every `auto_flush_ops` operators,
-        # and a kept graph frees each piece after its last use, so the sync
-        # below computed those pieces again: a Qwen3 training step ran its
-        # forward two and a half times, and its peak with them.
+        # Build the whole step before submitting it. Both automatic flush
+        # paths can submit while a kept graph is being built, including a
+        # module-boundary flush that falls back to running inline. Submitting
+        # a partial capture can make the final sync repeat state updates.
         flush_before = jt.flags.auto_flush_ops
+        async_flush_before = jt.flags.async_flush_ops
         _ACTIVE = cap
         _core._state_capture_begin()
         jt.flags.keep_graph = 2
         jt.flags.auto_flush_ops = 0
+        jt.flags.async_flush_ops = 0
         records = []
         readbacks = _core._host_readback_count()
         try:
@@ -736,10 +737,13 @@ class StepCapture:
                     cap.refused = cap.refused or (
                         "the step contains an opaque operation: " + barriers[0])
         finally:
-            records = _core._state_capture_end()
-            jt.flags.auto_flush_ops = flush_before
-            jt.flags.keep_graph = before
-            _ACTIVE = None
+            try:
+                records = _core._state_capture_end()
+            finally:
+                jt.flags.async_flush_ops = async_flush_before
+                jt.flags.auto_flush_ops = flush_before
+                jt.flags.keep_graph = before
+                _ACTIVE = None
         if _core._host_readback_count() != readbacks:
             cap.refused = cap.refused or (
                 "the step read a value back to the host, so its path depends on "
@@ -754,7 +758,11 @@ class StepCapture:
         # Dense inside the graph, since every replay copies these as raw bytes
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]
-        records = [(holder, old, _dense(new)) for holder, old, new in records]
+        # An indexed write can legitimately share a strided persistent cache.
+        # Densifying it would turn that in-place write into a whole-cache copy
+        # on each replay.
+        records = [(holder, old, new if new._same_step_storage(old) else _dense(new))
+                   for holder, old, new in records]
         published = {}
         for parameter in cap.published_gradients:
             gradient = getattr(parameter, "_torch_grad", None)
@@ -856,6 +864,16 @@ class StepCapture:
         return cap, self._results(cap, outputs, (args, kwargs))
 
     def _results(self, cap, sources, call_inputs):
+        if jt.flags.no_grad and self._cuda_graph and sources is self._graph_out:
+            outs = []
+            for value, source in zip(cap.outputs, sources):
+                out = _core._try_snapshot_cuda_step_output(source)
+                if out is None:
+                    out = _empty_like(value)
+                    out._copy_into(source, False)
+                outs.append(out)
+            return _rebuild(cap.template, outs)
+
         outs = [_empty_like(o) for o in cap.outputs]
         with jt.no_grad():
             for out, src in zip(outs, sources):
@@ -1043,13 +1061,16 @@ class StepCapture:
                 jt.flags.keep_graph = outer_keep
             if preserved:
                 self.stats["preserved"] = self.stats.get("preserved", 0) + 1
-            with jt.no_grad():
-                if not dynamic_prefix:
-                    # Dynamic replay already staged these arguments before
-                    # shape preflight. Keep that same feed through the hooks
-                    # and the final prefix check, rather than copying it twice.
-                    for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
-                        captured._copy_into(given)
+            if not dynamic_prefix:
+                # Dynamic replay has already staged the inputs for preflight.
+                given = _input_vars((args, kwargs), [])
+                staged = (jt.flags.no_grad and self._cuda_graph
+                          and not self._graph_has_host_prefix and not cap.prologue
+                          and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))
+                if not staged:
+                    with jt.no_grad():
+                        for target, source in zip(cap.inputs, given):
+                            target._copy_into(source)
             if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
                 if self._graph_has_host_prefix:
                     # The pool scope above already orders shared temporary

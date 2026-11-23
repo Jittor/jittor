@@ -32,6 +32,7 @@ struct AutogradAliasState {
     bool inherit_requires_grad = false;
     bool created_without_grad = false;
     bool recorded_view_history = false;
+    bool custom_backward_view = false;
     // Source eligibility of the real producer built by the latest refresh.
     bool source_edge_enabled = false;
     bool requires_grad() const {

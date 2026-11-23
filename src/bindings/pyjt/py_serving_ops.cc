@@ -2,9 +2,12 @@
 #include "bindings/pyjt/py_converter.h"
 #include "bindings/pyjt/py_tensor_frontend.h"
 #include "core/var_holder.h"
+#include "mem/allocator.h"
 #include "ops/composite/code_op.h"
 #include "ops/op_register.h"
 #include "runtime/dispatch_context.h"
+#include "runtime/executor_entry.h"
+#include "runtime/graph_capture.h"
 #include <cmath>
 
 namespace jittor {
@@ -60,6 +63,30 @@ PyObject* try_rms_norm_cuda(PyObject* x, PyObject* weight, PyObject* epsilon,
         input->dtype(), {input, gamma}, "", {}, "", string(text, length), {}, "", {}, "")));
     result->stop_grad();
     return to_py_object<VarHolder*>(result.release());
+}
+
+PyObject* try_snapshot_cuda_step_output(PyObject* source) {
+    if (!no_grad || state_capture_active() || graph_capture_active()
+            || !PyObject_TypeCheck(source, &PyjtVarHolder.ht_type))
+        Py_RETURN_NONE;
+    Var* value = GET_RAW_PTR(VarHolder, source)->var;
+    if (!value->is_finished() || !value->is_contiguous() || !value->size
+            || !value->mem_ptr || !value->allocator || value->flag(VarFlags::_execution_failed))
+        Py_RETURN_NONE;
+    const Device device = allocation_device(value->allocator);
+    if (device.backend != BackendId::Cuda) Py_RETURN_NONE;
+
+    PyTensorFrontendScope frontend(Py_TYPE(source));
+    ExecutorEntryScope entry;
+    VarPtr snapshot(value->shape, value->dtype());
+    snapshot->placement = value->placement;
+    snapshot->device_id = value->device_id;
+    snapshot->set_stop_grad();
+    // The snapshot is owned by the caller and may outlive the graph pool.
+    CHECK(snapshot->alloc(get_regular_allocator(device, false)));
+    backend_copy(snapshot->mem_ptr, device, value->mem_ptr, device, value->size, true);
+    snapshot->finish_pending_liveness();
+    return to_py_object<VarHolder*>(new VarHolder(move(snapshot)));
 }
 
 } // namespace jittor

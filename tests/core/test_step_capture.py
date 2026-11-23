@@ -52,6 +52,41 @@ def _make_step(w, b, lr, readback=False):
 @_test_preserve_policy(jt, "keep_graph", "auto_graph_replay")
 class TestStepCapture(unittest.TestCase):
 
+    def test_step_capture_disables_both_automatic_submission_paths(self):
+        active_policy = []
+
+        def step(x):
+            if jt.core._state_capture_active():
+                active_policy.append((jt.flags.auto_flush_ops, jt.flags.async_flush_ops))
+            return x * 2
+
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=3, async_flush_ops=2):
+            runner = jt.capture_step(step, record=False)
+            try:
+                for value in (1., 2., 3.):
+                    np.testing.assert_array_equal(runner(jt.array([value])).numpy(), [2 * value])
+                    self.assertEqual((jt.flags.auto_flush_ops, jt.flags.async_flush_ops), (3, 2))
+                self.assertEqual(active_policy, [(0, 0)])
+                self.assertEqual(runner.stats["captured"], 1)
+            finally:
+                runner.invalidate()
+
+    def test_step_capture_restores_automatic_submission_after_an_exception(self):
+        def step(x):
+            if jt.core._state_capture_active():
+                raise ValueError("capture failure")
+            return x * 2
+
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=3, async_flush_ops=2):
+            runner = jt.capture_step(step, record=False)
+            try:
+                runner(jt.array([1.])).sync()
+                with self.assertRaisesRegex(ValueError, "capture failure"):
+                    runner(jt.array([2.]))
+                self.assertEqual((jt.flags.auto_flush_ops, jt.flags.async_flush_ops), (3, 2))
+            finally:
+                runner.invalidate()
+
     def test_mixed_signatures_return_preupdate_gradient_readouts(self):
         parameter = jt.array([1., 2.]).start_grad()
 
@@ -111,6 +146,17 @@ class TestStepCapture(unittest.TestCase):
                     self.assertGreaterEqual(captured.stats["replayed"], 4)
                 finally:
                     captured.invalidate()
+
+    def test_pending_snapshot_survives_write_through_wide_alias_ring(self):
+        with jt.no_grad(), jt.flag_scope(lazy_execution=1):
+            state = jt.full((8,), 2.0)
+            jt.sync([state])
+            aliases = [jt.core._ready_step_gradient(state) for _ in range(64)]
+            snapshot = aliases[-1].copy().stop_grad()
+            self.assertFalse(snapshot.is_finished)
+            aliases[0]._copy_into(jt.full((8,), 5.0))
+            np.testing.assert_array_equal(snapshot.numpy(), np.full(8, 2.0))
+            np.testing.assert_array_equal(aliases[-1].numpy(), np.full(8, 5.0))
 
     def test_mixed_readouts_keep_only_the_differentiable_replay_boundary(self):
         parameter = jt.array([2., 3.])
@@ -471,6 +517,80 @@ class TestStepCaptureCuda(TestStepCapture):
 
     def tearDown(self):
         jt.flags.use_cuda = self._use_cuda
+
+    def test_cuda_output_snapshots_survive_replay_and_invalidation(self):
+        with jt.no_grad():
+            captured = jt.capture_step(lambda value: value * 2 + 1)
+            feeds = [jt.array(np.arange(16, dtype=np.float32) + i) for i in range(10)]
+            jt.sync(feeds, False, False)
+            results = [captured(feed) for feed in feeds]
+            self.assertGreater(captured.stats["graph"], 0)
+            captured.invalidate()
+            for i, value in enumerate(results):
+                self.assertFalse(value.requires_grad)
+                np.testing.assert_array_equal(value.numpy(), 2 * (np.arange(16) + i) + 1)
+
+    def test_cuda_wide_sort_softmax_scan_preserve_each_replayed_output(self):
+        def step(values):
+            indices, ordered = jt.argsort(values, dim=-1, stable=True)
+            return indices, jt.cumsum(jt.nn.softmax(ordered, dim=-1), dim=-1)
+
+        rng = np.random.default_rng(415)
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, backend_fallback="error"):
+            feeds = [jt.array(rng.normal(0, 3, (2, 65537)).astype(np.float16).astype(np.float32))
+                     for _ in range(8)]
+            jt.sync(feeds, False, False)
+            expected = []
+            for feed in feeds:
+                values = step(feed)
+                jt.sync(values, True, False)
+                expected.append(tuple(value.numpy().copy() for value in values))
+
+            graph_count = jt.core.graph_launch_count()
+            captured = jt.capture_step(step)
+            try:
+                actual = [captured(feed) for feed in feeds]
+                jt.sync_all(True)
+                self.assertGreater(jt.core.graph_launch_count(), graph_count)
+                self.assertGreater(captured.stats["graph"], 0)
+            finally:
+                captured.invalidate()
+            for (indices, prefix), (want_indices, want_prefix) in zip(actual, expected, strict=True):
+                self.assertEqual(prefix.location(), "device")
+                np.testing.assert_array_equal(indices.numpy(), want_indices)
+                np.testing.assert_allclose(prefix.numpy(), want_prefix, rtol=2e-6, atol=8e-7)
+
+    def test_cuda_input_staging_checks_aliases_before_copying(self):
+        with jt.no_grad():
+            first = jt.array(np.arange(8, dtype=np.float32))
+            second = jt.array(np.arange(8, dtype=np.float32) + 10)
+            source = jt.array(np.arange(8, dtype=np.float32) + 20)
+            jt.sync([first, second, source], False, False)
+            self.assertFalse(jt.core._try_stage_cuda_step_inputs([first, second], [source, first]))
+            np.testing.assert_array_equal(first.numpy(), np.arange(8))
+            np.testing.assert_array_equal(second.numpy(), np.arange(8) + 10)
+            self.assertTrue(jt.core._try_stage_cuda_step_inputs([second], [source]))
+            np.testing.assert_array_equal(second.numpy(), np.arange(8) + 20)
+
+    def test_cuda_input_staging_materializes_only_independent_sources(self):
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=0,
+                                         async_flush_ops=0, backend_fallback="error"):
+            data = np.arange(8, dtype=np.float32)
+            first, second, seed = (jt.array(data + i) for i in (0, 10, 20))
+            jt.sync([first, second, seed], False, False)
+            pending = seed + 2, seed + 4
+            self.assertTrue(all(not value.is_finished for value in pending))
+            self.assertFalse(jt.core._try_stage_cuda_step_inputs([first, second], pending))
+            depends_on_first = first + 1
+            self.assertFalse(jt.core._try_stage_cuda_step_inputs(
+                [first, second], [pending[0], depends_on_first], True))
+            self.assertFalse(depends_on_first.is_finished)
+            np.testing.assert_array_equal(depends_on_first.numpy(), data + 1)
+            self.assertTrue(jt.core._try_stage_cuda_step_inputs([first, second], pending, True))
+            self.assertEqual(first.location(), "device")
+            self.assertEqual(second.location(), "device")
+            np.testing.assert_array_equal(first.numpy(), data + 22)
+            np.testing.assert_array_equal(second.numpy(), data + 24)
 
     def test_two_fast_path_sums_survive_a_replay(self):
         rs = np.random.RandomState(5)

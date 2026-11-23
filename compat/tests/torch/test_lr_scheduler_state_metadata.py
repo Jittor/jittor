@@ -115,3 +115,49 @@ def test_multiplicative_resume_initial_call_and_external_lr():
     opt.param_groups[0]["lr"] = 0.0625
     opt.step(); scheduler.step()
     assert scheduler.get_last_lr() == [0.03125]
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_sequential_checkpoint_retains_current_children_and_optimizer(tmp_path, legacy):
+    def build(optimizer):
+        children = [
+            torch.optim.lr_scheduler.ConstantLR(optimizer, factor=0.5, total_iters=2),
+            torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=1.0, end_factor=0.2, total_iters=5),
+        ]
+        return torch.optim.lr_scheduler.SequentialLR(optimizer, children, milestones=[2]), children
+
+    optimizer = MetadataOptimizer()
+    source, originals = build(optimizer)
+    for _ in range(4):
+        optimizer.step()
+        source.step()
+    saved = source.state_dict()
+    assert "_scheds" not in saved
+    assert saved["_schedulers"] == [scheduler.state_dict() for scheduler in originals]
+
+    if legacy:
+        saved.pop("_schedulers")
+        saved["_scheds"] = originals
+        child_key = "_scheds"
+    else:
+        path = tmp_path / "sequential.pth"
+        torch.save(saved, path)
+        saved = torch.load(path, weights_only=True)
+        child_key = "_schedulers"
+    saved_children = saved[child_key]
+
+    target_optimizer = MetadataOptimizer()
+    target, children = build(target_optimizer)
+    target_optimizer.param_groups = copy.deepcopy(optimizer.param_groups)
+    target.load_state_dict(saved)
+    assert saved[child_key] is saved_children
+    assert all(scheduler.optimizer is target_optimizer for scheduler in children)
+    assert target.state_dict() == source.state_dict()
+
+    for _ in range(3):
+        optimizer.step()
+        source.step()
+        target_optimizer.step()
+        target.step()
+        assert target.get_last_lr() == source.get_last_lr()
+        assert target.state_dict() == source.state_dict()

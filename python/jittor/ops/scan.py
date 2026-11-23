@@ -205,6 +205,9 @@ def cumsum(x, dim=None):
         # zero blocks -- "invalid configuration argument", raised
         # asynchronously, so it surfaces in whatever runs next.
         y = x.clone()
+    elif len(moved_shape) == 2 and jt.flags.no_grad:
+        # Inference on matrix rows already has the kernel's input layout.
+        y = jt.misc._scan_2d(x, False)
     else:
         y = jt.misc._Cumsum.apply(
             x.reshape([-1, x.shape[-1]])).reshape(moved_shape)

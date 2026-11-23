@@ -38,17 +38,8 @@ def _contiguous_stride(size):
     return tuple(stride)
 
 
-def _restore_strided(arr, offset, size, stride, key):
-    """Read a tensor out of its storage the way torch described it.
-
-    torch.save writes the whole storage and records, per tensor,
-    (storage_offset, size, stride). A tensor that is a *view* -- a
-    transpose, a slice, one head of a fused weight -- is therefore a
-    non-contiguous description of a larger buffer. This used to slice
-    `arr[offset:offset+numel]` and reshape, which reads a different set
-    of elements for every such view and reports success: right shape,
-    wrong numbers, no diagnostic.
-    """
+def _checked_layout(offset, size, stride, storage_size, key):
+    """Validate the indices addressed by a checkpoint's storage view."""
     numel = 1
     for s in size:
         numel *= s
@@ -60,7 +51,7 @@ def _restore_strided(arr, offset, size, stride, key):
             "%d strides; the two must agree."
             % (key, size, len(stride)))
     if numel == 0:
-        return _np_pt.empty(size, dtype=arr.dtype)
+        return numel, stride
     # Every element the description reaches must exist in the storage.
     last = offset
     for extent, step in zip(size, stride):
@@ -71,13 +62,21 @@ def _restore_strided(arr, offset, size, stride, key):
                 "this file is not a tensor this loader can reconstruct."
                 % (key, size, tuple(stride)))
         last += (extent - 1) * step
-    if offset < 0 or last >= arr.size:
+    if offset < 0 or last >= storage_size:
         raise _pickle.UnpicklingError(
             "checkpoint storage %s holds %d elements, but the tensor "
             "saved from it (shape %s, stride %s, offset %d) reaches "
             "element %d. The file is truncated or does not match this "
             "reader; loading it would silently produce wrong weights."
-            % (key, arr.size, size, tuple(stride), offset, last))
+            % (key, storage_size, size, tuple(stride), offset, last))
+    return numel, stride
+
+
+def _restore_strided(arr, offset, size, stride, key):
+    """Read a tensor using the checkpoint's storage offset and strides."""
+    numel, stride = _checked_layout(offset, size, stride, arr.size, key)
+    if numel == 0:
+        return _np_pt.empty(size, dtype=arr.dtype)
     if not size:
         return arr[offset:offset + 1].reshape(())
     if tuple(stride) == _contiguous_stride(size):
@@ -93,41 +92,70 @@ def _cpu_device(*args, **kwargs):
     return "cpu"
 
 
+def _meta_tensor(size, dtype, stride, offset, requires_grad):
+    g = get_install_context(jt).target_namespace
+    value = g.empty(size, dtype=dtype, device="meta", requires_grad=requires_grad)
+    value._jittor_torch_meta_layout = (tuple(stride), int(offset))
+    return value
+
+
+def _load_parameter(data, requires_grad):
+    g = get_install_context(jt).target_namespace
+    value = g.nn.Parameter(data, requires_grad=requires_grad)
+    if data.is_meta:
+        value._jittor_torch_meta = True
+        value._jittor_torch_meta_layout = (data.stride(), data.storage_offset())
+    return value
+
+
 class _ArchiveUnpickler(_pickle.Unpickler):
-    def __init__(self, stream, archive, data_dir, weights_only, source_devices):
+    def __init__(self, stream, archive, data_dir, weights_only, source_devices, map_location=None):
         super().__init__(stream)
         self.archive = archive
         self.data_dir = data_dir
         self.weights_only = bool(weights_only)
         self.source_devices = source_devices
+        self.map_location = map_location
         self.storage_cache = {}
 
     def persistent_load(self, pid):
         assert pid[0] == "storage", pid
         marker, key, numel = pid[1], str(pid[2]), int(pid[4])
         if key not in self.storage_cache:
-            # The key travels with the payload so a rebuild that cannot be
-            # honoured can name the archive record it was reading.
-            self.storage_cache[key] = (self.archive.read(self.data_dir + key), marker.dtype_str,
-                          numel, key, str(pid[3]))
+            source = str(pid[3])
+            target = self.map_location
+            if isinstance(target, dict):
+                target = target.get(source, source)
+            name = getattr(target, "type", None) or str(target).split(":", 1)[0]
+            entry = self.data_dir + key
+            if name == "meta":
+                self.archive.getinfo(entry)
+                raw = None
+            else:
+                raw = self.archive.read(entry)
+            self.storage_cache[key] = (raw, marker.dtype_str, numel, key, source)
         return self.storage_cache[key]
 
     def _rebuild_tensor_v2(self, storage, storage_offset, size, stride,
                            requires_grad=False, backward_hooks=None, metadata=None):
         g = get_install_context(jt).target_namespace
         raw, dtype_str, numel, key, source_device = storage
-        arr = _np_from_storage(raw, dtype_str, numel)
         size = tuple(int(s) for s in size)
         stride = None if stride is None else tuple(int(s) for s in stride)
-        sub = _restore_strided(arr, int(storage_offset), size, stride, key)
-        value = g.tensor(sub, dtype=dtype_str, device="cpu", requires_grad=bool(requires_grad))
+        offset = int(storage_offset)
+        if raw is None:
+            _, stride = _checked_layout(offset, size, stride, numel, key)
+            value = _meta_tensor(size, dtype_str, stride, offset, bool(requires_grad))
+        else:
+            arr = _np_from_storage(raw, dtype_str, numel)
+            sub = _restore_strided(arr, offset, size, stride, key)
+            value = g.tensor(sub, dtype=dtype_str, device="cpu", requires_grad=bool(requires_grad))
         if self.source_devices is not None:
             self.source_devices[id(value)] = source_device
         return value
 
     def _rebuild_parameter(self, data, requires_grad=True, backward_hooks=None, *a, **k):
-        g = get_install_context(jt).target_namespace
-        parameter = g.nn.Parameter(data, requires_grad=requires_grad)
+        parameter = _load_parameter(data, requires_grad)
         if self.source_devices is not None:
             self.source_devices[id(parameter)] = self.source_devices.get(id(data), "cpu")
         if a:
@@ -155,9 +183,10 @@ class _ArchiveUnpickler(_pickle.Unpickler):
         return _resolve_global(module, name, self.weights_only)
 
 
-def _load_torch_pt(path_or_file, weights_only=True, source_devices=None):
+def _load_torch_pt(path_or_file, weights_only=True, source_devices=None, map_location=None):
     with _zipfile.ZipFile(path_or_file, "r") as archive:
         pkl_name = next(name for name in archive.namelist() if name.endswith("data.pkl"))
         data_dir = pkl_name[:-len("data.pkl")] + "data/"
         stream = _io.BytesIO(archive.read(pkl_name))
-        return _ArchiveUnpickler(stream, archive, data_dir, weights_only, source_devices).load()
+        return _ArchiveUnpickler(stream, archive, data_dir, weights_only, source_devices,
+                                 map_location).load()

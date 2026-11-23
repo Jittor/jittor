@@ -57,6 +57,43 @@ def _np(t):
     return t.detach().float().cpu().numpy().astype(np.float64)
 
 
+class TestMatrixMultiplyOutputDtype(unittest.TestCase):
+    @unittest.skipUnless("cuda" in _DEVICES, "needs a CUDA device")
+    def test_cuda_mm_widens_before_the_product(self):
+        from jittor._runtime.fallback import forbid_backend_fallbacks
+
+        rng = np.random.default_rng(1906)
+        left = rng.normal(0, 0.35, (41, 17)).astype(np.float32)
+        right = rng.normal(0, 0.5, (41, 13)).astype(np.float32)
+        with forbid_backend_fallbacks():
+            for name, dtype in _DTYPES.items():
+                with self.subTest(dtype=name):
+                    a = torch.tensor(left, device="cuda", dtype=dtype).t()
+                    b = torch.tensor(right, device="cuda", dtype=dtype)
+                    expected = _round_trip(left, name).T @ _round_trip(right, name)
+                    result = torch.mm(a, b, out_dtype=torch.float32)
+                    self.assertEqual(result.dtype, torch.float32)
+                    self.assertEqual(result.device.type, "cuda")
+                    np.testing.assert_allclose(_np(result), expected, atol=1e-5, rtol=1e-4)
+
+                    out = torch.empty_like(result)
+                    self.assertIs(torch.mm(a, b, torch.float32, out=out), out)
+                    np.testing.assert_array_equal(_np(out), _np(result))
+                    self.assertEqual(torch.mm(a, b, dtype).dtype, dtype)
+                    with self.assertRaisesRegex(RuntimeError, "provided out tensor"):
+                        torch.mm(a, b, out_dtype=torch.float32, out=out.to(dtype))
+                    operand = a.detach().requires_grad_(True)
+                    tracked = torch.mm(operand, b, torch.float32)
+                    self.assertTrue(tracked.requires_grad)
+                    with self.assertRaisesRegex(RuntimeError, "derivative for mm"):
+                        tracked.sum().backward()
+
+    def test_cpu_mm_rejects_explicit_output_dtype(self):
+        matrix = torch.ones((2, 2), device="cpu", dtype=torch.float32)
+        with self.assertRaisesRegex(NotImplementedError, "requires CUDA"):
+            torch.mm(matrix, matrix, out_dtype=torch.float32)
+
+
 class TestHalfConversion(unittest.TestCase):
     """``.bfloat16()`` and ``.half()`` round the way torch rounds."""
 

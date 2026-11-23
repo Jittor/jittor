@@ -15,6 +15,7 @@ from ...types import _dtype_to_str
 from jittor._runtime.dispatch import try_dispatch as _try_dispatch
 from ...tensor_state import latest_optimizer
 from ...grad import _clip_grad_norm_device
+from ...fx.proxy import wrap as _fx_wrap
 from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
@@ -58,23 +59,6 @@ def fuse_conv_bn_eval(conv, bn, transpose=False):
         fused.weight, fused.bias, bn.running_mean, bn.running_var,
         bn.eps, bn.weight, bn.bias, transpose)
     return fused
-
-
-class UninitializedTensorMixin:
-    pass
-
-
-class UninitializedParameter(UninitializedTensorMixin):
-    pass
-
-
-class UninitializedBuffer(UninitializedTensorMixin):
-    pass
-
-
-def is_lazy(param):
-    """Identify uninitialized parameters and buffers."""
-    return isinstance(param, UninitializedTensorMixin)
 
 
 class _DataParallel(nn.Module):
@@ -580,6 +564,41 @@ class ConvTranspose1d(nn.Module):
         return y
 
 
+def _local_response_norm(input, size, alpha=1e-4, beta=0.75, k=1.0):
+    from jittor._core.var import device_scope_like
+
+    if input.ndim < 3:
+        raise ValueError(f"local_response_norm expects at least 3 dimensions, got {input.ndim}")
+    if not input.numel():
+        return input
+    if size <= 0:
+        raise ValueError("local_response_norm size must be positive")
+    with device_scope_like(input):
+        if _dtype_to_str(input.dtype) == "float64":
+            alpha, beta, k = (jt.array(value, dtype="float64") for value in (alpha, beta, k))
+        # Treat channels as the pooling height and flatten all spatial axes
+        # into independent columns. The explicit zeros count in the divisor.
+        squared = (input * input).reshape(input.shape[0], 1, input.shape[1], -1)
+        padded = jt.nn.pad(squared, (0, 0, size // 2, (size - 1) // 2))
+        mean = jt.nn.avg_pool2d(padded, (size, 1), stride=1).reshape(input.shape)
+        return input / ((mean * alpha + k) ** beta)
+
+
+class LocalResponseNorm(nn.Module):
+    def __init__(self, size, alpha=1e-4, beta=0.75, k=1.0):
+        super().__init__()
+        self.size = size
+        self.alpha = alpha
+        self.beta = beta
+        self.k = k
+
+    def execute(self, input):
+        return _local_response_norm(input, self.size, self.alpha, self.beta, self.k)
+
+    def extra_repr(self):
+        return f"{self.size}, alpha={self.alpha}, beta={self.beta}, k={self.k}"
+
+
 class RMSNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True, **k):
         super().__init__()
@@ -866,6 +885,7 @@ def _adaptive_max_pool2d(input, output_size, return_indices=False):
     return (out, None) if return_indices else out
 
 
+@_fx_wrap
 def _linear(input, weight, bias=None):
     _context = get_install_context(jt)
     _jt_linear = _context.state["nn_extra_native"]['_jt_linear']

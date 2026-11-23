@@ -162,6 +162,22 @@ class TestCubToolchain(unittest.TestCase):
     def test_non_last_axis_scan_and_gradient(self):
         self._check((5, 6, 7), 1, "float32")
 
+    @jt.flag_scope(use_cuda=1)
+    def test_wide_rows_scan_and_gradient_do_not_cross_row_boundaries(self):
+        rng = np.random.default_rng(270)
+        shape = (7, 65539)
+        values = rng.integers(-3, 6, size=shape).astype(np.float32)
+        upstream = rng.integers(-2, 5, size=shape).astype(np.float32)
+        x = jt.array(values)
+        with forbid_backend_fallbacks():
+            scan = jt.cub_cumsum(x, -1)
+            grad = jt.grad((scan * jt.array(upstream)).sum(), x)
+            jt.sync([scan, grad], True, False)
+            self.assertEqual(scan.location(), "device")
+            self.assertEqual(grad.location(), "device")
+            np.testing.assert_array_equal(scan.numpy(), np.cumsum(values, axis=-1))
+            np.testing.assert_array_equal(grad.numpy(), np.cumsum(upstream[:, ::-1], axis=-1)[:, ::-1])
+
 
 if __name__ == "__main__":
     unittest.main()

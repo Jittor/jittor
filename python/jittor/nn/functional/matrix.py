@@ -1,5 +1,7 @@
 """Matrix multiplication and bilinear neural-network operations."""
 
+from math import prod
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -761,8 +763,10 @@ def _matmul_impl(a, b):
             fast = _matmul_2d_cublas(a, bb, 0, 1 if b_base is not None else 0)
             if fast is not None:
                 return _keep_operand_grads(a, b, a, bb, fast)
-        # TODO:ugly implementation for tuner
-        aa = a.reshape((-1, m))
+        # An empty contraction has a known row count even though reshape
+        # cannot infer it by dividing the element count by the inner size.
+        rows = prod(a.shape[:-1]) if m == 0 else -1
+        aa = a.reshape((rows, m))
         cc = jt.nn.matmul(aa, b)
         # print(a.shape, b.shape, cc.shape)
         return cc.reshape(a.shape[:-1] + [k])

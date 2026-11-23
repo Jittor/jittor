@@ -8,7 +8,7 @@ import jittor as jt
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='CUDA storage writes are required')
 @pytest.mark.parametrize('layout', ['contiguous', 'transposed'])
 @pytest.mark.parametrize('index_dtype', [torch.int32, torch.int64])
-@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16], ids=['fp32', 'bfloat16'])
+@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16, torch.float16], ids=['fp32', 'bfloat16', 'fp16'])
 @torch.no_grad()
 def test_captured_stores_copy_all_rows_and_preserve_pending_snapshots(layout, index_dtype, dtype):
     rng = np.random.default_rng(119)

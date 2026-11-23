@@ -91,7 +91,14 @@ import types
 from . import language
 from ..diagnostics import EXPECTED, swallowed
 
+def batch_launches(kernels, *, allow_strided=False):
+    """Group eager Triton launches, allowing stride-aware kernels to opt in."""
+    from .batch import batch_launches as launch_batch
+    return launch_batch(kernels, allow_strided=allow_strided)
+
+
 __all__ = [
+    "batch_launches",
     "jit", "JITFunction", "KernelInterface",
     "cdiv", "next_power_of_2", "Config", "autotune", "heuristics",
     "language", "runtime", "OutOfResources", "TritonError",

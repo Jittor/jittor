@@ -79,6 +79,10 @@ def _ddp_world_size():
     return _collectives._world_size()
 
 from . import extra_api as _extra_api
+from .lazy import (
+    UninitializedBuffer, UninitializedTensorMixin, is_lazy, make_lazy_linear,
+    make_uninitialized_parameter,
+)
 from .extra_api import (
     _api_flex_mod_create_block_mask,
     _api_flex_mod_and_masks,
@@ -182,16 +186,6 @@ def _install_nn_extras(nn, registry=None):
     _install_init_aliases(registry)
     import types as _types_nn_private
 
-    # `torch.nn.parameter` must carry these three scaffolding classes whichever
-    # module ends up owning that name. They used to be created only inside the
-    # branch below, so when that branch was skipped -- another installer had
-    # already marked `Parameter` -- the adopted source module had none of them,
-    # and `from torch.nn.parameter import UninitializedParameter`, which vLLM's
-    # layerwise loader does at import, raised ImportError.
-    UninitializedTensorMixin = _adapt_extra(_extra_api.UninitializedTensorMixin, active_registry)
-    UninitializedParameter = _adapt_extra(_extra_api.UninitializedParameter, active_registry)
-    UninitializedBuffer = _adapt_extra(_extra_api.UninitializedBuffer, active_registry)
-
     if not getattr(getattr(nn, "Parameter", None), "_torch_compat_type", False):
         # One implementation, not two: jittor.nn's Parameter already runs torch's
         # construction protocol, so a subclass gets its own __new__/__init__, its
@@ -205,13 +199,17 @@ def _install_nn_extras(nn, registry=None):
         nn.parameter = param_mod
 
     param_mod = getattr(nn, "parameter", None)
+    UninitializedParameter = getattr(nn, "UninitializedParameter", None)
+    if getattr(UninitializedParameter, "cls_to_become", None) is not nn.Parameter:
+        UninitializedParameter = make_uninitialized_parameter(_torch_target)
+    nn.UninitializedParameter = UninitializedParameter
+    nn.UninitializedBuffer = UninitializedBuffer
     if param_mod is not None:
         for _name, _value in (("UninitializedTensorMixin", UninitializedTensorMixin),
                               ("UninitializedParameter", UninitializedParameter),
                               ("UninitializedBuffer", UninitializedBuffer),
-                              ("is_lazy", _extra_api.is_lazy)):
-            if not hasattr(param_mod, _name):
-                setattr(param_mod, _name, _value)
+                              ("is_lazy", is_lazy)):
+            setattr(param_mod, _name, _value)
         _modules["torch.nn.parameter"] = param_mod
 
     modules_pkg = install_module_namespace(nn, registry)
@@ -231,6 +229,8 @@ def _install_nn_extras(nn, registry=None):
                   BatchNorm2d=getattr(nn, "BatchNorm2d", getattr(nn, "BatchNorm", None)),
                   BatchNorm3d=getattr(nn, "BatchNorm3d", getattr(nn, "BatchNorm", None)),
                   SyncBatchNorm=getattr(nn, "SyncBatchNorm", getattr(nn, "BatchNorm", None)))
+    if not hasattr(nn, "LocalResponseNorm"):
+        nn.LocalResponseNorm = _adapt_extra(_extra_api.LocalResponseNorm, active_registry)
     _mk_nn_submod(_modules, modules_pkg, "normalization",
                   GroupNorm=getattr(nn, "GroupNorm", None),
                   LayerNorm=getattr(nn, "LayerNorm", None),
@@ -543,6 +543,7 @@ def _install_nn_extras(nn, registry=None):
 
     # ---- nn.functional extras used by mmdetection (not auto-copied from jittor.nn) ----
     F = nn.functional
+    F.local_response_norm = _extra_api._local_response_norm
     if not hasattr(F, "_Reduction"):
         # torch's private reduction-string -> enum helper; mmdet's loss utils do
         # `F._Reduction.get_enum(reduction)` then branch 0/1/2 = none/mean/sum.
@@ -619,6 +620,13 @@ def _install_nn_extras(nn, registry=None):
 
         linear_cls.__init__ = linear_init
         linear_cls._torch_dtype_patched = True
+    if linear_cls is not None and not hasattr(nn, "LazyLinear"):
+        nn.LazyLinear = make_lazy_linear(_torch_target, UninitializedParameter)
+        _mk_nn_submod(_modules, modules_pkg, "linear", Linear=linear_cls, LazyLinear=nn.LazyLinear)
+        register_api_bindings(
+            nn, "torch.nn", ("LazyLinear",), Fidelity.APPROXIMATE,
+            "Lazy affine parameters materialize in place from input or a checkpoint",
+        )
 
     embedding_cls = getattr(nn, "Embedding", None)
     if (embedding_cls is not None and
@@ -641,6 +649,10 @@ def _install_nn_extras(nn, registry=None):
         Fidelity.APPROXIMATE, 'Native neural-network implementations and installation-owned layer adapters; unsupported Torch modes and parameter subsets remain restricted')
     register_api_bindings(F, "torch.nn.functional", ("linear",),
         Fidelity.APPROXIMATE, "Native linear mathematics with frontend dtype promotion and installation-owned delegates")
+    register_api_bindings(nn, "torch.nn", ("LocalResponseNorm",),
+        Fidelity.APPROXIMATE, "Channel-window normalization implemented with native average pooling")
+    register_api_bindings(F, "torch.nn.functional", ("local_response_norm",),
+        Fidelity.APPROXIMATE, "Channel-window normalization implemented with native average pooling")
     register_api_bindings(
         nn.utils, "torch.nn.utils",
         ("clip_grad_norm_", "clip_grad_value_", "weight_norm", "remove_weight_norm",

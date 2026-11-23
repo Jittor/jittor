@@ -160,7 +160,7 @@ range）。`Var.stop_fuse()` 是显式边界，供需要独立执行语义的场
 （`restride_pass`）与中间量消除（`remove_intermediate_pass`）等。形状与参数搜索
 由 `jit_searcher` 与 `tuner/{conv,matmul,reduce,broadcast,reorder}_tuner` 承担。
 
-> 这里没有**图级常量折叠**；`const_var_pass` 处理的是 codegen 期的常量变量。
+融合算子在运行时接收标量数组的值。同一结构和类型的算子可以复用同一 JIT 产物。
 
 ### 3.3 后端落地：一行一个 kernel
 

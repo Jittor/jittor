@@ -41,6 +41,31 @@ def test_unshared_pending_matmul_update(device, dtype):
         _physical(value, device)
 
 
+def test_unshared_pending_cast_update(device):
+    weights = torch.tensor([[1, -2], [3, 4]], dtype=torch.int8, device=device)
+    scale = torch.tensor([[2.0], [0.5]], device=device)
+    with torch.no_grad():
+        value = weights.to(torch.float32, copy=True)
+        assert not value._mem_ptr_now
+        assert value.mul_(scale) is value
+        if device == "cuda":
+            assert not value._mem_ptr_now, "a private pending cast can fuse its update"
+        np.testing.assert_array_equal(value.numpy(), [[2.0, -4.0], [1.5, 2.0]])
+        np.testing.assert_array_equal(weights.numpy(), [[1, -2], [3, 4]])
+        _physical(value, device)
+
+
+def test_pending_cast_update_preserves_existing_alias(device):
+    weights = torch.tensor([1, 2], dtype=torch.int8, device=device)
+    with torch.no_grad():
+        value = weights.to(torch.float32, copy=True)
+        alias = value.detach()
+        value.mul_(2.0)
+        assert value.data_ptr() == alias.data_ptr()
+        np.testing.assert_array_equal(alias.numpy(), [2.0, 4.0])
+        np.testing.assert_array_equal(weights.numpy(), [1, 2])
+
+
 @pytest.mark.parametrize("alias_kind", ["detach", "data", "view", "snapshot", "holder"])
 def test_pending_matmul_with_an_existing_reader(device, alias_kind):
     with torch.no_grad():

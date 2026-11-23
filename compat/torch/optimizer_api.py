@@ -12,6 +12,7 @@ from .. import fsdp_hooks as _fsdp_hooks
 from .optimizer_state import (
     _OptState, _ParamState, _TORCH_TO_NATIVE_STATE, _NATIVE_TO_TORCH_STATE,
     _adagrad_step_tensor, _native_optimizer_buffer, _torch_optimizer_kind,
+    _load_custom_parameter_state, _optimizer_extra_state, _uses_native_state,
 )
 from jittor.optim.algorithms.sgd import (
     MOMENTUM_INITIALIZED as _MOMENTUM_INITIALIZED,
@@ -290,6 +291,8 @@ def _state_dict_torch(self):
                                      g.tensor(float(steps[i]), dtype=g.float32))
             if entry:
                 state[pid] = entry
+    for key, value in _optimizer_extra_state(self).items():
+        state[param_ids[id(key)] if isinstance(key, jt.Var) else key] = value
     return {"state": state, "param_groups": param_groups}
 
 
@@ -317,6 +320,7 @@ def _load_state_dict_torch(self, state_dict):
     saved_groups = state_dict.get("param_groups", [])
     saved_state = state_dict.get("state", {})
     kind = _torch_optimizer_kind(self)
+    native_state = _uses_native_state(kind)
     if not isinstance(saved_groups, (list, tuple)):
         raise TypeError("loaded optimizer param_groups must be a sequence")
     if not isinstance(saved_state, Mapping):
@@ -326,6 +330,9 @@ def _load_state_dict_torch(self, state_dict):
             "loaded state dict has a different number of parameter groups")
     load_plan = []
     max_step = 0
+    extra_state = {}
+    consumed_keys = set()
+    missing = object()
     for saved_pg, current_pg in zip(saved_groups, self.param_groups):
         if not isinstance(saved_pg, Mapping):
             raise TypeError("loaded optimizer parameter group must be a mapping")
@@ -341,13 +348,29 @@ def _load_state_dict_torch(self, state_dict):
             validate_adagrad_options(dict(current_pg, **saved_pg))
         slots = []
         for param_index, pid in enumerate(saved_params):
-            missing = object()
             try:
-                st = saved_state.get(pid, missing)
-                if st is missing:
-                    st = saved_state.get(str(pid), {})
+                key = pid
+                st = saved_state.get(key, missing)
+                if st is missing and native_state:
+                    # Older serialized native optimizer state can spell its
+                    # parameter IDs as strings.
+                    legacy_key = str(pid)
+                    legacy = saved_state.get(legacy_key)
+                    fields = _TORCH_TO_NATIVE_STATE.get(kind, {})
+                    if isinstance(legacy, Mapping) and ("step" in legacy or any(k in legacy for k in fields)):
+                        key, st = legacy_key, legacy
+                if st is not missing:
+                    consumed_keys.add(key)
             except (TypeError, ValueError) as error:
                 raise TypeError("loaded optimizer state key is invalid") from error
+            if not native_state:
+                if st is not missing:
+                    param = current_pg["params"][param_index]
+                    extra_state[param] = _load_custom_parameter_state(st, param, saved_pg)
+                slots.append(({}, 0))
+                continue
+            if st is missing:
+                st = {}
             if not isinstance(st, Mapping):
                 raise TypeError("loaded optimizer parameter state must be a mapping")
             st = dict(st)
@@ -376,6 +399,8 @@ def _load_state_dict_torch(self, state_dict):
             max_step = max(max_step, step)
             slots.append((st, step))
         load_plan.append((dict(saved_pg), slots))
+    extra_state.update((key, value) for key, value in saved_state.items()
+                       if key not in consumed_keys)
     # Apply only after the complete input has been validated. This keeps
     # malformed loads atomic instead of leaving half-reset moments.
     for pg in self.param_groups:
@@ -433,6 +458,9 @@ def _load_state_dict_torch(self, state_dict):
             else:
                 steps[i] = step
     self.n_step = max_step
+    target_extra_state = _optimizer_extra_state(self)
+    target_extra_state.clear()
+    target_extra_state.update(extra_state)
     return None
 
 

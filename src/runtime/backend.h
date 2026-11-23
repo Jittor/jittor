@@ -162,6 +162,10 @@ EXTERN_LIB void backend_copy(void* dst, Device dst_device, const void* src,
                             Device src_device, size_t size, bool ordered = false);
 EXTERN_LIB void backend_copy_async(void* dst, Device dst_device, const void* src,
                                   Device src_device, size_t size, BackendStream stream);
+#if defined(IS_CUDA) && !defined(IS_COREX)
+// Fill a dense range on the destination device's compute stream.
+EXTERN_LIB void cuda_fill_bytes(void* dst, Device device, int value, size_t size);
+#endif
 EXTERN_LIB bool backend_copy_strided_from_dense(void* dst, const void* src, Device device,
                                                const vector<int64>& shape,
                                                const vector<int64>& strides, size_t item_size);
