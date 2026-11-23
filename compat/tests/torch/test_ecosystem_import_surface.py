@@ -74,6 +74,29 @@ def test_prims_common_layout_helpers():
     assert make_contiguous_strides_for((2, 3)) == (3, 1)
 
 
+def test_metadata_probes_propagate_runtime_errors():
+    from torch._prims_common import suggest_memory_format
+
+    class FailedMetadata:
+        @property
+        def shape(self):
+            raise RuntimeError("tensor metadata read failed")
+
+        @property
+        def dtype(self):
+            raise RuntimeError("tensor metadata read failed")
+
+    invalid = SimpleNamespace()
+    assert suggest_memory_format(invalid) == torch.contiguous_format
+    assert not torch._has_compatible_shallow_copy_type(invalid, invalid)
+
+    tensor = FailedMetadata()
+    with pytest.raises(RuntimeError, match="tensor metadata read failed"):
+        suggest_memory_format(tensor)
+    with pytest.raises(RuntimeError, match="tensor metadata read failed"):
+        torch._has_compatible_shallow_copy_type(tensor, tensor)
+
+
 def test_functional_collectives_are_identity_in_one_process():
     from torch.distributed._functional_collectives import all_reduce, wait_tensor
 

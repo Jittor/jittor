@@ -4,6 +4,7 @@ import sys as _sys
 
 import jittor as jt
 
+from ...diagnostics import swallowed
 from ...permissive import install_permissive_package
 from ...transaction import active_transaction
 from ..fidelity import Fidelity, register_fidelity
@@ -852,8 +853,8 @@ def install(ctx):
                 strides = tuple(int(step) for step in tensor.stride())
                 if strides == (h * w * c, 1, w * c, c):
                     return g.channels_last
-        except Exception:
-            pass
+        except (AttributeError, TypeError, ValueError) as exc:
+            swallowed("torch._prims_common.suggest_memory_format: read shape and strides", exc)
         return g.contiguous_format
 
     def _prims_make_contiguous_strides_for(shape, memory_format=None):

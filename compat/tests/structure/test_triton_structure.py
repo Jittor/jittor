@@ -44,7 +44,7 @@ class TestTritonStructure(unittest.TestCase):
         self.assertEqual(package_path.parent.name, "compat")
         self.assertEqual(
             {path.name for path in package_path.glob("*.py")},
-            {"__init__.py", "argument_binding.py", "backend.py", "deploy.py",
+            {"__init__.py", "argument_binding.py", "backend.py", "batch.py", "deploy.py",
              "fastlaunch.py", "language.py", "launch.py"},
         )
         self.assertFalse((repo_root / "python" / "jittor" / "triton_shim").exists())

@@ -51,8 +51,10 @@ def _argument_words(call, pointers, backend):
         else:
             words.append(backend._scalar_bits(kind, value))
             divisible = type(value) is int and value % 16 == 0
-        if divisible and (index := positions.get(name)) is not None:
-            aligned.append(index)
+        if divisible:
+            index = positions.get(name)
+            if index is not None:
+                aligned.append(index)
     return words, tuple(aligned)
 
 

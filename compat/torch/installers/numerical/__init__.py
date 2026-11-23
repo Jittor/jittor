@@ -1362,7 +1362,8 @@ def install(ctx):
             return (a.dtype == b.dtype
                     and a.device == b.device
                     and getattr(a, "layout", None) == getattr(b, "layout", None))
-        except Exception:
+        except (AttributeError, TypeError) as exc:
+            swallowed("torch._has_compatible_shallow_copy_type: compare tensor metadata", exc)
             return False
 
     _bind_missing(g, "_has_compatible_shallow_copy_type",
