@@ -13,6 +13,7 @@
 #include <vector>
 #include "core/executor.h"
 #include "runtime/device.h"
+#include "runtime/tensor_placement.h"
 #include "ops/op_register.h"
 #include "ops/composite/op_capability.h"
 namespace jittor {
@@ -53,6 +54,10 @@ ArgsortOp::ArgsortOp(Var* x, int dim, bool descending, NanoString dtype, bool st
         }
 #endif
         if (has_op_capability(backend, OpCapability::SegmentedArgsort)) {
+            // The keys select the device for the internal index and offset
+            // tensors, including when the frontend's default is CPU.
+            TensorPlacementScope placement(x->placement.explicit_backend
+                ? x->placement : current_tensor_placement());
             int dims = x->shape.size();
             vector<int64> axes;
             axes.reserve(dims);
