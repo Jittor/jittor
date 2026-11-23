@@ -160,7 +160,9 @@ def _assign_data_owner(view, value, extra_path=()):
     # `requires_grad`, not the stop-grad bit: `requires_grad_(False)` need not
     # set it, and reading the bit alone unfroze a frozen tensor on assignment.
     owner_was_trainable = bool(owner.requires_grad)
-    owner.assign(updated)
+    with _owner.jt.no_grad():
+        if not _copy_detached_storage(owner, updated):
+            owner.assign(updated)
     _restore_trainable_state(owner, owner_was_trainable)
 
     # A retained ``data = parameter.data`` alias observes its own mutation,
@@ -181,7 +183,14 @@ def _set_data_owner(view, slices, value):
     owner = getattr(view, "_torch_data_owner", None)
     if not isinstance(owner, _NativeVar):
         return False
-    if _data_owner_uses_device(owner) and _is_basic_data_index(slices):
+    if (_data_owner_uses_device(owner)
+            or _jittor_dtype_name(owner.dtype) == "bfloat16"):
+        # A BF16 owner cannot be updated through its NumPy DataView on either
+        # CPU or device: NumPy has no native BF16 scalar, so assigning a float
+        # source there stores the converted integer bits as a BF16 value (for
+        # example 11 becomes about 1e-39). Device owners likewise need native
+        # placement-aware assignment. Native setitem applies the destination
+        # dtype conversion and supports the normalized advanced indices.
         return _assign_data_owner(view, value, (slices,))
     # Native Jittor exposes ``Var.data`` as a shared NumPy DataView. Keep
     # that exact CPU behavior so writes made after a sync remain visible to

@@ -67,9 +67,37 @@ void mark_failed_batch(const ExecPlan& plan) {
 }
 
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
+    vector<VarPtr> planning_hold;
+    planning_hold.reserve(vars.size());
+    for (Var* v : vars) planning_hold.emplace_back(v);
+    build_exec_plan(vars, weak_sync, plan, planning_hold);
+}
+
+void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
+                     vector<VarPtr>& planning_hold) {
     plan.clear();
+    // The BFS and graph optimizers retain raw Node pointers. Compile workers
+    // from the preceding asynchronous batch can finish and propagate
+    // liveness while this walk is in progress; that propagation may free an
+    // op between `has_gopt(n)` and its virtual calls even though the reached
+    // Vars themselves are held below. Serialize this planning phase with the
+    // same recursive graph-mutation lock used by deferred frees and edge
+    // rewrites. graph_optimize() may re-enter those helpers on this thread.
+    std::lock_guard<GraphMutationMutex> graph_guard(graph_mutation_mutex());
     auto& scratch = plan.scratch;
     plan.backend = execution_target_backend();
+    // A graph optimizer can make the next traversal reach the same Vars
+    // again. One liveness owner per distinct Var is sufficient; duplicate
+    // VarPtrs only make their eventual release propagate a large cascade at
+    // once while the final batch hold is being installed.
+    unordered_set<Var*> planning_held;
+    planning_held.reserve(planning_hold.size() * 2 + 1);
+    for (auto& held : planning_hold)
+        if (held.ptr) planning_held.insert(held.ptr);
+    auto hold_for_planning = [&](Var* value) {
+        if (planning_held.insert(value).second)
+            planning_hold.emplace_back(value);
+    };
     // == phase 2: collect the batch ==
     // bfs find all ops need to run
     int op_num = 0;
@@ -90,6 +118,12 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
             if (!v->is_finished() && !graph_capture_host_leaf(v)
                     && !step_readout_ready(v) && !batch_epoch->marked(v)) {
                 batch_epoch->mark(v);
+                // Take the liveness hold when the raw pointer enters the
+                // traversal, not after the whole BFS. An asynchronous compile
+                // worker can finish while the BFS is still walking and free
+                // an intermediate before a post-pass gets a chance to retain
+                // it. Holding the output Var also retains its producer Op.
+                hold_for_planning(v);
                 start_var_num++;
                 bfs_q.push_back(v);
                 max_id = std::max(max_id, v->id);
@@ -110,6 +144,8 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                             && !graph_capture_host_leaf(i.node) && !step_readout_ready(i.node)) {
                         batch_epoch->mark(i.node);
                         need_opt += has_gopt(i.node);
+                        if (i.node->is_var())
+                            hold_for_planning(i.node->var());
                         bfs_q.push_back(i.node);
                     }
             // this var has been fetched
@@ -124,22 +160,33 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
                             n.node->flags.get(NodeFlags::_fetch))) {
                         batch_epoch->mark(n.node);
                         need_opt += has_gopt(n.node);
+                        if (n.node->is_var())
+                            hold_for_planning(n.node->var());
                         bfs_q.push_back(n.node);
                     }
                 }
             }
         }
         if (!need_opt || gopt_disable) break;
+        // Keep the collected pointers valid throughout the optimization
+        // pass. A rewrite may retire another node; leave its allocation
+        // alone until the traversal marks have been restored.
+        SetupFreeBuffer defer_rewrites;
+        bool optimized = false;
         for (Node* n : bfs_q) {
-            if (has_gopt(n)) {
-                ExecutionBackendScope backend_scope(n->op()->requested_backend());
-                TensorPlacementScope placement_scope(n->op()->graph_placement());
-                Float32PrecisionScope precision_scope(n->op()->float32_precision);
-                LaunchOriginScope origin_scope(n->op()->launch_origin);
-                n->op()->graph_optimize();
-                n->op()->set_flag(OpFlags::_has_gopt, 0);
-            }
+            if (n->flags.get(NodeFlags::_queued_for_free) || !has_gopt(n))
+                continue;
+            Op* op = n->op();
+            ExecutionBackendScope backend_scope(op->requested_backend());
+            TensorPlacementScope placement_scope(op->graph_placement());
+            Float32PrecisionScope precision_scope(op->float32_precision);
+            LaunchOriginScope origin_scope(op->launch_origin);
+            op->set_flag(OpFlags::_has_gopt, 0);
+            op->graph_optimize();
+            optimized = true;
         }
+        ASSERT(optimized) << "Graph optimization was requested but no optimizer was found";
+        batch_epoch.reset();
     }
     auto tt = batch_epoch->stamp;
     plan.stamp = tt;
