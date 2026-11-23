@@ -71,9 +71,15 @@ class DistributionMethod:
     def __call__(_adapter, *args, **kwargs):
         state = _adapter.state
         instance = args[0] if args else kwargs.get("self")
-        multivariate = getattr(state.native, "MultivariateNormal", ())
-        reference = instance.loc if isinstance(instance, multivariate) else None
-        if isinstance(instance, state.relaxed_types):
+        native = state.native
+        reference = None
+        if isinstance(instance, native.MultivariateNormal):
+            reference = instance.loc
+        elif isinstance(instance, (native.Gamma, native.GammaDistribution, native.Dirichlet)):
+            reference = instance.concentration
+        elif isinstance(instance, native.Beta):
+            reference = instance.concentration1
+        elif isinstance(instance, state.relaxed_types):
             reference = instance.logits
         with tensor_frontend(state.tensor_type, like=reference):
             result = _adapter.implementation(*args, **kwargs)
