@@ -401,6 +401,7 @@ def _scaled_dot_product_attention(
             )
             if fused is not None:
                 return fused
+    grouped_inputs = None
     if enable_gqa and (
         int(key.shape[-3]) != int(query.shape[-3]) or int(value.shape[-3]) != int(query.shape[-3])
     ):
@@ -417,6 +418,7 @@ def _scaled_dot_product_attention(
         ) if use_fused else None
         if fused is not None:
             return fused
+        grouped_inputs = (key, value)
         key = _expand_heads(query, key, "key")
         value = _expand_heads(query, value, "value")
     query_dtype = _jittor_dtype_name(query.dtype)
@@ -483,9 +485,28 @@ def _scaled_dot_product_attention(
     if fused is not None:
         LAST_FUSED_KERNEL[0] = fused_kernel
         return fused
+    if grouped_inputs is not None and query_dtype in ("float16", "bfloat16"):
+        # Math attention reduces the gradients of shared K/V heads in
+        # opmath precision, then casts the reduced result to the input dtype.
+        key = _expand_heads(query, _softmax_precision(grouped_inputs[0]), "key")
+        value = _expand_heads(query, _softmax_precision(grouped_inputs[1]), "value")
     query_length = int(query.shape[-2])
     scale_factor = 1.0 / math.sqrt(int(query.shape[-1])) if scale is None else scale
     if probability == 0.0 and _output_requires_grad(query, key, value):
+        if (use_fused and query_dtype in ("float16", "bfloat16")
+                and dispatch_context(query, key, value).backend == "cuda"):
+            # The math path widens these operands and builds full score
+            # matrices in backward. A CUDA tile can use that opmath dtype
+            # without materializing the matrices.
+            with _opmath_scope(query):
+                out = try_dispatch(
+                    "nn.fused_attention",
+                    _softmax_precision(query), _softmax_precision(key), _softmax_precision(value),
+                    attn_mask=_softmax_precision(attn_mask) if attn_mask is not None else None,
+                    is_causal=is_causal, scale=scale,
+                )
+            if out is not None:
+                return out.cast(query_dtype)
         return _MemoryEfficientAttention.apply(
             query, key, value, attn_mask, bool(is_causal), float(scale_factor)
         )

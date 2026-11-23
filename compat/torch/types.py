@@ -1,5 +1,6 @@
 """Torch-compatible dtype, device, and residency primitives."""
 
+from builtins import type as _builtin_type
 import os
 import threading
 import types as _python_types
@@ -272,6 +273,12 @@ class device:
     _prev_index: typing.Optional[int]
 
     def __init__(self, type="cpu", index=None):
+        # Tensor.device reports an already separated name and index. Keep
+        # each device object fresh and retain the parser for other spellings.
+        if (_builtin_type(type) is str and type in _DEVICE_TYPES
+                and (index is None or (_builtin_type(index) is int and index >= 0))):
+            self.type, self.index = type, index
+            return
         if isinstance(type, device):
             if index is not None:
                 raise RuntimeError(
@@ -279,12 +286,7 @@ class device:
                     "its index; do not pass a second one")
             self.type, self.index = type.type, type.index
             return
-        # A bare int is an *index*, as in torch: `torch.device(1)` is
-        # `cuda:1`. It used to fall into the else-branch below and become
-        # `device(type='cpu')`, so `x.to(torch.device(1))` moved the tensor to
-        # the host while the caller had asked for a second accelerator -- the
-        # torch.device spelling of the `Tensor.to(1)` hole closed in section 31
-        # of docs/results/2026-09-14-vllm-omni-h3-enablement.md.
+        # A bare integer indexes the current accelerator type.
         if isinstance(type, bool):
             raise TypeError("torch.device(): a bool is not a device")
         if _is_index(type):
@@ -381,10 +383,7 @@ class device:
         return False
 
 
-# Stack of active `torch.device("meta")` contexts (see device.__enter__).
-# Only meta contexts are tracked; real-device `with` blocks stay no-ops.
-# Model construction in from_pretrained is single-threaded, so a plain list
-# is sufficient.
+# Meta contexts mark tensors during from_pretrained without changing placement.
 _DEVICE_CTX_STACK: typing.List[device] = []
 
 # Per-thread stack of `with torch.device(...):` blocks that change where new
@@ -450,44 +449,21 @@ def make_torch_types_module():
     return module
 
 
-# ---- CPU-residency support for the torch device= API -----------------------
-# jittor places a Var on CUDA or host according to the GLOBAL jt.flags.use_cuda
-# flag, with no per-tensor device. But native C++ extensions linked against the
-# jtorch ABI (nvdiffrast's `ranges`, cumesh's xatlas) call TORCH_CHECK on
-# tensor.is_cpu(), and jtorch's is_cpu()/device() read the Var's ACTUAL memory
-# residency (var->allocator->is_cuda(), surfaced to Python as Var.location() ==
-# "cpu" vs "device"). A Var built/computed under `flag_scope(use_cuda=0)` is
-# genuinely host-resident, so torch code that asks for device='cpu' can be
-# honored by routing the allocation through use_cuda=0 -- the C++ shim then
-# correctly sees it as CPU. These helpers implement that bounded device='cpu'
-# support (creation + .cpu()/.cuda()/.to() migration + residency reporting).
+def _device_type_name(dev):
+    name = getattr(dev, "type", None)
+    if name is None and isinstance(dev, str):
+        return dev.split(":", 1)[0]
+    return name
+
 
 def _device_is_cpu(dev):
-    """True if a torch device= argument designates the CPU.
-
-    Accepts the torch_compat `device` class, a torch.device-like object with a
-    `.type`, a "cpu"/"cpu:0" string, or None (None means 'use the global default
-    placement', i.e. NOT an explicit CPU request)."""
-    if dev is None:
-        return False
-    t = getattr(dev, "type", None)
-    if t is not None:
-        return t == "cpu"
-    if isinstance(dev, str):
-        return dev == "cpu" or dev.split(":")[0] == "cpu"
-    return False
+    """True if a device argument explicitly designates the CPU."""
+    return _device_type_name(dev) == "cpu"
 
 
 def _device_is_cuda(dev):
-    """True if a torch device= argument explicitly designates CUDA/GPU."""
-    if dev is None:
-        return False
-    t = getattr(dev, "type", None)
-    if t is not None:
-        return t in ("cuda", "npu")
-    if isinstance(dev, str):
-        return dev.split(":")[0] in ("cuda", "npu")
-    return False
+    """True if a device argument explicitly designates CUDA or Ascend."""
+    return _device_type_name(dev) in ("cuda", "npu")
 
 
 def _cuda_index_of(dev):

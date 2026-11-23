@@ -104,7 +104,8 @@ class TestInstallationOwners(unittest.TestCase):
             self.assertIs(kwargs["context"], context)
             writes.append(value)
             setattr(obj, key, value)
-        ns = {"jt": object(), "get_install_context": lambda _: context, "set_attr": setter}
+        ns = {"jt": object(), "get_install_context": lambda _: context,
+              "set_attr": setter, "_TorchVersion": str}
         definitions("core_install_api.py", ["compat_report_torch_api_version"], ns)
         report = ns["compat_report_torch_api_version"]
         self.assertEqual(report(), "api")

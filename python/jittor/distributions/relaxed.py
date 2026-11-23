@@ -10,6 +10,7 @@
 
 
 import math
+from jittor._core.var import device_scope_like
 from .base import Distribution
 from .discrete import Bernoulli, Categorical, OneHotCategorical
 from ._utils import (_bshape, _full_shape, _norm_sample_shape, _log_temperature,
@@ -44,7 +45,8 @@ class LogitRelaxedBernoulli(Distribution):
     def rsample(self, sample_shape=None):
         import jittor as jt
         shape = _full_shape(sample_shape, self.batch_shape)
-        u = jt.rand(shape)
+        with device_scope_like(self.logits):
+            u = jt.rand(shape, dtype=self.logits.dtype)
         logit = self.logits + jt.safe_log(u) - jt.safe_log(1 - u)
         return logit / self.temperature
 
@@ -115,7 +117,8 @@ class ExpRelaxedCategorical(Distribution):
         import jittor as jt
         from jittor import nn
         shape = _norm_sample_shape(sample_shape) + tuple(self.probs.shape)
-        u = jt.rand(shape)
+        with device_scope_like(self.logits):
+            u = jt.rand(shape, dtype=self.logits.dtype)
         g = -jt.safe_log(-jt.safe_log(u + 1e-20) + 1e-20)
         scores = (self.logits + g) / self.temperature
         return nn.log_softmax(scores, dim=-1)
@@ -151,7 +154,7 @@ class RelaxedOneHotCategorical(OneHotCategorical):
 
     def rsample(self, sample_shape=None):
         import jittor as jt
-        return jt.exp(self.base_dist.rsample(sample_shape))
+        return jt.exp(self.base_dist.rsample(sample_shape)).cast(self.logits.dtype)
 
     def _sample_impl(self, sample_shape=None):
         # As in RelaxedBernoulli: the discrete OneHotCategorical._sample_impl

@@ -1758,7 +1758,7 @@ bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
     return true;
 }
 
-bool try_defer_unaliased_inplace(PyObject* self, PyObject* value) {
+bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_result) {
     if (!no_grad || graph_capture_active() || !runtime_use_cuda()
             || accelerator_backend_id() != BackendId::Cuda
             || !is_var(self) || !is_var(value)) return false;
@@ -1783,7 +1783,9 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value) {
     // These providers allocate a fresh result, rather than a view or an
     // output aliased with an input. Broader producers retain the store path.
     Op* producer = a->input();
-    if (!producer || !((has_op("cublas_matmul")
+    if (!producer) return false;
+    bool dtype_cast = fresh_result && producer->is_op(op_ids::unary()) && producer->ns == ns_cast;
+    if (!dtype_cast && !((has_op("cublas_matmul")
                 && producer->is_op(get_op_id("cublas_matmul")))
             || (has_op("cublas_batched_matmul")
                 && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
@@ -1797,12 +1799,15 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value) {
     if (version && version.use_count() != 2) return false;
     if (a->autograd_alias && (a->autograd_alias.use_count() != 1
             || a->autograd_alias->version.use_count() != 1)) return false;
-    // Copy also covers copy_(rhs) when the caller still owns rhs: assigning
-    // rhs itself would make the two tensors share mutable storage.
-    static auto make_copy = op_constructor<VarPtr, Var*>("copy");
-    VarHolder copied(make_copy(b));
     if (!version) version = a->storage_version_token();
-    target->assign(&copied);
+    if (dtype_cast) {
+        target->assign(replacement);
+    } else {
+        // copy_(rhs) must leave the destination independent of its live RHS.
+        static auto make_copy = op_constructor<VarPtr, Var*>("copy");
+        VarHolder copied(make_copy(b));
+        target->assign(&copied);
+    }
     std::atomic_store(&target->var->storage_mutation_version, version);
     return true;
 }

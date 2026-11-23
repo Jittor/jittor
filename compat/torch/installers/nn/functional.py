@@ -1,6 +1,7 @@
 from jittor.nn.functional.interpolation import _interpolate_antialiased
 from jittor.nn.functional.loss import _checked_class_target, _legacy_reduction, smooth_l1_loss as _native_smooth_l1
 from ...fidelity import Fidelity, register_api_bindings
+from ...frontend import tensor_frontend
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import jittor as jt
 from jittor import nn
@@ -171,9 +172,12 @@ def _interpolate(input=None, size=None, scale_factor=None,
         return _interpolate_antialiased(input, size, scale_factor, mode, ac, recompute_scale_factor)
     _context = get_install_context(jt)
     _jt_interpolate = _context.state["nn_functional_native"]['_jt_interpolate']
-    return _jt_interpolate(input, size=size,
-                           scale_factor=scale_factor, mode=mode,
-                           align_corners=ac)
+    # Resize creates coordinate tensors internally. Allocate them on the
+    # input device even when the process is currently using an accelerator.
+    with tensor_frontend(_context.target_namespace.Var, device=input.device):
+        return _jt_interpolate(input, size=size,
+                               scale_factor=scale_factor, mode=mode,
+                               align_corners=ac)
 
 
 def _cross_entropy(input, target, weight=None, size_average=None,
@@ -341,6 +345,9 @@ def _install_functional(ctx):
                 setattr(F, fname, fobj)
     else:
         F = nn.functional
+    if hasattr(F, "batch_norm"):
+        from ...fx.proxy import wrap
+        F.batch_norm = wrap(F.batch_norm)
     if hasattr(nn, "relu"): F.relu = nn.relu
     if hasattr(nn, "gelu"): F.gelu = nn.gelu
     if hasattr(nn, "softmax"):

@@ -12,6 +12,8 @@ holds the other half: no staged adapter may assign to a torch/jittor attribute.
 """
 import unittest
 
+from packaging.version import Version
+
 import jittor as jt
 import torch
 
@@ -52,6 +54,23 @@ class TestTorchApiVersionReporting(unittest.TestCase):
         first = torch.compat_report_torch_api_version(True)
         second = torch.compat_report_torch_api_version(True)
         self.assertEqual(first, second)
+
+    def test_release_tuple_comparisons_preserve_reported_text(self):
+        release = Version(jt.__version__).release
+        major = release[0]
+        version = torch.__version__
+        self.assertIsInstance(version, str)
+        self.assertEqual(str(version), jt.__version__)
+        self.assertGreaterEqual(version, (major - 1,))
+        self.assertLessEqual(version, (major + 1,))
+        self.assertGreater(version, (major - 1,))
+        self.assertLess(version, (major + 1,))
+        torch.compat_report_torch_api_version(True)
+        self.assertGreaterEqual(torch.__version__, Version(torch.__torch_version__).release)
+        self.assertEqual(torch.compat_report_torch_api_version(False), jt.__version__)
+
+    def test_xpu_build_flag_follows_registered_backend(self):
+        self.assertIs(torch._C._has_xpu, "xpu" in jt.core.registered_backends())
 
 
 if __name__ == "__main__":

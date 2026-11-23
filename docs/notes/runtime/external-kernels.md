@@ -35,6 +35,8 @@ with jt.flag_scope(use_cuda=1):
 
 支持上游 JIT 特化与磁盘编译缓存、constexpr、编译选项、可调用 grid，以及多个输出。非连续输入保留真实 stride；kernel 必须显式接收并正确使用 stride，线性寻址的 kernel 不会自动变成支持任意布局的 kernel。暂不接受 autotuner、解释器和需要全局 scratch 的 kernel。
 
+在 Triton 输出参数位置传入 `jittor.kernels.BoundOutput(buffer)`，可在推理时更新已有的 CUDA 存储。绑定的输出保留原地址，执行器会把写入排在既有读取操作之后。同一次调用也可以用 `TensorSpec` 声明新输出。这一路径在 CUDA 录制前准备发射，要求处于 `jt.no_grad()`，输入为当前设备上的连续 CUDA 张量，绑定输出已就绪且非空，grid 各维均为正数。输出之间不可重叠。kernel 同时读写某个缓冲区时，需要自行避免发射内的读写竞争。
+
 ## TileLang
 
 保留上游 `T.prim_func`，使用 TVM-FFI 执行后端，并显式传递所有输出：

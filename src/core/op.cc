@@ -531,8 +531,8 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     // Treating these states as nested traversals logged and restored every
     // node even when no outer traversal existed.
     unique_ptr<TraversalQueueMarks> marks;
-    auto index_pending = [&]() {
-        if (!marks && pending.size() >= 256) {
+    auto index_pending = [&](bool shared_ring = false) {
+        if (!marks && (shared_ring || pending.size() >= 256)) {
             marks.reset(new TraversalQueueMarks("saved_storage_readers"));
             for (Var* value : pending) marks->mark_queued(value);
         }
@@ -550,6 +550,15 @@ vector<Var*> saved_storage_readers(const vector<Var*>& written, Op* writer) {
     for (size_t i=0; i<pending.size(); ++i) {
         Var* value = pending[i];
         index_pending();
+        if (value->share_next && !marks) {
+            // Expanding each member of a medium-sized ring repeatedly never
+            // trips the 256-entry queue threshold, despite the large search.
+            // Index the ring early and keep the small unshared path cheap.
+            Var* member = value->share_next;
+            for (int count = 1; member != value && count < 16; ++count)
+                member = member->share_next;
+            if (member != value) index_pending(true);
+        }
         if (value->share_next && (!marks || !marks->expanded(value))) {
             for (Var* member=value->share_next; member!=value; member=member->share_next)
                 visit(member, true);
@@ -598,38 +607,48 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // readers count too: an output still asking to share its storage
     // (`share_src`) or one already in its share ring -- a broadcast's expand
     // that has run and left the graph, whose consumer has not.
-    vector<Var*> aliases;
-    unordered_set<Var*> alias_members;
-    auto alias = [&](Var* v) {
-        if (alias_members.insert(v).second) aliases.push_back(v);
-    };
-    for (Var* v : written) alias(v);
     vector<Node*> after;
     unordered_set<Node*> after_members;
     auto push_after = [&](Node* node) {
         if (after_members.insert(node).second) after.push_back(node);
     };
-    for (size_t k = 0; k < aliases.size(); k++) {
-        Var* v = aliases[k];
-        if (v->share_next)
-            for (Var* member = v->share_next; member != v; member = member->share_next)
-                alias(member);
-        for (Op* reader : v->outputs()) {
-            if (reader == op) continue;
-            bool stands_for_reader = false;
-            for (Var* out : reader->outputs()) {
-                if (out->share_src == v) {
-                    alias(out);
-                    continue;
+    {
+        vector<Var*> aliases;
+        TraversalQueueMarks marks("order_after_readers");
+        auto alias = [&](Var* value) {
+            if (marks.contains(value)) return;
+            marks.mark_queued(value);
+            aliases.push_back(value);
+        };
+        for (Var* value : written) alias(value);
+        for (size_t k = 0; k < aliases.size(); ++k) {
+            Var* v = aliases[k];
+            if (v->share_next && !marks.expanded(v)) {
+                // Every member leads to the same ring. Queue it only once,
+                // then visit each member's readers in the original order.
+                for (Var* member = v->share_next; member != v; member = member->share_next) {
+                    alias(member);
+                    marks.mark_expanded(member);
                 }
-                // Kept graphs run only when their replay owner requests them.
-                // Ordering a new write after one would replay an old training
-                // step, including its optimizer update, merely because both
-                // captures share parameters. Still follow storage aliases
-                // above: a new ordinary reader of an alias must be preserved.
-                if (stands_for_reader || out->is_finished() || out->flag(VarFlags::_kept)) continue;
-                stands_for_reader = true;
-                push_after(out);
+                marks.mark_expanded(v);
+            }
+            for (Op* reader : v->outputs()) {
+                if (reader == op) continue;
+                bool stands_for_reader = false;
+                for (Var* out : reader->outputs()) {
+                    if (out->share_src == v) {
+                        alias(out);
+                        continue;
+                    }
+                    // Kept graphs run only when their replay owner requests them.
+                    // Ordering a new write after one would replay an old training
+                    // step, including its optimizer update, merely because both
+                    // captures share parameters. Still follow storage aliases
+                    // above: a new ordinary reader of an alias must be preserved.
+                    if (stands_for_reader || out->is_finished() || out->flag(VarFlags::_kept)) continue;
+                    stands_for_reader = true;
+                    push_after(out);
+                }
             }
         }
     }
@@ -641,21 +660,42 @@ void order_after_readers(Op* op, const vector<Var*>& written) {
     // only keep its output alive until the update: a captured step, whose
     // whole forward is pending when the optimizer is built, held every
     // activation to the end, half as much memory again.
-    std::unordered_set<Op*> upstream;
-    vector<Node*> stack;
-    for (auto& edge : op->_inputs) stack.push_back(edge.node);
-    while (!stack.empty()) {
-        Node* v = stack.back();
-        stack.pop_back();
-        if (v->is_finished()) continue;
-        Op* producer = ((Var*)v)->input();
-        if (!producer || !upstream.insert(producer).second) continue;
-        for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+    {
+        // Queued marks denote the pending readers we are looking for.
+        // Expanded marks denote producers already visited in the upstream walk.
+        TraversalQueueMarks upstream("ordered write upstream readers");
+        size_t remaining = 0;
+        bool inputless_reader = false;
+        for (Node* out : after) {
+            Op* reader = ((Var*)out)->input();
+            if (!reader) {
+                inputless_reader = true;
+            } else if (!upstream.contains(reader)) {
+                upstream.mark_queued(reader);
+                ++remaining;
+            }
+        }
+        vector<Node*> stack;
+        for (auto& edge : op->_inputs) stack.push_back(edge.node);
+        while (remaining && !stack.empty()) {
+            Node* v = stack.back();
+            stack.pop_back();
+            if (v->is_finished()) continue;
+            Op* producer = ((Var*)v)->input();
+            if (!producer || upstream.expanded(producer)) continue;
+            bool is_reader = upstream.contains(producer);
+            upstream.mark_expanded(producer);
+            if (is_reader && --remaining == 0) break;
+            for (auto& edge : producer->_inputs) stack.push_back(edge.node);
+        }
+        if (!remaining && !inputless_reader) return;
+        size_t kept = 0;
+        for (Node* out : after) {
+            Op* reader = ((Var*)out)->input();
+            if (!reader || !upstream.expanded(reader)) after[kept++] = out;
+        }
+        after.resize(kept);
     }
-    size_t kept = 0;
-    for (Node* out : after)
-        if (!upstream.count(((Var*)out)->input())) after[kept++] = out;
-    after.resize(kept);
     if (after.empty()) return;
     op->add_inputs(after);
     // Control edges: they order the two ops and carry no data.

@@ -14,6 +14,13 @@ def module_setattr(module, name, value):
     attributes = vars(module)
     if attributes.get("_native_parameter_construction", False):
         return owner.native_module.__setattr__(module, name, value)
+    layers = attributes.get("layers")
+    if layers is not None and isinstance(module, owner.backend.nn.Sequential) and name in layers:
+        if value is not None and not isinstance(value, owner.native_module):
+            raise TypeError(f"cannot assign '{type(value).__name__}' as child module '{name}'")
+        # Sequential's registry, traversal and forward all read this mapping.
+        layers[name] = value
+        return
     if isinstance(value, owner.backend.Var) and not name.startswith("_"):
         parameters = attributes.setdefault("_parameter_names", set())
         non_parameters = attributes.setdefault("_non_parameter_names", set())
@@ -63,6 +70,11 @@ def module_init(module, *args, **kwargs):
     that layer's arguments (PEFT's VERA and BoFT adapters call it this way).
     """
     type(module)._torch_native_module.__init__(module, *args, **kwargs)
+
+
+def register_full_backward_hook(module, hook, prepend=False):
+    """Register a hook receiving this call's positional input and output gradients."""
+    return module._add_hook("_full_backward_hooks", hook, prepend=prepend)
 
 
 def python_module_call(module, *args, **kwargs):
@@ -126,15 +138,26 @@ def _init_group_norm(native_init, module, num_groups, num_channels, eps=1e-5,
     native_init(module, num_groups, num_channels, eps, affine, is_train)
 
 
+def _init_instance_norm(native_init, module, num_features, eps=1e-5, momentum=0.1,
+                        affine=False, is_train=True, sync=True):
+    native_init(module, num_features, eps, momentum, affine, is_train, sync)
+    if not affine:
+        module.weight = None
+        module.bias = None
+
+
 class LayerInitializer:
     """Descriptor binds one native initializer to one frontend owner."""
     def __init__(self, owner, native):
         self.owner = owner
         self.native = native
         self._group_norm = native is getattr(owner.backend.nn, "GroupNorm", None)
-        self.original = (
-            partial(_init_group_norm, native.__init__) if self._group_norm else native.__init__
-        )
+        if self._group_norm:
+            self.original = partial(_init_group_norm, native.__init__)
+        elif native is getattr(owner.backend.nn, "InstanceNorm", None):
+            self.original = partial(_init_instance_norm, native.__init__)
+        else:
+            self.original = native.__init__
         self.signature = inspect.signature(self.original)
         self.__wrapped__ = self.original
         self.__name__ = "__init__"
@@ -253,7 +276,7 @@ class NNFrontendOwner:
             "_frontend_tensor_type": tensor_type, "_nn_frontend_owner": self,
             "_torch_native_module": self.native_module,
             "__setattr__": module_setattr, "__call__": module_call,
-            "__init__": module_init,
+            "__init__": module_init, "register_full_backward_hook": register_full_backward_hook,
         })
         self.adapters = {self.native_module: self.Module}
         self.modules = {}

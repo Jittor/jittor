@@ -33,6 +33,7 @@ passed. Positive cotangents keep the reduction well-conditioned.
 """
 
 from _helpers import capability as _test_capability
+from _helpers.devices import explicit_tensor_placement
 import unittest
 
 import numpy as np
@@ -40,7 +41,7 @@ import numpy as np
 import jittor as jt
 
 from jittor.backends.cuda.kernels.nn.softmax_cuda import (
-    _softmax_schedule, softmax_v1)
+    _softmax_fp32_with_row_floor, _softmax_schedule, softmax_v1)
 
 EPS32 = float(np.finfo("float32").eps)
 
@@ -115,6 +116,30 @@ def _grad_tolerance(prob, cot_np, grad_ref, log, sum_error):
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestSoftmaxCudaGrad(unittest.TestCase):
+    def test_row_floor_preserves_wide_softmax_bits(self):
+        rng = np.random.default_rng(891)
+        with jt.flag_scope(use_cuda=1, no_grad=1, backend_fallback="error"):
+            device = jt.current_device()
+            for count in (1, 7, 8):
+                with self.subTest(count=count):
+                    raw = rng.normal(size=(count, 131073)).astype(np.float32)
+                    floors = rng.normal(size=(count, 1)).astype(np.float32)
+                    if count > 1:
+                        raw[0] = -np.inf
+                        raw[1, 12] = np.nan
+                    with explicit_tensor_placement(1, device):
+                        value = jt.array(raw)
+                        floor = jt.array(floors)
+                        masked = jt.array(np.where(raw < floors, -np.inf, raw))
+                    expected = softmax_v1(masked)
+                    actual = _softmax_fp32_with_row_floor(value, floor)
+                    self.assertIsNotNone(actual)
+                    actual.sync()
+                    self.assertEqual(actual.location(), "device")
+                    np.testing.assert_array_equal(
+                        actual.numpy().view(np.uint32), expected.numpy().view(np.uint32)
+                    )
+
     def test_wide_fp32_log_softmax_cuda_reduction_order(self):
         # Independent Torch 2.13 CUDA results, including unaligned row starts.
         references = {65537: [3239038572, 3239038579, 3239038665],
@@ -126,6 +151,24 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
                 y = softmax_v1(jt.array(raw), log=True).numpy()
                 peaks = y[np.arange(3), raw.argmax(axis=1)]
                 np.testing.assert_array_equal(peaks.view(np.uint32), expected)
+
+    def test_wide_fp32_softmax_propagates_nan_from_masked_tile(self):
+        width = 131073
+        data = np.full((4, width), -np.inf, dtype=np.float32)
+        data[0, -3:] = (1.0, 2.0, 3.0)
+        data[1, -3:] = (1.0, 2.0, 3.0)
+        data[1, 0] = np.nan
+        data[3, -1] = np.inf
+        expected = np.exp(np.array([-2., -1., 0.], dtype=np.float64))
+        expected /= expected.sum()
+        with jt.flag_scope(use_cuda=1, backend_fallback="error", cuda_kernel_math="strict"):
+            result = softmax_v1(jt.array(data))
+            result.sync()
+            self.assertEqual(result.location(), "device")
+            out = result.numpy()
+        np.testing.assert_array_equal(out[0, :-3], 0)
+        np.testing.assert_allclose(out[0, -3:], expected, rtol=2e-6)
+        self.assertTrue(np.isnan(out[1:]).all())
 
     def _cuda(self, x_np, cot_np, log):
         with jt.flag_scope(use_cuda=1):
@@ -282,6 +325,26 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
         self.assertLess(error, tol,
                         "float16 softmax backward is off by %.3g > %.3g"
                         % (error, tol))
+
+
+    def test_bfloat16_backward_with_promoted_cotangent(self):
+        values = np.array([[0.125, -0.25, 0.375], [-0.125, 0.25, -0.375]], dtype=np.float32)
+        weights = np.array([[0.25, 0.5, 1.0], [0.125, 0.75, 0.625]], dtype=np.float32)
+        with jt.flag_scope(use_cuda=1):
+            for log in (False, True):
+                with self.subTest(log=log):
+                    x = jt.array(values).bfloat16()
+                    y = softmax_v1(x, log=log)
+                    raised = jt.exp(y)
+                    gradient = jt.grad((raised * jt.array(weights)).sum(), x)
+                    saved, actual = jt.fetch_sync([y.float32(), gradient.float32()])
+                    self.assertEqual(gradient.location(), "device")
+                    cotangent = np.exp(saved) * weights
+                    if log:
+                        expected = cotangent - np.exp(saved) * cotangent.sum(-1, keepdims=True)
+                    else:
+                        expected = saved * (cotangent - (saved * cotangent).sum(-1, keepdims=True))
+                    np.testing.assert_allclose(actual, expected, rtol=0.02, atol=0.002)
 
 
 class TestSoftmaxScheduleCoversBothKernels(unittest.TestCase):

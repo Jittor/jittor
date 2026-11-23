@@ -7,7 +7,7 @@ import itertools
 import numpy as np
 from builtins import int as ori_int
 from jittor_core import Var, ops
-from .hooks import _RemovableHandle, grad_hooker
+from .hooks import _ModuleBackwardHooks, _RemovableHandle, grad_hooker
 
 #: jittor's flags object and the automatic-replay policy, bound on first use.
 #: This module is imported while jittor is still being built up, so neither
@@ -495,7 +495,7 @@ class Module:
         ps = dict(self._named_vars("state", recurse, remove_duplicate=False))
         if keep_vars is False:
             for k, v in ps.items():
-                if isinstance(v, Var):
+                if isinstance(v, Var) and not getattr(type(v), "_torch_uninitialized", False):
                     ps[k] = v.detach()
         if to == "numpy":
             for k,v in ps.items():
@@ -755,7 +755,7 @@ class Module:
         return d
 
     #: Set once, on the module that first creates a hook table. Never cleared:
-    #: removing a hook leaves it True, which only costs that module the four
+    #: removing a hook leaves it True, which only costs that module the
     #: lookups below. Clearing it would be the unsafe direction -- a module
     #: that still has hooks would stop running them.
     _hook_table_created = False
@@ -768,8 +768,7 @@ class Module:
 
     def _has_hooks(self):
         # `__call__` asks this for every module of every forward, and almost no
-        # module has ever had a hook: four dict lookups each, 228 a step on an
-        # 8-layer transformer. The flag answers that case with one attribute
+        # module has ever had a hook. The flag answers that case with one attribute
         # read that falls through to the class.
         if not self._hook_table_created:
             return False
@@ -780,7 +779,8 @@ class Module:
         d = self.__dict__
         return (d.get("_forward_pre_hooks") or d.get("_forward_hooks")
                 or d.get("_input_backward_hooks")
-                or d.get("_output_backward_hooks"))
+                or d.get("_output_backward_hooks")
+                or d.get("_full_backward_hooks"))
 
     def _add_hook(self, name, func, prepend=False, **info):
         """Append (or prepend) one hook and return the handle that removes it."""
@@ -838,6 +838,13 @@ class Module:
                 LOG.w("backward hook not support kw")
             for func, _info in list(bihooks.values()):
                 args = grad_hooker(args, func)
+        full = None
+        full_hooks = self._hooks("_full_backward_hooks")
+        if full_hooks:
+            from .flags import flags
+            if not flags.no_grad:
+                full = _ModuleBackwardHooks(self, tuple(func for func, _ in full_hooks.values()))
+                args = full.wrap_inputs(args)
         # NB: do NOT wrap the forward in no_grad when `_requires_grad` is False.
         # torch's requires_grad_(False) freezes parameters, it does not stop the
         # forward from building the autograd graph; gating here severs grad for
@@ -872,7 +879,8 @@ class Module:
         # the hook with 4 positional args whenever kwargs were present,
         # which breaks every plain 3-arg torch hook -- e.g. transformers'
         # output_hidden_states / output_attentions paths.
-        return self._run_forward_hooks(fhooks, args, kw, ret)
+        ret = self._run_forward_hooks(fhooks, args, kw, ret)
+        return full.wrap_outputs(ret) if full is not None else ret
 
     def register_forward_hook(self, func, *, prepend=False, with_kwargs=False, always_call=False):
         ''' Register a forward function hook that will be called after Module.execute.

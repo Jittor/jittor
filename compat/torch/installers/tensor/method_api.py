@@ -205,6 +205,12 @@ def _try_captured_indexed_store(self, slices, value):
     return self._try_indexed_storage_write(value, indices, axes)
 
 
+def _strip_assignment_leading_axes(value, region_rank):
+    while value.ndim > region_rank and value.shape[0] == 1:
+        value = value.squeeze(0)
+    return value
+
+
 def _torch_setitem(self, slices, value):
     if _try_captured_indexed_store(self, slices, value):
         return self
@@ -270,6 +276,16 @@ def _torch_setitem(self, slices, value):
             value = _make_cuda_resident(value)
         elif not _var_is_cpu_resident(value) and _var_is_cpu_resident(self):
             value = _make_cpu_resident(value)
+        if value.ndim and value.shape[0] == 1:
+            parts = slices if isinstance(slices, tuple) else (slices,)
+            if all(not isinstance(part, tuple) and _is_basic_index(part) for part in parts):
+                # Integer indices remove axes and None inserts axes. Slices
+                # and Ellipsis preserve the rank of the axes they select.
+                removed = sum(isinstance(part, _owner.numbers.Integral) for part in parts)
+                inserted = sum(part is None for part in parts)
+                region_rank = self.ndim - removed + inserted
+                if region_rank >= 0:
+                    value = _strip_assignment_leading_axes(value, region_rank)
     try:
         mask = slices
         if isinstance(mask, _NativeVar) and _jittor_dtype_name(mask.dtype) in ("bool", "uint8") \
@@ -279,8 +295,7 @@ def _torch_setitem(self, slices, value):
             # (N, *self.shape[mask.ndim:]). Drop only provably redundant
             # leading singleton axes from value until ranks agree.
             region_rank = 1 + (len(self.shape) - len(mask.shape))
-            while len(value.shape) > region_rank and value.shape[0] == 1:
-                value = value.squeeze(0)
+            value = _strip_assignment_leading_axes(value, region_rank)
     except _owner.EXPECTED as exc:
         _owner.swallowed("torch/installers/tensor.py _torch_setitem: mask = slices", exc)
     if (not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
@@ -317,7 +332,7 @@ def _optimizer_write_scope():
         _OPTIMIZER_WRITES[0] -= 1
 
 
-def _copy_detached_storage(self, value):
+def _copy_detached_storage(self, value, *, fresh_result=False):
     # Optimizer buckets retain detached aliases of dense slices. Rebinding a
     # holder would leave those aliases reading the old allocation. Only use
     # the native imperative store when no differentiable RHS edge is needed.
@@ -346,7 +361,7 @@ def _copy_detached_storage(self, value):
         # would lose that storage, its overlap guards and its gradient history.
         if not self._mem_ptr_now:
             if (not _OPTIMIZER_WRITES[0] and not step_capture.tracing()
-                    and _owner.jt.core._try_defer_unaliased_inplace(self, value)):
+                    and _owner.jt.core._try_defer_unaliased_inplace(self, value, fresh_result)):
                 return True
             self.sync(False, False)
         if not self._mem_ptr_now:
@@ -379,7 +394,7 @@ def _copy_detached_storage(self, value):
     return True
 
 
-def _ip(self, value, preserve_storage=False):
+def _ip(self, value, preserve_storage=False, *, fresh_result=False):
     self._check_inplace_autograd()
     data_owner = getattr(self, "_torch_data_owner", None)
     if (data_owner is not None and not _owner.jt.flags.no_grad and isinstance(value, _NativeVar)
@@ -395,7 +410,7 @@ def _ip(self, value, preserve_storage=False):
                 raise RuntimeError("a leaf Variable that requires grad is being used in an in-place operation.")
             if self._view_base_is_trainable_leaf():
                 raise RuntimeError("a view of a leaf Variable that requires grad is being used in an in-place operation.")
-        if _copy_detached_storage(self, value):
+        if _copy_detached_storage(self, value, fresh_result=fresh_result):
             return self
     # Keep the RHS graph through an in-place operation. start_grad() on an
     # already connected result would replace its graph with a fresh leaf.
@@ -938,9 +953,11 @@ def _align_advanced_index(data, index):
 
 def _torch_getitem(self, slices):
     slices = _normalize_index_sequence(slices)
-    # PyTorch accepts NumPy integer/bool arrays as advanced indices.
-    # Convert them before the native fast path or the dispatcher sees them.
+    # Convert advanced masks before the native fast path or dispatcher.
     def normalize(index):
+        if isinstance(index, list) and index and all(isinstance(item, bool) for item in index):
+            torch = get_install_context(_owner.jt).target_namespace
+            return torch.tensor(index, dtype=torch.bool, device=self.device)
         if isinstance(index, _owner.np.ndarray) and index.ndim:
             if index.dtype.kind not in ("b", "i", "u"):
                 return index
@@ -1112,9 +1129,11 @@ def _to(self, *args, **kwargs):
     memory_format = kwargs.get("memory_format")
     if memory_format not in (None, "preserve_format", "contiguous_format", CHANNELS_LAST_3D):
         raise NotImplementedError("to supports preserve_format, contiguous_format and channels_last_3d")
-    # device passed as a keyword (torch's .to(device=..., dtype=...))
+    # The keyword form accepts accelerator indices as well as device objects.
     if "device" in kwargs:
         dev = kwargs["device"]
+        if _owner._is_index(dev):
+            dev = _owner.device(dev)
     # Only the two keywords that can *carry* a device or a dtype join the
     # positional scan. Sweeping every keyword value into it dragged
     # `memory_format="contiguous_format"` through the string branch below,
@@ -1414,7 +1433,8 @@ def _narrow(self, dim, start, length):
 
 
 def _stride(self, dim=None):
-    st = tuple(self._storage_strides())
+    layout = getattr(self, "_jittor_torch_meta_layout", None)
+    st = layout[0] if layout is not None else tuple(self._storage_strides())
     if dim is None:
         return tuple(st)
     return st[dim]
@@ -2278,8 +2298,24 @@ def _fill_captured_state(self, val):
 def _api_fill(self, val):
     if _fill_captured_state(self, val):
         return self
+    jt = _owner.jt
+    direct_bool = (
+        type(val) is bool and _jittor_dtype_name(self.dtype) == "bool"
+        and not jt.flags.auto_graph_replay and not jt.core._state_capture_active()
+        and not jt.core.graph_capture_active()
+    )
+    if direct_bool and not self.numel():
+        # The empty view has no bytes to change. The native self-copy still
+        # advances the shared write version without constructing a source.
+        self._copy_into(self, False)
+        return self
+    if direct_bool and jt.flags.no_grad and self._try_fill_bool_cuda(val):
+        return self
     with _new_scope(self, None):
-        value = _owner.jt.ones(self.shape, self.dtype).stop_grad() * val
+        if direct_bool:
+            value = jt.full(self.shape, val, self.dtype)
+        else:
+            value = jt.ones(self.shape, self.dtype).stop_grad() * val
     return _ip(self, value, preserve_storage=True)
 
 
@@ -2354,6 +2390,18 @@ def _api_zero_batch(tensors):
                 tensor._copy_into(zeros)
 
 
+def _write_inplace_arithmetic_result(self, value, *, fresh_result=False):
+    if tuple(value.shape) != tuple(self.shape):
+        raise RuntimeError("in-place result shape does not match destination shape")
+    result_dtype, target_dtype = value.dtype, self.dtype
+    if result_dtype != target_dtype:
+        namespace = get_install_context(_owner.jt).target_namespace
+        if not namespace.can_cast(result_dtype, target_dtype):
+            raise RuntimeError("result type can't be cast to the destination type")
+        value = value.cast(_jittor_dtype_name(target_dtype))
+    return _ip(self, value, preserve_storage=True, fresh_result=fresh_result)
+
+
 def _inplace_add_sub(self, other, alpha, subtract=False):
     other = _dense_arithmetic_operand(other)
     if subtract and (
@@ -2380,15 +2428,7 @@ def _inplace_add_sub(self, other, alpha, subtract=False):
         value = self + (other if alpha else False)
     else:
         value = self - other * alpha if subtract else self + other * alpha
-    if tuple(value.shape) != tuple(self.shape):
-        raise RuntimeError("in-place result shape does not match destination shape")
-    result_dtype, target_dtype = value.dtype, self.dtype
-    if result_dtype != target_dtype:
-        namespace = get_install_context(_owner.jt).target_namespace
-        if not namespace.can_cast(result_dtype, target_dtype):
-            raise RuntimeError("result type can't be cast to the destination type")
-        value = value.cast(_jittor_dtype_name(target_dtype))
-    return _ip(self, value, preserve_storage=True)
+    return _write_inplace_arithmetic_result(self, value)
 
 
 def _api_add(self, o, alpha=1):
@@ -2410,7 +2450,8 @@ def _inplace_saved_input(self, other):
 
 
 def _api_mul(self, o):
-    return _ip(self, _inplace_saved_input(self, o) * o, preserve_storage=True)
+    value = _inplace_saved_input(self, o) * o
+    return _write_inplace_arithmetic_result(self, value, fresh_result=True)
 
 
 def _api_div(self, o):
@@ -2717,6 +2758,8 @@ def _api_untyped_storage(self):
 
 
 def _api_data_ptr(self):
+    if _api_is_meta(self):
+        return 0
     _owner.jt.graph_replay_barrier("Tensor.data_ptr exposes storage to an external consumer")
     return int(self._storage_address)
 
@@ -2734,6 +2777,17 @@ def _api_is_shared(self):
 def _api_is_contiguous(self, *a, **k):
     if k.get("memory_format") == CHANNELS_LAST_3D:
         return is_channels_last_3d(self)
+    layout = getattr(self, "_jittor_torch_meta_layout", None)
+    if layout is not None:
+        expected = 1
+        shape = tuple(self.shape)
+        if 0 in shape:
+            return True
+        for size, stride in reversed(tuple(zip(shape, layout[0]))):
+            if size > 1 and stride != expected:
+                return False
+            expected *= size
+        return True
     return self._storage_is_contiguous()
 
 
@@ -2773,7 +2827,7 @@ def _api_retains_grad(self):
 
 
 def _api_is_cpu(self):
-    return not _is_cuda(self)
+    return not _api_is_meta(self) and not _is_cuda(self)
 
 
 def _api_is_mps(self):
@@ -2793,7 +2847,8 @@ def _api_get_device(self):
 
 
 def _api_storage_offset(self):
-    return int(self._storage_offset())
+    layout = getattr(self, "_jittor_torch_meta_layout", None)
+    return layout[1] if layout is not None else int(self._storage_offset())
 
 
 def _api_reduce_ex(self, protocol):

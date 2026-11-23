@@ -336,11 +336,11 @@ class Graph(object):
                         parts.append("**{%r: %s}" % (k, fmt(v)))
                 return ", ".join(parts)
             if isinstance(a, slice):
-                return "slice(%s, %s, %s)" % (
-                    fmt(a.start), fmt(a.stop), fmt(a.step))
+                return "%s(%s, %s, %s)" % (
+                    global_name(slice), fmt(a.start), fmt(a.stop), fmt(a.step))
             if isinstance(a, range):
-                return "range(%s, %s, %s)" % (
-                    fmt(a.start), fmt(a.stop), fmt(a.step))
+                return "%s(%s, %s, %s)" % (
+                    global_name(range), fmt(a.start), fmt(a.stop), fmt(a.step))
             if isinstance(a, (str, bytes, int, float, complex, bool)) \
                     or a is None or a is Ellipsis:
                 return repr(a)
@@ -370,7 +370,7 @@ class Graph(object):
                 if atom.isidentifier() and not keyword.iskeyword(atom):
                     expr += "." + atom
                 else:
-                    expr = "getattr(%s, %r)" % (expr, atom)
+                    expr = "%s(%s, %r)" % (global_name(getattr), expr, atom)
             return expr
 
         lines = ["def forward(%s):" % ", ".join(arguments)]
@@ -400,7 +400,7 @@ class Graph(object):
                 if method.isidentifier() and not keyword.iskeyword(method):
                     access = "%s.%s" % (receiver, method)
                 else:
-                    access = "getattr(%s, %r)" % (receiver, method)
+                    access = "%s(%s, %r)" % (global_name(getattr), receiver, method)
                 lines.append("    %s = %s(%s%s)" % (
                     name, access,
                     ", ".join(fmt(a) for a in node.args[1:]),

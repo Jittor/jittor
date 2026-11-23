@@ -191,8 +191,8 @@ and intermediate elimination (`remove_intermediate_pass`), among others. Shape
 and parameter search is handled by `jit_searcher` and
 `tuner/{conv,matmul,reduce,broadcast,reorder}_tuner`.
 
-> There is no **graph-level constant folding** here; `const_var_pass` handles
-> constant variables at codegen time.
+Fused operators receive scalar array values at runtime. Operators with the same
+structure and types can reuse the same compiled kernel.
 
 ### 3.3 Backend lowering: one kernel per row
 

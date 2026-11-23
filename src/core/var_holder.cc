@@ -83,14 +83,19 @@ PyObject* new_var_data_owner(VarHolder* vh) {
     return capsule;
 }
 
-VarPtr ready_storage_alias(VarHolder* source) {
+static VarPtr ready_storage_alias_impl(VarHolder* source, bool physical_window) {
     Var* original = source->var;
     USER_CHECK(original->num >= 0 && !original->flag(VarFlags::_execution_failed)
             && original->allocator && (original->mem_ptr || !original->size))
         << "rematerialization needs successfully materialized output storage";
 
-    VarPtr ready(original->shape, original->dtype());
-    ready->storage_strides = original->storage_strides;
+    NanoVector shape = original->shape;
+    if (physical_window) {
+        shape = NanoVector();
+        shape.push_back(original->storage_span_bytes() / original->dsize());
+    }
+    VarPtr ready(shape, original->dtype());
+    if (!physical_window) ready->storage_strides = original->storage_strides;
     ready->device_id = original->device_id;
     ready->placement = original->placement;
     ready->set_flag(VarFlags::_host_resident, original->flag(VarFlags::_host_resident));
@@ -108,6 +113,22 @@ VarPtr ready_storage_alias(VarHolder* source) {
     // Complete only this new inputless leaf. Original nodes remain untouched.
     ready->finish_pending_liveness();
     return ready;
+}
+
+VarPtr ready_storage_alias(VarHolder* source) {
+    return ready_storage_alias_impl(source, false);
+}
+
+extern bool no_grad;
+
+VarHolder* VarHolder::physical_storage_window() {
+    USER_CHECK(no_grad && var->is_finished() && var->num > 0
+            && var->allocator && allocation_device(var->allocator).backend == BackendId::Cuda)
+        << "physical storage window requires a materialized CUDA tensor in no_grad mode";
+    for (int axis = 0; axis < var->shape.size(); ++axis)
+        USER_CHECK(var->storage_stride(axis) > 0)
+            << "physical storage window requires positive strides";
+    return new VarHolder(ready_storage_alias_impl(this, true));
 }
 
 // Holders rebound while a step is being captured, with the Var each held
@@ -575,6 +596,94 @@ void finish_step_readouts(const vector<VarHolder*>& roots) {
     for (VarHolder* holder : roots) holder->release_kept();
 }
 
+bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
+                                const vector<VarHolder*>& sources, bool resolve_pending) {
+    if (!no_grad || targets.size() != sources.size()
+            || state_capture_active() || graph_capture_active())
+        return false;
+    if (targets.empty()) return true;
+
+    async_exec_wait();
+    ExecutorEntryScope entry;
+    const Device device{BackendId::Cuda, current_device()};
+    auto ready_on_device = [device](Var* value) {
+        if (!value->is_finished() || !value->is_contiguous() || !value->size
+                || !value->mem_ptr || !value->allocator
+                || value->flag(VarFlags::_execution_failed))
+            return false;
+        const Device owner = allocation_device(value->allocator);
+        return owner.backend == device.backend && owner.index == device.index;
+    };
+    vector<Var*> destinations, pending;
+    destinations.reserve(targets.size());
+    for (size_t i = 0; i < targets.size(); ++i) {
+        Var* target = targets[i]->var;
+        Var* source = sources[i]->var;
+        if (targets[i]->is_view() || !ready_on_device(target)
+                || target->shape != source->shape || target->dtype() != source->dtype())
+            return false;
+        destinations.push_back(target);
+        if (ready_on_device(source)) continue;
+        if (!resolve_pending || source->is_finished() || source->flag(VarFlags::_kept)
+                || source->flag(VarFlags::_execution_failed) || !source->is_contiguous()
+                || source->device_id != device.index
+                || (source->placement.explicit_backend
+                    && source->placement.device.backend != device.backend))
+            return false;
+        pending.push_back(source);
+    }
+    if (!pending.empty()) {
+        // A pending reader or alias of a destination belongs to the existing
+        // ordered write path. Detect either before publishing any sources.
+        if (!saved_storage_readers(destinations).empty()) return false;
+        for (Var* source : pending) {
+            auto owner = source->peek_storage_version();
+            if (owner)
+                for (Var* target : destinations)
+                    if (target->peek_storage_version() == owner) return false;
+        }
+        struct KeepGraphScope {
+            int previous = keep_graph;
+            KeepGraphScope() { keep_graph = 0; }
+            ~KeepGraphScope() { keep_graph = previous; }
+        } scope;
+        // Resolve the caller's inputs as ordinary work, while treating
+        // already-executed kept values as boundaries.
+        materialize_step_values(pending, false);
+        if (!std::all_of(pending.begin(), pending.end(), ready_on_device))
+            return false;
+    }
+    auto overlaps = [](const Var* a, const Var* b) {
+        auto x = reinterpret_cast<uintptr_t>(a->mem_ptr);
+        auto y = reinterpret_cast<uintptr_t>(b->mem_ptr);
+        return x <= y ? y - x < a->size : x - y < b->size;
+    };
+    // Validate the whole transaction before any copy can overwrite a later
+    // source. The ordinary executor path owns views and saved readers.
+    for (size_t i = 0; i < targets.size(); ++i)
+        for (size_t j = 0; j < targets.size(); ++j)
+            if (overlaps(destinations[i], sources[j]->var)
+                    || (i < j && overlaps(destinations[i], destinations[j])))
+                return false;
+    if (!saved_storage_readers(destinations).empty()) return false;
+
+    vector<VarPtr> held_sources;
+    vector<VarPtr> held_targets;
+    held_sources.reserve(sources.size());
+    held_targets.reserve(targets.size());
+    for (size_t i = 0; i < targets.size(); ++i) {
+        targets[i]->check_inplace_autograd();
+        held_targets.emplace_back(destinations[i]);
+        held_sources.emplace_back(sources[i]->var);
+    }
+    for (size_t i = 0; i < targets.size(); ++i) {
+        targets[i]->record_inplace_write();
+        backend_copy(held_targets[i]->mem_ptr, device, held_sources[i]->mem_ptr,
+                     device, held_targets[i]->size, true);
+    }
+    return true;
+}
+
 bool commit_shared_updates(const vector<VarHolder*>& targets,
                            const vector<VarHolder*>& sources) {
     USER_CHECK(targets.size() == sources.size())
@@ -599,6 +708,34 @@ bool commit_shared_updates(const vector<VarHolder*>& targets,
 
 void VarHolder::copy_into(VarHolder* src, bool sync_src) {
     copy_into_impl(src, sync_src, nullptr);
+}
+
+bool VarHolder::try_fill_bool_cuda(bool value) {
+#if defined(IS_CUDA) && !defined(IS_COREX)
+    if (!no_grad || state_capture_active() || graph_capture_active()
+            || var->dtype() != ns_bool || var->num <= 0 || !var->is_contiguous()
+            || var->capture_owners || var->flag(VarFlags::_kept)
+            || !var->placement.explicit_backend || var->placement.device.backend != BackendId::Cuda)
+        return false;
+    ExecutorEntryScope entry;
+    if (var->device_id != current_device() || (view && !storage_view_is_physical())
+            || (var->allocator && !var->allocator->is_cuda()))
+        return false;
+    auto* base = view && view->base ? view->base : this;
+    for (auto* record = base->views; record; record = record->next)
+        if (!record->owner->storage_view_is_physical()) return false;
+
+    // A self-copy preserves prior readers, materializes the destination and
+    // records one mutation. It never copies bytes or rebinds the storage.
+    copy_into(this, false);
+    const Device device = allocation_device(var->allocator);
+    USER_CHECK(device.backend == BackendId::Cuda) << "bool fill destination left CUDA";
+    cuda_fill_bytes(var->mem_ptr, device, int(value), var->size);
+    return true;
+#else
+    (void)value;
+    return false;
+#endif
 }
 
 void VarHolder::copy_into_impl(VarHolder* src, bool sync_src,
@@ -911,6 +1048,30 @@ static bool shares_physical_storage(Var* value, Var* base) {
     return false;
 }
 
+bool VarHolder::same_step_storage(VarHolder* other) {
+    Var* reference = other->var;
+    if (!reference->mem_ptr || !reference->allocator
+            || var->shape != reference->shape || var->dtype() != reference->dtype())
+        return false;
+    for (int axis = 0; axis < var->shape.size(); ++axis)
+        if (var->storage_stride(axis) != reference->storage_stride(axis)) return false;
+
+    Var* current = var;
+    Var* fast = current;
+    while (current) {
+        if (current->mem_ptr) {
+            return current->mem_ptr == reference->mem_ptr
+                && current->allocator == reference->allocator
+                && current->allocation == reference->allocation;
+        }
+        if (current->share_offset) return false;
+        current = current->share_src;
+        fast = fast && fast->share_src ? fast->share_src->share_src : nullptr;
+        if (current && current == fast) return false;
+    }
+    return false;
+}
+
 bool VarHolder::storage_view_is_physical() {
     if (!view || !view->physical_storage) return false;
     return !view->base || shares_physical_storage(var, view->base->var);
@@ -1010,7 +1171,9 @@ void VarHolder::attach_view(VarHolder* base, VarViewStep final_step) {
         auto state = std::make_shared<AutogradAliasState>();
         state->source = source;
         state->version = source->version;
-        state->creation_version = *state->version;
+        state->custom_backward_view = source->custom_backward_view;
+        state->creation_version = source->custom_backward_view
+            ? source->creation_version : *state->version;
         state->created_without_grad = no_grad;
         state->recorded_view_history = !no_grad && backward_grad_fn(var);
         state->source_edge_enabled = base->get_requires_grad();
@@ -1560,6 +1723,17 @@ std::shared_ptr<AutogradAliasState> VarHolder::ensure_autograd_alias() {
     return var->autograd_alias;
 }
 
+void VarHolder::mark_custom_backward_view(VarHolder* base) {
+    // The tape already shares storage with the base. Track the shared write
+    // version without rebasing the custom gradient edge as an ordinary view.
+    auto source = base->ensure_autograd_alias();
+    auto state = ensure_autograd_alias();
+    state->version = source->version;
+    state->creation_version = source->custom_backward_view
+        ? source->creation_version : *source->version;
+    state->custom_backward_view = true;
+}
+
 VarHolder* VarHolder::check_inplace_autograd() {
     if (no_grad || !autograd_policy.stop_outputs_when_inputs_stopped) return this;
     if (get_requires_grad() && var->autograd_alias
@@ -1570,6 +1744,8 @@ VarHolder* VarHolder::check_inplace_autograd() {
             "modified inplace with grad mode enabled.";
     }
     if (get_requires_grad()) {
+        USER_CHECK(!var->autograd_alias || !var->autograd_alias->custom_backward_view)
+            << "A custom backward view is being modified inplace.";
         USER_CHECK(!jittor::is_backward_leaf(var))
             << "a leaf Variable that requires grad is being used in an in-place operation.";
         USER_CHECK(!view_base_is_trainable_leaf())
@@ -1985,7 +2161,7 @@ bool VarHolder::try_indexed_storage_write(VarHolder* values,
     const int count = indices.size();
     const auto dtype = target->dtype();
     if (rank <= 0 || rank > 16 || count <= 0 || count > rank || count != axes.size()
-            || axes[0] != 0 || (dtype != ns_float32 && dtype != ns_bfloat16)
+            || axes[0] != 0 || (dtype != ns_float32 && dtype != ns_bfloat16 && dtype != ns_float16)
             || source->dtype() != dtype
             || !source->is_contiguous() || source->shape.size() != rank - count + 1
             || construction_target_backend(target) != BackendId::Cuda
@@ -2274,6 +2450,31 @@ ItemData VarHolder::item() {
 
 // from fetch_op.cc
 EXTERN_LIB list<VarPtr> fetcher;
+
+void poll_fetches() {
+    {
+        // The executor can retire a fetch while it waits for a prior batch.
+        // Keep its root alive once we release the graph lock.
+        vector<VarPtr> pending;
+        {
+            ExecutorEntryScope entry;
+            pending.reserve(fetcher.size());
+            for (const auto& v : fetcher)
+                pending.emplace_back(v.ptr);
+        }
+        if (!pending.empty()) {
+            vector<Var*> vars;
+            vars.reserve(pending.size());
+            for (const auto& v : pending)
+                vars.push_back(v.ptr);
+            runtime_executor().run_sync(move(vars), false, false);
+        }
+    }
+#ifdef HAS_ACCELERATOR
+    ExecutorEntryScope entry;
+    event_queue.flush();
+#endif
+}
 
 void sync_all(bool device_sync) {
     vector<Var*> vars;

@@ -37,6 +37,11 @@ def _state_buffer(param):
     moment buffers on the wrong card from the start. ``zeros_like`` follows the
     parameter, which is what every other ``*_like`` in jittor does.
     """
+    if getattr(type(param), "_torch_uninitialized", False):
+        # The holder is registered before its first forward. Keep an empty
+        # state on its device until the Torch optimizer sees the real gradient
+        # shape and rebuilds its moments.
+        param = param.data
     return jt.zeros_like(param).stop_grad()
 
 

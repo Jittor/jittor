@@ -12,6 +12,49 @@ import numpy as np
 from jittor import Function
 
 class TestCodeOp(unittest.TestCase):
+    def test_bound_output_orders_readers_in_a_large_alias_ring(self):
+        with jt.flag_scope(use_cuda=0, lazy_execution=1), jt.no_grad():
+            state = jt.full((8,), 2.0)
+            jt.sync([state], False, False)
+            aliases = [jt.core._ready_step_gradient(state) for _ in range(256)]
+            pending = aliases[-1].copy()
+            unrelated = jt.full((16,), 7.0) * 2
+            assert not pending.is_finished and not unrelated.is_finished
+
+            result, = jt.code([jt.full((8,), 9.0)], [aliases[0]],
+                              cpu_src="""
+                                  for (int i = 0; i < in0_shape0; ++i)
+                                      @out0(i) = @in0(i);
+                              """, data={"_order_prepared_storage_writes": 1})
+            jt.sync([result], False, False)
+            assert not unrelated.is_finished
+            np.testing.assert_array_equal(pending.numpy(), np.full(8, 2.0))
+            np.testing.assert_array_equal(result.numpy(), np.full(8, 9.0))
+            np.testing.assert_array_equal(state.numpy(), np.full(8, 9.0))
+
+
+    def test_bound_output_keeps_readers_outside_its_input_graph(self):
+        with jt.flag_scope(use_cuda=0, lazy_execution=1), jt.no_grad():
+            for hold_other_reader in (False, True):
+                with self.subTest(hold_other_reader=hold_other_reader):
+                    state = jt.full((8,), 2.0)
+                    jt.sync([state], False, False)
+                    upstream = state + 1
+                    other = state.copy() if hold_other_reader else None
+                    value = upstream * 3
+                    result, = jt.code(
+                        [value], [state],
+                        cpu_src="for (int i = 0; i < in0_shape0; ++i) @out0(i) = @in0(i);",
+                        data={"_order_prepared_storage_writes": 1},
+                    )
+                    jt.sync([result], False, False)
+                    # The result uses the upstream value before the write.
+                    # Only the independent reader must keep its old snapshot.
+                    np.testing.assert_array_equal(result.numpy(), np.full(8, 9.0))
+                    np.testing.assert_array_equal(state.numpy(), np.full(8, 9.0))
+                    if other is not None:
+                        np.testing.assert_array_equal(other.numpy(), np.full(8, 2.0))
+
     def test_multi_output_grad_preserves_data_without_gradient_controls(self):
         a = jt.array(np.array([1.0, 2.0], dtype="float32"))
         b = jt.array(np.array([3.0, 4.0], dtype="float32"))

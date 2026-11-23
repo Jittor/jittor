@@ -1138,13 +1138,12 @@ def _clamp_cpu(x, min_v=None, max_v=None):
                 value = value.cast(dtype)
             if _jittor_dtype_name(bound.dtype) != _jittor_dtype_name(dtype):
                 bound = bound.cast(dtype)
-        elif "float" in _jittor_dtype_name(value.dtype):
-            bound = jt.unary(bound, value.dtype).stop_grad()
-        elif isinstance(bound, numbers.Real) \
-                and not isinstance(bound, numbers.Integral):
+            return value, bound
+        if ("float" not in _jittor_dtype_name(value.dtype)
+                and isinstance(bound, numbers.Real)
+                and not isinstance(bound, numbers.Integral)):
             value = value.cast("float32")
-            bound = jt.unary(bound, "float32").stop_grad()
-        else:
+        with device_scope_like(value):
             bound = jt.unary(bound, value.dtype).stop_grad()
         return value, bound
 

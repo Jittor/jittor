@@ -1,6 +1,7 @@
 """Affine-grid construction and grid-sampling operations."""
 
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from jittor._core.var import device_scope_like
 
 import jittor as jt
 import numpy as np
@@ -110,11 +111,15 @@ register_kernel("nn.base_grid_5d", "acl", _make_base_grid_5d_acl)
 
 
 def make_base_grid_4D(theta, N, C, H, W, align_corners):
-    return select_kernel("nn.base_grid_4d", theta)(theta, N, C, H, W, align_corners)
+    kernel = select_kernel("nn.base_grid_4d", theta)
+    with device_scope_like(theta):
+        return kernel(theta, N, C, H, W, align_corners)
 
 
 def make_base_grid_5D(theta, N, C, D, H, W, align_corners):
-    return select_kernel("nn.base_grid_5d", theta)(theta, N, C, D, H, W, align_corners)
+    kernel = select_kernel("nn.base_grid_5d", theta)
+    with device_scope_like(theta):
+        return kernel(theta, N, C, D, H, W, align_corners)
 
 
 def affine_grid_generator_4D(theta, N, C, H, W, align_corners):
@@ -205,8 +210,9 @@ def grid_sampler_3d(X, grid, mode, padding_mode, align_corners):
     y = grid[:, :, :, :, 1]
     z = grid[:, :, :, :, 2]
     shape = [N, C, D, H, W]
-    cid = jt.index(shape, dim=1)
-    nid = jt.index(shape, dim=0)
+    with device_scope_like(X):
+        cid = jt.index(shape, dim=1)
+        nid = jt.index(shape, dim=0)
 
     x = jt.nn.grid_sampler_compute_source_index(x, inp_W, padding_mode, align_corners)
     y = jt.nn.grid_sampler_compute_source_index(y, inp_H, padding_mode, align_corners)
@@ -216,7 +222,8 @@ def grid_sampler_3d(X, grid, mode, padding_mode, align_corners):
     zid = z.reindex(shape, ["i0", "i2", "i3", "i4"])
 
     if mode == "nearest":
-        return X.reindex([nid, cid, zid.round_int(), yid.round_int(), xid.round_int()])
+        # Sampling at a half-integer coordinate selects the even index.
+        return X.reindex([nid, cid, zid.round().int32(), yid.round().int32(), xid.round().int32()])
     if mode == "bilinear":
         fx, fy, fz = xid.floor_int(), yid.floor_int(), zid.floor_int()
         cx, cy, cz = fx + 1, fy + 1, fz + 1
@@ -253,8 +260,9 @@ def grid_sampler_2d(X, grid, mode, padding_mode, align_corners):
     x = grid[:, :, :, 0]
     y = grid[:, :, :, 1]
     shape = [N, C, H, W]
-    cid = jt.index(shape, dim=1)
-    nid = jt.index(shape, dim=0)
+    with device_scope_like(X):
+        cid = jt.index(shape, dim=1)
+        nid = jt.index(shape, dim=0)
 
     x = jt.nn.grid_sampler_compute_source_index(x, inp_W, padding_mode, align_corners)
     y = jt.nn.grid_sampler_compute_source_index(y, inp_H, padding_mode, align_corners)
@@ -262,7 +270,8 @@ def grid_sampler_2d(X, grid, mode, padding_mode, align_corners):
     yid = y.reindex(shape, ["i0", "i2", "i3"])
 
     if mode == "nearest":
-        return X.reindex([nid, cid, yid.round_int(), xid.round_int()])
+        # Sampling at a half-integer coordinate selects the even index.
+        return X.reindex([nid, cid, yid.round().int32(), xid.round().int32()])
     if mode == "bilinear":
         # xid,yid = (xid+0.00001),(yid+0.00001)
         fx, fy = xid.floor_int(), yid.floor_int()

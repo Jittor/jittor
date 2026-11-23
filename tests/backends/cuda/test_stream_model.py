@@ -37,21 +37,25 @@ class TestCudaStreamModel(unittest.TestCase):
         values = []
         with jt.flag_scope(use_cuda=1, device_id=0):
             values.append((jt.array(expected) * 3 + 1).sqr())
+            values.append((jt.array(expected) * 3 + 3).sqr())
         with jt.flag_scope(use_cuda=1, device_id=1):
             values.append((jt.array(expected) * 5 + 2).sqr())
+            values.append((jt.array(expected) * 5 + 4).sqr())
 
         got = []
+        before = jt.core._cuda_stream_dependency_count(0, 0)
         jt.fetch(*values, lambda *arrays: got.extend(v.copy() for v in arrays))
         for _ in range(3):
             jt.sync_all(True)
             if got:
                 break
-            # CUDA host callbacks enqueue the Python callback; the next fetch
-            # flushes that queue without synchronizing the copy stream early.
-            jt.fetch(jt.zeros((1,)), lambda _value: None)
-        self.assertEqual(len(got), 2)
+            jt.poll_fetches()
+        self.assertEqual(jt.core._cuda_stream_dependency_count(0, 0) - before, 2)
+        self.assertEqual(len(got), 4)
         np.testing.assert_array_equal(got[0], (expected * 3 + 1) ** 2)
-        np.testing.assert_array_equal(got[1], (expected * 5 + 2) ** 2)
+        np.testing.assert_array_equal(got[1], (expected * 3 + 3) ** 2)
+        np.testing.assert_array_equal(got[2], (expected * 5 + 2) ** 2)
+        np.testing.assert_array_equal(got[3], (expected * 5 + 4) ** 2)
 
 
 if __name__ == "__main__":

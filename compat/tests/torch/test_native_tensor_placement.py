@@ -57,6 +57,79 @@ def test_tensor_new_preserves_torch_frontend_for_writable_views(device):
         source.new(source.float())
 
 
+def test_cpu_clamp_bounds_do_not_allocate_cuda_memory():
+    import torch
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    with _cuda_runtime(), forbid_backend_fallbacks(), torch.no_grad():
+        source = torch.from_numpy(np.array([-1., 0.5, 2.], dtype=np.float32))
+        source.sync()
+        _cpu(source)
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+        result = source.clamp(0, 1)
+        result.sync()
+        _cpu(result)
+        np.testing.assert_array_equal(result.numpy(), [0., 0.5, 1.])
+        torch.cuda.synchronize()
+        assert torch.cuda.max_memory_allocated() == baseline
+
+
+@pytest.mark.parametrize("spatial_shape", [(6, 8), (4, 6, 8)])
+def test_cpu_grid_operations_do_not_allocate_cuda_memory(spatial_shape):
+    import torch
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    dimensions = len(spatial_shape)
+    centers = [2 * (np.arange(n, dtype=np.float32) + 0.5) / n - 1
+               for n in spatial_shape]
+    positions = np.stack(np.meshgrid(*centers, indexing="ij")[::-1], axis=-1)[None]
+    values = np.linspace(-1, 1, 2 * np.prod(spatial_shape), dtype=np.float32)
+    values = values.reshape((1, 2, *spatial_shape))
+    theta = np.eye(dimensions, dimensions + 1, dtype=np.float32)[None]
+
+    with _cuda_runtime(), forbid_backend_fallbacks(), torch.no_grad():
+        image, grid, transform = map(torch.from_numpy, (values, positions, theta))
+        for source in (image, grid, transform):
+            source.sync()
+            _cpu(source)
+
+        torch.cuda.synchronize()
+        baseline = torch.cuda.memory_allocated()
+        torch.cuda.reset_peak_memory_stats()
+
+        generated = torch.nn.functional.affine_grid(transform, tuple(image.shape), align_corners=False)
+        sampled = torch.nn.functional.grid_sample(image, grid, align_corners=False)
+        for result, expected in ((generated, positions), (sampled, values)):
+            result.sync()
+            _cpu(result)
+            np.testing.assert_allclose(result.numpy(), expected, rtol=1e-6, atol=1e-6)
+        torch.cuda.synchronize()
+        assert torch.cuda.max_memory_allocated() == baseline
+
+
+@pytest.mark.parametrize("name", ["RelaxedBernoulli", "RelaxedOneHotCategorical"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_relaxed_rsample_follows_parameter_placement(name, device):
+    import jittor as jt
+    import torch
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    with _cuda_runtime(), jt.runtime.scope(use_cuda=int(device == "cpu")), forbid_backend_fallbacks():
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        logits = torch.tensor([[0.1, -0.2, 0.3], [-0.3, 0.2, 0.4]],
+                              dtype=dtype, device=device, requires_grad=True)
+        distribution = getattr(torch.distributions, name)(temperature=1.0, logits=logits)
+        sample = distribution.rsample((4,))
+        assert sample.device == logits.device and sample.dtype == dtype
+        assert sample.shape == (4, 2, 3)
+        assert torch.isfinite(sample).all().item()
+        sample.float().square().sum().backward()
+        assert logits.grad.device == logits.device and torch.isfinite(logits.grad).all().item()
+        assert logits.grad.abs().sum().item() > 0
+
+
 def test_lazy_cpu_factories_views_reductions_and_native_selection():
     import jittor as jt
     import torch
@@ -136,6 +209,22 @@ def test_explicit_copy_roundtrip_and_gradient_keep_source_placement():
             _cpu(roundtrip)
             _cpu(copied_grad)
             np.testing.assert_array_equal(copied_grad.numpy(), [4., 6.])
+
+
+@pytest.mark.cuda
+def test_to_device_keyword_accepts_accelerator_index():
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime():
+        host = torch.tensor([1.5, -2.0], device="cpu")
+        moved = host.to(device=0, dtype=torch.float16)
+        squared = moved.square()
+        jt.sync_all(True)
+        _cpu(host)
+        assert moved.device == torch.device("cuda:0") and moved.dtype == torch.float16
+        assert squared.device == moved.device and squared.location() == "device"
+        np.testing.assert_array_equal(squared.cpu().numpy(), [2.25, 4.0])
 
 
 @pytest.mark.cuda
@@ -372,6 +461,30 @@ def test_unique_counts_inherit_explicit_input_placement(source, ambient, by_row)
         np.testing.assert_array_equal(inverse.numpy().reshape(want[1].shape), want[1])
         np.testing.assert_array_equal(counts.numpy(), want[2])
 
+
+
+@pytest.mark.parametrize("source,ambient", [("cpu", 1), ("cuda", 0)])
+def test_block_diag_uses_input_placement(source, ambient):
+    import jittor as jt
+    import torch
+
+    data = np.arange(1, 17, dtype=np.float32).reshape(4, 2, 2)
+    expected = np.zeros((8, 8), dtype=np.float32)
+    for index, block in enumerate(data):
+        start = 2 * index
+        expected[start:start + 2, start:start + 2] = block
+    with _cuda_runtime(), jt.flag_scope(backend_fallback="error"):
+        inputs = torch.tensor(data, device=source, requires_grad=True)
+        empty = torch.empty((0, 3), device=source)
+        with jt.flag_scope(use_cuda=ambient):
+            out = torch.block_diag(*inputs.unbind())
+            empty_result = torch.block_diag(empty)
+            out.square().sum().backward()
+            jt.sync_all(True)
+        assert out.device.type == inputs.grad.device.type == empty_result.device.type == source
+        assert tuple(empty_result.shape) == (0, 3)
+        np.testing.assert_array_equal(out.numpy(), expected)
+        np.testing.assert_array_equal(inputs.grad.numpy(), 2 * data)
 
 
 def test_parameter_data_slice_copies_cpu_checkpoint_weight_to_cuda():

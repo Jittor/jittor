@@ -87,6 +87,72 @@ def fused_keys(build):
 
 
 class TestJitKeyIdentifiesTheKernel(unittest.TestCase):
+    def _check_standalone_array_keys(self, use_cuda):
+        backend_key = "«JIT_cuda:1" if use_cuda else "«JIT_cpu:1"
+        location = "device" if use_cuda else "cpu"
+        with jt.flag_scope(use_cuda=use_cuda, auto_graph_replay=0, auto_flush_ops=0,
+                           use_cuda_host_allocator=0, auto_convert_64_to_32=0,
+                           backend_fallback="error"):
+            dtype_keys = []
+            for dtype in (np.int32, np.int64):
+                payload_keys = set()
+                for value in (0, 1, 2, 37, -2):
+                    expected = np.array([value], dtype=dtype)
+                    array = jt.array(expected)
+                    keys = fused_keys(lambda: array.sync(True, False))
+                    materializations = [key for key in keys if key.startswith("«opkey0:array")
+                                        and backend_key in key and "«opkey1:" not in key]
+                    self.assertEqual(len(materializations), 1, keys)
+                    payload_keys.add(materializations[0])
+                    self.assertEqual(array.location(), location)
+                    self.assertEqual(array.numpy().dtype, expected.dtype)
+                    np.testing.assert_array_equal(array.numpy(), expected)
+                self.assertEqual(len(payload_keys), 1, payload_keys)
+                dtype_keys.extend(payload_keys)
+            self.assertNotEqual(*dtype_keys)
+
+    def test_cpu_standalone_array_keys_use_dtype_not_payload(self):
+        self._check_standalone_array_keys(0)
+
+    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
+    def test_cuda_standalone_array_keys_use_dtype_not_payload(self):
+        self._check_standalone_array_keys(1)
+
+    def _check_fused_array_keys(self, use_cuda):
+        backend_key = "«JIT_cuda:1" if use_cuda else "«JIT_cpu:1"
+        location = "device" if use_cuda else "cpu"
+        with jt.flag_scope(use_cuda=use_cuda, auto_graph_replay=0, auto_flush_ops=0,
+                           use_cuda_host_allocator=0, auto_convert_64_to_32=0,
+                           backend_fallback="error"):
+            dtype_keys = []
+            for dtype in (np.int32, np.float32, np.int64, np.float64):
+                inputs = np.arange(32, dtype=dtype)
+                base = jt.array(inputs)
+                base.sync(True, False)
+                variants = set()
+                for value in (-2, -1, 0, 1, 2, 17, 37):
+                    scalar = jt.array(np.array([value], dtype=dtype))
+                    output = base * scalar + scalar
+                    keys = fused_keys(lambda: output.sync(True, False))
+                    fused = [key for key in keys if backend_key in key
+                             and ":array" in key and ":binary" in key]
+                    self.assertEqual(len(fused), 1, keys)
+                    variants.add(fused[0])
+                    self.assertEqual(output.location(), location)
+                    actual = output.numpy()
+                    self.assertEqual(actual.dtype, inputs.dtype)
+                    np.testing.assert_array_equal(actual, inputs * value + value)
+                self.assertEqual(len(variants), 1, variants)
+                dtype_keys.extend(variants)
+            self.assertEqual(len(set(dtype_keys)), len(dtype_keys))
+
+    def test_cpu_fused_array_keys_use_dtype_not_payload(self):
+        self._check_fused_array_keys(0)
+
+    @unittest.skipUnless(jt.has_cuda, "requires real CUDA")
+    def test_cuda_fused_array_keys_use_dtype_not_payload(self):
+        self._check_fused_array_keys(1)
+
     def test_a_300_op_fusion_does_not_share_a_key_with_a_200_op_one(self):
         keys_200 = fused_keys(lambda: chain_sum(200).sync())
         keys_300 = fused_keys(lambda: chain_sum(300).sync())

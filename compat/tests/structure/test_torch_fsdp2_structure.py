@@ -17,7 +17,7 @@ from unittest import mock
 
 
 import jittor as jt
-from jittor.compat import fsdp2 as fsdp
+from jittor.compat import fsdp2 as fsdp, functional_collectives
 from jittor.distributed.fsdp import common as native_fsdp_common
 from jittor.compat.fsdp2 import _context_parallel
 from jittor.compat.fsdp2 import api
@@ -525,15 +525,18 @@ assert value is fsdp2.DeviceMesh
                 "torch.distributed.tensor.parallel.style"
             ).RowwiseParallel,
             importlib.import_module(
-                "torch.distributed._functional_collectives"
-            ).AsyncCollectiveTensor,
-            importlib.import_module(
                 "torch.distributed.algorithms._checkpoint.checkpoint_wrapper"
             ).CheckpointImpl,
         )
         self.assertTrue(all(
             value.__module__ == public_helpers.__name__ for value in origin_values
         ))
+
+        collective_type = symbols_after[
+            ("torch.distributed._functional_collectives", "AsyncCollectiveTensor")
+        ]
+        self.assertIs(collective_type, functional_collectives.AsyncCollectiveTensor)
+        self.assertEqual(collective_type.__module__, functional_collectives.__name__)
 
         original_device_mesh = dtensor.DeviceMesh
         created = object()

@@ -24,6 +24,7 @@ Run:  python -m pytest compat/tests/torch/test_torch_compat_interpolate.py
 """
 
 from _helpers import capability as _test_capability
+from jittor._runtime.fallback import forbid_backend_fallbacks
 import unittest
 import numpy as np
 import torch
@@ -85,6 +86,27 @@ class Base(unittest.TestCase):
         g = np.asarray(got); r = np.asarray(ref)
         self.assertEqual(tuple(g.shape), tuple(r.shape), f"shape {g.shape}!={r.shape}; {msg}")
         np.testing.assert_allclose(g, r, atol=atol, rtol=rtol, err_msg=msg)
+
+
+class TestInterpolatePlacement(Base):
+    def test_cpu_resize_does_not_allocate_cuda_temporaries(self):
+        if not _test_capability.check_accelerator("cuda", backend=jt).enabled:
+            self.skipTest("requires a real CUDA device")
+        planes = np.arange(150, dtype=np.float32).reshape(1, 150, 1, 1)
+        image = np.broadcast_to(planes, (1, 150, 128, 128)).copy()
+        with jt.runtime.scope(use_cuda=1), forbid_backend_fallbacks(), torch.no_grad():
+            source = torch.from_numpy(image)
+            jt.sync_all(True)
+            before = torch.cuda.memory_allocated()
+            torch.cuda.reset_peak_memory_stats()
+            resized = torch.nn.functional.interpolate(
+                source, size=(512, 512), mode="bilinear", align_corners=False
+            )
+            prediction = resized.argmax(1)
+            np.testing.assert_array_equal(prediction.numpy(), np.full((1, 512, 512), 149))
+            self.assertEqual(resized.device.type, "cpu")
+            self.assertEqual(prediction.device.type, "cpu")
+            self.assertLessEqual(torch.cuda.max_memory_allocated(), before)
 
 
 # ---------------------------------------------------------------------------

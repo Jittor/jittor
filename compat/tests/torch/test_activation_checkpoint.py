@@ -111,6 +111,36 @@ def test_closure_tensor_captures_and_nested_keyword_inputs(native_device):
     np.testing.assert_allclose(snapshot(weight.grad), [8., 10.], rtol=0, atol=0)
 
 
+def test_replay_preserves_frozen_parameter_subtype_metadata(native_device):
+    class ScaledParameter(torch.nn.Parameter):
+        def __new__(cls, storage, scale):
+            instance = torch.Tensor._make_subclass(cls, storage, False)
+            instance.scale = scale
+            return instance
+
+    class ScaledLayer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = ScaledParameter(
+                torch.tensor([3, 4], dtype=torch.int8, device=native_device),
+                torch.tensor([0.5, 0.75], device=native_device),
+            )
+
+        def forward(self, value):
+            return value * self.weight.float() * self.weight.scale
+
+    layer = ScaledLayer()
+    original = layer.weight
+    value = torch.tensor([1., 2.], device=native_device, requires_grad=True)
+    result = torch.utils.checkpoint.checkpoint(layer, value, use_reentrant=False)
+    result.sum().backward()
+
+    assert layer.weight is original and original.grad is None
+    assert value.grad.device.type == native_device
+    np.testing.assert_array_equal(snapshot(result), [1.5, 6.0])
+    np.testing.assert_array_equal(snapshot(value.grad), [1.5, 3.0])
+
+
 def test_checkpoint_preserves_materialized_frozen_convolution_weight(native_device):
     if native_device != "cuda":
         pytest.skip("requires the CUDA convolution filter layout optimization")
