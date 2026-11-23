@@ -449,44 +449,21 @@ def make_torch_types_module():
     return module
 
 
-# ---- CPU-residency support for the torch device= API -----------------------
-# jittor places a Var on CUDA or host according to the GLOBAL jt.flags.use_cuda
-# flag, with no per-tensor device. But native C++ extensions linked against the
-# jtorch ABI (nvdiffrast's `ranges`, cumesh's xatlas) call TORCH_CHECK on
-# tensor.is_cpu(), and jtorch's is_cpu()/device() read the Var's ACTUAL memory
-# residency (var->allocator->is_cuda(), surfaced to Python as Var.location() ==
-# "cpu" vs "device"). A Var built/computed under `flag_scope(use_cuda=0)` is
-# genuinely host-resident, so torch code that asks for device='cpu' can be
-# honored by routing the allocation through use_cuda=0 -- the C++ shim then
-# correctly sees it as CPU. These helpers implement that bounded device='cpu'
-# support (creation + .cpu()/.cuda()/.to() migration + residency reporting).
+def _device_type_name(dev):
+    name = getattr(dev, "type", None)
+    if name is None and isinstance(dev, str):
+        return dev.split(":", 1)[0]
+    return name
+
 
 def _device_is_cpu(dev):
-    """True if a torch device= argument designates the CPU.
-
-    Accepts the torch_compat `device` class, a torch.device-like object with a
-    `.type`, a "cpu"/"cpu:0" string, or None (None means 'use the global default
-    placement', i.e. NOT an explicit CPU request)."""
-    if dev is None:
-        return False
-    t = getattr(dev, "type", None)
-    if t is not None:
-        return t == "cpu"
-    if isinstance(dev, str):
-        return dev == "cpu" or dev.split(":")[0] == "cpu"
-    return False
+    """True if a device argument explicitly designates the CPU."""
+    return _device_type_name(dev) == "cpu"
 
 
 def _device_is_cuda(dev):
-    """True if a torch device= argument explicitly designates CUDA/GPU."""
-    if dev is None:
-        return False
-    t = getattr(dev, "type", None)
-    if t is not None:
-        return t in ("cuda", "npu")
-    if isinstance(dev, str):
-        return dev.split(":")[0] in ("cuda", "npu")
-    return False
+    """True if a device argument explicitly designates CUDA or Ascend."""
+    return _device_type_name(dev) in ("cuda", "npu")
 
 
 def _cuda_index_of(dev):

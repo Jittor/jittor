@@ -1387,7 +1387,10 @@ def install(ctx):
 
     import jittor.sparse as _jt_sparse
     from ...namespace import native_module_facade
-    sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
+    sparse_namespace = ctx.registry.get("torch.sparse")
+    if sparse_namespace is None:
+        sparse_namespace = native_module_facade(_jt_sparse, "torch.sparse")
+    ctx.registry.publish("torch.sparse", sparse_namespace)
     g.sparse = sparse_namespace
     if not hasattr(sparse_namespace, "sum"):
         sparse_namespace.sum = _sparse_sum
@@ -1397,8 +1400,7 @@ def install(ctx):
     # behaviour: there is never a tuned entry, storing one is a no-op, and
     # asking to autotune says so. Without the module, `import torchao` fails
     # and takes lm-eval, peft and transformers model loading with it.
-    import types as _types
-    _triton_ops_meta = _types.ModuleType("torch.sparse._triton_ops_meta")
+    _triton_ops_meta = ctx.registry.ensure("torch.sparse._triton_ops_meta")
 
     def _triton_ops_meta_get_meta(opname, key, version=None, exact=False,
                                   device_name=None):
@@ -1418,11 +1420,6 @@ def install(ctx):
     _triton_ops_meta.update = _triton_ops_meta_update
     _triton_ops_meta.minimize = _triton_ops_meta_minimize
     _triton_ops_meta.__all__ = ("get_meta", "minimize", "update")
-    sparse_namespace._triton_ops_meta = _triton_ops_meta
-    # Published through the install registry, not sys.modules directly: the
-    # shim's ownership check compares sys.modules' torch.* entries with the
-    # recorded publication set, so an unrecorded entry fails re-activation.
-    _modules["torch.sparse._triton_ops_meta"] = _triton_ops_meta
 
     # torch.sparse.SparseSemiStructuredTensor*: declared, not implemented.
     # torchao names these classes in module-scope tables; the names have to
@@ -1444,16 +1441,6 @@ def install(ctx):
     sparse_namespace.SparseSemiStructuredTensor = _SemiStructuredSparseTensorUnavailable
     sparse_namespace.SparseSemiStructuredTensorCUSPARSELT = _SemiStructuredSparseTensorUnavailable
     sparse_namespace.SparseSemiStructuredTensorCUTLASS = _SemiStructuredSparseTensorUnavailable
-    # `from torch.sparse import ...` reads the module the import system has in
-    # sys.modules, which can be a different module object from the facade this
-    # installer builds. Mirror the names onto it when that is the case.
-    import sys as _sparse_sys
-    _published_sparse = _sparse_sys.modules.get("torch.sparse")
-    if _published_sparse is not None and _published_sparse is not sparse_namespace:
-        for _name in ("_triton_ops_meta", "SparseSemiStructuredTensor",
-                      "SparseSemiStructuredTensorCUSPARSELT",
-                      "SparseSemiStructuredTensorCUTLASS"):
-            setattr(_published_sparse, _name, getattr(sparse_namespace, _name))
 
     # det/inverse on (batched) square matrices (mmrotate GWD/KLD/KFIoU Gaussian losses)
     if not hasattr(Var, "det"):       Var.det = _vdet
@@ -1494,10 +1481,6 @@ def install_parity(ctx):
     linalg.eigvalsh = eigvalsh
     registry.publish("torch.linalg", linalg)
     g.linalg = linalg
-
-    sparse = g.sparse
-    registry.publish("torch.sparse", sparse)
-    g.sparse = sparse
 
     special = registry.ensure("torch.special")
     for name in ("erf", "erfc", "exp", "expm1", "log1p", "sinc"):
