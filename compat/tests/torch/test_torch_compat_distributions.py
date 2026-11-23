@@ -57,6 +57,36 @@ class Base(unittest.TestCase):
 _LOG2PI = math.log(2 * math.pi)
 
 
+def test_cuda_gamma_rsample_and_gradient_stay_on_device(monkeypatch):
+    _test_capability.require_accelerator("cuda")
+    from jittor.contrib.math_util import gamma
+
+    def unexpected_host_call(*args, **kwargs):
+        raise AssertionError("Gamma.rsample transferred the CUDA computation to NumPy")
+
+    monkeypatch.setattr(np.random, "gamma", unexpected_host_call)
+    monkeypatch.setattr(gamma, "_standard_gamma_grad_vec", unexpected_host_call)
+
+    torch.manual_seed(721)
+    concentrations = [0.7, 1.0, 3.0, 21.0]
+    alpha = torch.tensor(concentrations, device="cuda", requires_grad=True)
+    distribution = torch.distributions.Gamma(alpha, torch.ones_like(alpha))
+    samples = distribution.rsample((8192,))
+    assert samples.device == alpha.device
+    assert tuple(samples.shape) == (8192, 4)
+    values = samples.detach().cpu().numpy().copy()
+    assert np.isfinite(values).all() and (values > 0).all()
+    np.testing.assert_allclose(values.mean(axis=0), concentrations, rtol=0.045)
+    np.testing.assert_allclose(values.var(axis=0), concentrations, rtol=0.15)
+    samples.mean(dim=0).sum().backward()
+    assert alpha.grad.device == alpha.device
+    np.testing.assert_allclose(alpha.grad.cpu().numpy(), np.ones(4), rtol=0.05)
+
+    assert not np.array_equal(distribution.rsample((8192,)).detach().cpu().numpy(), values)
+    torch.manual_seed(721)
+    np.testing.assert_array_equal(distribution.rsample((8192,)).detach().cpu().numpy(), values)
+
+
 # ------------------------------------------------------------------------- Normal
 
 class TestNormal(Base):
