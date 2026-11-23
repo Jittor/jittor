@@ -630,7 +630,13 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // == phases 2-5: graph -> execution plan ==
     auto state = acquire_batch_state();
     ExecPlan& plan = state->plan;
-    build_exec_plan(vars, weak_sync, plan);
+    // Planning and graph optimization use raw node pointers. Own the roots
+    // immediately, then let the planner extend this hold to every Var it
+    // reaches before any graph rewrite can release their producer Ops.
+    vector<VarPtr> planning_hold;
+    planning_hold.reserve(vars.size());
+    for (Var* v : vars) planning_hold.emplace_back(v);
+    build_exec_plan(vars, weak_sync, plan, planning_hold);
     trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
     // produce them, since an op's liveness comes from its outputs, so an op
@@ -657,6 +663,10 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     vector<VarPtr>& batch_hold = state->batch_hold;
     batch_hold.reserve(plan.all_vars.size());
     for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
+    // The final batch hold now owns every pointer the plan keeps. Releasing
+    // traversal-only holds may discard superseded nodes from earlier graph
+    // optimization passes, but cannot invalidate this plan.
+    planning_hold.clear();
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
     plan.batch_hold_per_var = 1;
     schedule_hold_release(plan);
