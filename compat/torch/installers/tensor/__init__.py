@@ -26,6 +26,7 @@ from ...grad import _GradDecoratorCtx
 from ...nested import _NestedTensor, _rebuild_var_from_numpy, _TorchSize, _torch_prune_leaf_registry, _torch_register_leaf
 
 from ...tensor_state import get_tensor_state
+from ...tensor_layout import CHANNELS_LAST_3D
 
 from ..factories import _install_random_and_linspace, _set_use_cuda, _wrap_constructors
 
@@ -1086,6 +1087,7 @@ def install(ctx):
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"
     g.channels_last = "channels_last"
+    g.channels_last_3d = CHANNELS_LAST_3D
     g.layout = layout
     g.memory_format = memory_format
 
@@ -1145,7 +1147,7 @@ def install(ctx):
     _install_reductions(g)
 
     register_api_bindings(g, 'torch',
-        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
+        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'channels_last_3d', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
         Fidelity.APPROXIMATE, 'Native tensor allocation and conversion with Torch dtype, device, and frontend policies; supported argument and backend subsets apply')
 
 from .shape_api import (
