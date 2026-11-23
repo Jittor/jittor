@@ -825,7 +825,16 @@ class GraphReplay:
         finally:
             jt.flags.keep_graph = before
         if not handle:
-            self._graph_refused = "the recording contained no device work"
+            refusal = _core.graph_capture_refusal()
+            if refusal.startswith("retryable: "):
+                # Done once per key (a library plan built on a miss): the
+                # replay that follows does it, and a later recording finds it.
+                self._rerecords += 1
+                if self._rerecords < _RERECORD_LIMIT:
+                    self._record_at = self.stats["replayed"] + 2
+                    return False
+                refusal = refusal[len("retryable: "):]
+            self._graph_refused = refusal or "the recording contained no device work"
             return False
         self._cuda_graph = handle
         self._graph_has_host_prefix = bool(host)

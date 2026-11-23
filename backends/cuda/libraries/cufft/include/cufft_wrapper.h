@@ -53,7 +53,7 @@ EXTERN_LIB int cufft_max_cache_size;
 
     Every plan owns a workspace, so an unbounded cache spends device memory on
     plans a workload of ever-changing shapes never reuses. Past
-    ``cufft_max_cache_size`` per device the least recently created plan is destroyed.
+    ``cufft_max_cache_size`` per device the least recently used plan is destroyed.
  */
 cufftHandle cufft_get_plan(const CufftPlanKey& key);
 // @pyjt(cufft_stream_bind_count)

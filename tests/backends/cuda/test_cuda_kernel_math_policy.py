@@ -16,7 +16,7 @@ def test_cuda_math_policy_has_distinct_compiled_keys(fused):
     with jt.flag_scope(use_cuda=1, enable_tuner=0):
         x = jt.array(np.arange(16, dtype=np.float32))
         x.sync()
-        for policy in ("default", "strict", "backend", "default"):
+        for policy in ("fast", "strict", "backend", "fast"):
             with jt.flag_scope(cuda_kernel_math=policy):
                 with jt.profile_scope() as report:
                     if fused:
@@ -45,8 +45,8 @@ def test_cuda_math_policy_has_distinct_compiled_keys(fused):
                 if policy in filenames:
                     assert matching == filenames[policy]
                 filenames[policy] = matching
-    assert filenames["default"].isdisjoint(filenames["strict"])
-    assert filenames["default"].isdisjoint(filenames["backend"])
+    assert filenames["fast"].isdisjoint(filenames["strict"])
+    assert filenames["fast"].isdisjoint(filenames["backend"])
     assert filenames["strict"].isdisjoint(filenames["backend"])
 
 
@@ -59,7 +59,7 @@ def test_strict_math_changes_actual_cuda_rounding(fused):
         c = jt.array(np.full(16, -1, dtype=np.float32))
         jt.sync_all(True)
         results = {}
-        for policy in ("default", "strict"):
+        for policy in ("fast", "strict"):
             with jt.runtime.scope(cuda_kernel_math=policy):
                 if fused:
                     y = a * b + c
@@ -77,7 +77,7 @@ def test_strict_math_changes_actual_cuda_rounding(fused):
                 results[policy] = y.numpy().copy()
                 del y
         np.testing.assert_array_equal(results["strict"], np.zeros(16, dtype=np.float32))
-        # The default startup flags allow NVCC's multiply-add contraction.
+        # The startup flags `fast` keeps allow NVCC's multiply-add contraction.
         if "--fmad=false" not in jt.config.nvcc_flags:
-            np.testing.assert_array_equal(results["default"],
+            np.testing.assert_array_equal(results["fast"],
                                           np.full(16, -(2 ** -26), dtype=np.float32))

@@ -294,6 +294,12 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     return make_setitem(zeros, VarSlices(vs, true), value, ns_void);
 }
 
+VarPtr GetitemOp::grad_into(Var* acc, Var* dout) {
+    VarPtr value = dout;
+    if (value->dtype() != acc->dtype()) value = make_unary(value, acc->dtype());
+    return make_setitem(acc, VarSlices(vs, true), value, ns_add);
+}
+
 void GetitemOp::grads(Var** dout, VarPtr* dins) {
     VarPtr x = dout[1];
     VarPtr y = dout[0];

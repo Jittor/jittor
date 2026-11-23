@@ -14,6 +14,7 @@
 #include "mem/allocator.h"
 #include "core/graph.h"
 #include "core/fused_op.h"
+#include <algorithm>
 
 namespace jittor {
 
@@ -43,6 +44,41 @@ DEFINE_FLAG(int, fuse_op_limit, 16,
     "precision. Fusing a long elementwise chain into one kernel saves memory "
     "traffic; a very wide one has to keep every live intermediate in registers, "
     "and under autocast nothing breaks the chain. 0 is unbounded.");
+
+// A chain of one-element ops -- a circuit gate's angle: p[k] -> cast -> /2 ->
+// cos, sin -- ran as one kernel per op, each ~7 us of launch for one flop
+// (400 gates: 3,200 forward kernels). Such edges may fuse when every var on
+// both sides is one element of the same rank; a broadcast of the result still
+// reads it from memory (fusing into one mixes ranks the codegen cannot index).
+// Readers of one tiny var (a gate's 2x2 constants, the loss gradient) may also
+// share a kernel. A group joined through such edges is bounded by
+// `fuse_tiny_op_limit`, so `x += a[i]` in a loop still cannot grow one kernel
+// per iteration.
+DEFINE_FLAG(int, fuse_scalar_chains, 1,
+    "Let elementwise ops over one-element vars fuse with each other, and "
+    "elementwise readers of one tiny var share kernels (bounded by "
+    "fuse_tiny_op_limit). 0 disables it.");
+
+// Operators a group of such tiny ops may hold. Every one of them is a few
+// flops, so a launch is the whole cost: 400 gates built from one parameter
+// each, at 16 operators a kernel, were still two kernels a gate.
+DEFINE_FLAG(int, fuse_tiny_op_limit, 64,
+    "Operators one fused kernel of one-element and tiny elementwise ops may "
+    "hold (see fuse_scalar_chains).");
+
+// The largest var a tiny sibling edge may share.
+static constexpr int64 tiny_var_numel = 16;
+
+// Operators any one fused kernel may hold, whatever its dtype. Float32 chains
+// usually stop themselves (see fuse_op_limit), but independent subgraphs that
+// share only constants do not: forty gates' backward passes, no longer kept
+// apart by a chain of per-slice setitems, joined into one ~700-operator
+// kernel that the code generator did not finish in twenty minutes (145
+// operators at eight gates compiled in seconds). The widest kernels the
+// tests and benchmarks otherwise build hold about a hundred.
+DEFINE_FLAG(int, fuse_op_hard_limit, 128,
+    "Operators any one fused kernel may hold, whatever its dtype. 0 is "
+    "unbounded.");
 
 DEFINE_FLAG(int, fuse_into_reduce, 1,
     "Let a reduction take in the elementwise group producing its input even "
@@ -135,6 +171,57 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         }
         return var->flag(VarFlags::_python_number);
     };
+    // An elementwise op over one-element vars of the given rank only.
+    auto scalar_elementwise = [&](Op* o, uint rank) -> bool {
+        if (o->type() != OpType::element) return false;
+        for (Var* v : o->outputs())
+            if (v->num != 1 || v->shape.size() != rank) return false;
+        for (Var* v : o->inputs())
+            if (v->num != 1 || v->shape.size() != rank) return false;
+        return true;
+    };
+    // `other` writes the one-element `var` and `op` reads it, both elementwise
+    // over one-element vars of var's rank: see fuse_scalar_chains.
+    auto scalar_chain_edge = [&](Var* var, Op* op, Op* other) -> bool {
+        if (!fuse_scalar_chains || var->num != 1 || fuse_tiny_op_limit <= 0) return false;
+        // A constant (`jt.array(1)` someone holds) is not recomputed into
+        // its readers: it is written once and read (tests/core/test_fuser.py
+        // test_for_fuse); a Python number already fuses by the rule below.
+        if (other->_inputs.empty()) return false;
+        auto rank = var->shape.size();
+        return scalar_elementwise(op, rank) && scalar_elementwise(other, rank);
+    };
+    // An elementwise op whose every var has exactly `numel` elements.
+    auto tiny_elementwise = [&](Op* o, int64 numel) -> bool {
+        if (o->type() != OpType::element) return false;
+        for (Var* v : o->outputs()) if (v->num != numel) return false;
+        for (Var* v : o->inputs()) if (v->num != numel) return false;
+        return true;
+    };
+    // `op` and `other` both read the tiny `var`, both elementwise over vars
+    // of its size: the per-slice gradients of one parameter all read the loss
+    // gradient, and every gate multiplies the same 2x2 constants -- a kernel
+    // each. Any number of readers may share kernels this way (a tiny read is
+    // no recomputation), in groups bounded by fuse_tiny_op_limit.
+    auto tiny_sibling_edge = [&](Var* var, Op* op, Op* other) -> bool {
+        if (!fuse_scalar_chains || var->num < 1 || var->num > tiny_var_numel
+                || fuse_tiny_op_limit <= 0) return false;
+        if (var->num == 1) {
+            auto rank = var->shape.size();
+            return scalar_elementwise(op, rank) && scalar_elementwise(other, rank);
+        }
+        // A multi-element tiny var shared by many readers (a 2x2 constant
+        // every gate multiplies) joins every reader into one component whose
+        // bounded re-merge then dominates planning; leave those to the
+        // ordinary sibling rule, which stops at sixteen readers.
+        if (var->outputs().size() >= 16) return false;
+        return tiny_elementwise(op, var->num) && tiny_elementwise(other, var->num);
+    };
+    auto tiny_bounded_edge = [&](Var* var, Op* op, Op* other, int relation) -> bool {
+        // `op` walks to `other`: for a data edge `op` writes `var`.
+        return relation == 1 ? scalar_chain_edge(var, other, op)
+             : relation == 0 && tiny_sibling_edge(var, op, other);
+    };
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
         if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
@@ -151,16 +238,19 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             // the constant out for the subtraction to read. Only a number:
             // chaining scalar ops into one another would let `x += a[i]` in a
             // loop grow one kernel per chain length.
-            if (var->num <= 1 && op->type() != OpType::broadcast
+            bool scalar_chain = scalar_chain_edge(var, op, other);
+            if (var->num <= 1 && op->type() != OpType::broadcast && !scalar_chain
                     && !(var->num == 1 && op_scalar[op->batch_index_at(tt)]
                          && is_number_constant(var))) return false;
             if (var->flag(VarFlags::_force_fuse)) return true;
+            if (scalar_chain) return true;
             // producer is a reduce: its output has to be written out
             if (other->type() == OpType::reduce) return false;
             // consumer is a broadcast: it reads the var many times
             if (op->type() == OpType::broadcast) return false;
             return other->type() == OpType::element || other->type() == OpType::broadcast;
         } else if (relation == 0) {
+            if (tiny_sibling_edge(var, op, other)) return true;
             // a var read by many ops would be recomputed inside each of them
             if (var->outputs().size() >= 16) return false;
             if (op->type() == OpType::other || other->type() == OpType::other) return false;
@@ -250,6 +340,13 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         for_each_neighbor(op, 1, 0, [&](Var* var, Op* other, int relation, int is_control_dep) {
             unvisited_consumers[i]++;
             if (is_control_dep) return;
+            if (var->flag(VarFlags::_force_fuse) && var->outputs().size() >= 16) {
+                // A constant read by many kernels is written once and read:
+                // forced into each reader it joins all of them into one
+                // component (a loss seed read by every gate's backward made
+                // one ~700-operator kernel of forty gates).
+                var->set_flag(VarFlags::_force_fuse, 0);
+            }
             if (var->flag(VarFlags::_force_fuse)) {
                 // `front()` on an op with no outputs is undefined, and an op
                 // can have none: `erase_output` removes the last one when a
@@ -301,6 +398,9 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     // path between two ops of one level-connected component only passes
     // through ops of that component, and the whole component becomes one group.
     //
+    // (A chain of one-element ops joined through `fuse_scalar_chains` edges
+    // is bounded the same way; `half_union` marks either kind.)
+    //
     // `fuse_op_limit` is what breaks it. It bounds how many operators one
     // fused kernel may hold -- see the top of this file for the measurements
     // that set it: the MiniMax-H3 video VAE decode under `autocast(float16)`
@@ -343,7 +443,9 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             // walk goes stale.
             int root = find_father(i);
             int other_root = find_father(other_id);
-            char half = is_half(var);
+            // bit 0: joined through a half-precision var, bit 1: through a
+            // tiny edge; each kind is bounded by its own limit below.
+            char half = (char)(is_half(var) | (tiny_bounded_edge(var, op, other, relation) << 1));
             if (root != other_root) {
                 father[other_root] = root;
                 group_size[root] += group_size[other_root];
@@ -356,13 +458,14 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     vector<char>& bounded = work.bounded;
     bounded.assign(ops.size(), 0);
     int any_bounded = 0;
-    if (fuse_op_limit > 0) {
-        for (uint i = 0; i < ops.size(); i++) {
-            int root = find_father(i);
-            if (half_union[root] && group_size[root] > fuse_op_limit) {
-                bounded[i] = 1;
-                any_bounded = 1;
-            }
+    for (uint i = 0; i < ops.size(); i++) {
+        int root = find_father(i);
+        if ((fuse_op_limit > 0 && (half_union[root] & 1) && group_size[root] > fuse_op_limit)
+                || (fuse_tiny_op_limit > 0 && (half_union[root] & 2)
+                    && group_size[root] > fuse_tiny_op_limit)
+                || (fuse_op_hard_limit > 0 && group_size[root] > fuse_op_hard_limit)) {
+            bounded[i] = 1;
+            any_bounded = 1;
         }
     }
     if (any_bounded) {
@@ -397,6 +500,31 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         vector<int> seen(ops.size(), 0);
         int seen_stamp = 0;
         vector<int> stack;
+        // Pass 2's queue lists consumers before producers, so an op's position
+        // in it decreases along every edge. A path into `dst` can only pass
+        // through groups holding an op ranked at least as high as dst's lowest
+        // member: from anything lower it can only go lower. Groups are joined
+        // edge by edge below, and each walk is pruned by that bound -- a
+        // component of four hundred gates' worth of tiny ops, linked by the
+        // constants they share, spent 130 ms a step in unpruned walks.
+        vector<int> rank_lo(ops.size(), 0), rank_hi(ops.size(), 0);
+        {
+            vector<int> rank(ops.size(), (int)ops.size());
+            for (uint p = 0; p < queue.size(); p++) rank[queue[p]] = p;
+            for (uint i = 0; i < ops.size(); i++) rank_lo[i] = rank_hi[i] = rank[i];
+            for (uint i = 0; i < ops.size(); i++) {
+                if (bounded[i]) continue;
+                // Groups outside the split keep their members' extremes.
+                int r = find_father(i);
+                rank_lo[r] = std::min(rank_lo[r], rank[i]);
+                rank_hi[r] = std::max(rank_hi[r], rank[i]);
+            }
+        }
+        // Past this many consumer edges a walk gives up and the merge is
+        // refused: refusing is always safe, it only leaves one more kernel.
+        // (Counted in edges, not groups: a group's members can read vars that
+        // hundreds of ops read.)
+        constexpr int walk_budget = 1024;
         // Does a group path src -> (a third group) -> ... -> dst exist? A
         // direct src -> dst edge is fine: it becomes internal.
         auto reaches_through_third = [&](int src, int dst) -> bool {
@@ -404,17 +532,22 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
             stack.assign(1, src);
             seen[src] = seen_stamp;
             int comp = component[src];
+            int floor = rank_lo[dst];
+            int visited = 0;
             while (stack.size()) {
                 int g = stack.back();
                 stack.pop_back();
                 for (int m : members[g]) {
                     bool found = false;
                     for_each_consumer(ops[m], [&](int y) {
-                        if (found || component[y] != comp) return;
+                        if (found) return;
+                        if (++visited > walk_budget) { found = true; return; }
+                        if (component[y] != comp) return;
                         int r = find_father(y);
                         if (r == dst) { found = g != src; return; }
                         if (seen[r] == seen_stamp) return;
                         seen[r] = seen_stamp;
+                        if (rank_hi[r] < floor) return;
                         stack.push_back(r);
                     });
                     if (found) return true;
@@ -432,8 +565,16 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                 int root = find_father(i);
                 int other_root = find_father(other_id);
                 if (root == other_root) return;
-                bool refuse = is_half(var) &&
-                    group_size[root] + group_size[other_root] > fuse_op_limit;
+                const int merged = group_size[root] + group_size[other_root];
+                bool refuse = is_half(var) && fuse_op_limit > 0 && merged > fuse_op_limit;
+                refuse = refuse || (tiny_bounded_edge(var, op, other, relation)
+                                    && fuse_tiny_op_limit > 0 && merged > fuse_tiny_op_limit);
+                refuse = refuse || (fuse_op_hard_limit > 0 && merged > fuse_op_hard_limit);
+                // A forced constant only exists inside the kernel reading it
+                // (ArrayOp on a device), so no limit splits it from that
+                // kernel. One read by sixteen or more ops is no longer forced
+                // (pass 2), which bounds what forced edges can join.
+                if (relation == 1 && var->flag(VarFlags::_force_fuse)) refuse = false;
                 refuse = refuse || reaches_through_third(root, other_root) ||
                     reaches_through_third(other_root, root);
                 if (refuse) {
@@ -472,6 +613,8 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
                 }
                 father[other_root] = root;
                 group_size[root] += group_size[other_root];
+                rank_lo[root] = std::min(rank_lo[root], rank_lo[other_root]);
+                rank_hi[root] = std::max(rank_hi[root], rank_hi[other_root]);
                 auto& into = members[root];
                 into.insert(into.end(), members[other_root].begin(), members[other_root].end());
                 vector<int>().swap(members[other_root]);

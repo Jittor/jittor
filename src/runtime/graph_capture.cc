@@ -420,7 +420,24 @@ bool graph_leaves_moved(int64 graph) {
 bool graph_capture_recording = false;
 bool graph_capture_saw_host_work = false;
 
+static string graph_capture_refusal_reason;
+static bool graph_capture_refusal_retryable = false;
+
 bool graph_capture_active() { return graph_capture_recording; }
+
+void graph_capture_refuse(const string& reason, bool retryable) {
+    if (!graph_capture_recording) return;
+    if (!graph_capture_saw_host_work || graph_capture_refusal_reason.empty()) {
+        graph_capture_refusal_reason = reason;
+        graph_capture_refusal_retryable = retryable;
+    }
+    graph_capture_saw_host_work = true;
+}
+
+string graph_capture_refusal() {
+    if (graph_capture_refusal_reason.empty()) return "";
+    return (graph_capture_refusal_retryable ? "retryable: " : "") + graph_capture_refusal_reason;
+}
 
 bool graph_capture_launches_nothing(Op* op) {
     return op->is_storage_view() || op->is_op(op_ids::array())
@@ -463,6 +480,8 @@ bool graph_capture_begin() {
     begin_capture_hold();
     graph_capture_recording = true;
     graph_capture_saw_host_work = false;
+    graph_capture_refusal_reason.clear();
+    graph_capture_refusal_retryable = false;
     return true;
 }
 
@@ -506,6 +525,8 @@ int64 graph_capture_end() {
         auto held = end_capture_hold();
         throw;
     }
+    if (graph_capture_saw_host_work && graph_capture_refusal_reason.empty())
+        graph_capture_refusal_reason = "host work ran inside the recording";
     if (graph && graph_capture_saw_host_work) {
         // Host work ran once, now, and a launch would not repeat it.
         backend_graph_release(reinterpret_cast<void*>(graph));

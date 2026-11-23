@@ -182,3 +182,9 @@ def test_jacobian_of_complex_output_without_graph_is_zero():
     assert tuple(jac.shape) == (2, 2) and float(jac.abs().max()) == 0.0
     with pytest.raises(RuntimeError, match="real scalar outputs"):
         torch.autograd.functional.jacobian(lambda t: t * 1j, x)
+
+
+def test_diagonal_accepts_input_keyword():
+    x = torch.arange(9.0).reshape(3, 3)
+    assert torch.diagonal(input=x).tolist() == [0.0, 4.0, 8.0]
+    assert torch.diagonal(input=x, offset=1).tolist() == [1.0, 5.0]

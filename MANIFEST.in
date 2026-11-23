@@ -817,6 +817,8 @@ include src/ops/composite/safe_clip_op.cc
 include src/ops/composite/safe_clip_op.h
 include src/ops/composite/setitem_op.cc
 include src/ops/composite/setitem_op.h
+include src/ops/composite/stack_scalars_op.cc
+include src/ops/composite/stack_scalars_op.h
 include src/ops/composite/tape_op.cc
 include src/ops/composite/tape_op.h
 include src/ops/composite/transpose_op.cc

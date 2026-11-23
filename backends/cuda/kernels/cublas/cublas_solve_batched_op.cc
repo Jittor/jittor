@@ -145,7 +145,7 @@ void CublasSolveBatchedOp::jit_run() {
     // The statuses of every matrix, read together: the one host sync, which a
     // recording cannot contain (see cusolver_solve).
     if (graph_capture_recording) {
-        graph_capture_saw_host_work = true;
+        graph_capture_refuse("batched solve reads its pivot statuses back on the host");
         return;
     }
     vector<int> status(batch);

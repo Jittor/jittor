@@ -36,7 +36,7 @@ def _configure():
 
 
 @pytest.mark.parametrize("acl,keep,policy", [
-    (False, False, "strict"), (False, True, "default"), (True, False, "backend"),
+    (False, False, "strict"), (False, True, "fast"), (True, False, "backend"),
 ])
 def test_math_selection_does_not_mutate_startup_flags(monkeypatch, acl, keep, policy):
     monkeypatch.delenv("ASCEND_TOOLKIT_HOME", raising=False)

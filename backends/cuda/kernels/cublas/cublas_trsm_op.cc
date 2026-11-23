@@ -81,7 +81,7 @@ void CublasTrsmOp::jit_run() {
     // and the QR backward relies on that. Reading the diagonal back is the
     // one host sync, which a recording cannot contain (see cusolver_solve).
     if (graph_capture_recording) {
-        graph_capture_saw_host_work = true;
+        graph_capture_refuse("triangular solve reads its diagonal back on the host");
         return;
     }
     vector<Tc> diagonal(n);

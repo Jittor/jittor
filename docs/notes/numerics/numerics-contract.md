@@ -15,7 +15,7 @@
 | --- | --- |
 | BF16 RMSNorm 在乘权重前后舍入，末位不同 | [RMSNorm 的舍入顺序](#rmsnorm-rounding-order) |
 | `1/0` 得到 `nan`、被完全 mask 的 attention 行没有变成 `nan` | {ref}`IEEE 特殊值算术 <numerics-ieee>` |
-| 极小的正数在 CUDA 上变成 0、`log` 给 `-inf`、`count_nonzero` 少数一个 | {ref}`CUDA 的次正规数 <numerics-subnormal>` |
+| 开了 `fast` 之后极小的正数变成 0、`log` 给 `-inf`、`sin`/`exp` 只有约 1e-7 的精度 | {ref}`CUDA 核的数学档位 <numerics-subnormal>` |
 | `x.max()` 看不见张量里的 NaN；`maximum(-0.0, 0.0)` 的符号 | {ref}`maximum/minimum 与 max/min <numerics-minmax>` |
 | float64 的 `log`/`sin` 在 CUDA 上精度只有 float32 | {ref}`float64 一元数学 <numerics-float64>` |
 | 只改了 `auto_flush_ops`，loss 一位不差而梯度变了 | {ref}`卷积算法的自动选择 <numerics-autotune>` |
@@ -67,61 +67,65 @@
 等级仍然存在——否则"删掉旗标什么也不放"会以把事情变得更糟的方式满足前一条。
 
 (numerics-subnormal)=
-## CUDA 的次正规数被刷成零
+## CUDA 核默认按 `strict` 编译，fast math 需要显式开启
 
-这是一个**决定**，不是缺陷，但此前没有写在任何地方，于是每次设备对拍撞上它都读
-起来像缺陷。
+**状态**：自 2026-11-12 起 `jt.flags.cuda_kernel_math` 默认是 `"strict"`（之前默认
+带 `--use_fast_math`，旧名 `"default"` 现在等同 `"fast"`）。
 
-**你会看到什么。** float32 的最小正规数是 `1.18e-38`。比它更小的非零值（次正规
-数）在 CPU 上按 IEEE-754 保留，在 CUDA 上**默认被刷成零**：
+**你会看到什么。** 默认档下 CUDA 与 CPU、NumPy 一样按 IEEE-754 处理次正规数，
+`sin`/`exp`/除法/开方是精确实现；只有显式选择 `fast` 的代码才会看到下表的
+"CUDA `fast`"一列：
 
-| 值 | CPU | CUDA 默认 | CUDA `strict` | NumPy |
+| 值 | CPU | CUDA 默认（`strict`） | CUDA `fast` | NumPy |
 | --- | --- | --- | --- | --- |
-| `1e-45`（次正规） | 保留 | **0.0** | 保留 | 保留 |
-| `1e-40`（次正规） | 保留 | **0.0** | 保留 | 保留 |
+| `1e-45`（次正规） | 保留 | 保留 | **0.0** | 保留 |
+| `1e-40`（次正规） | 保留 | 保留 | **0.0** | 保留 |
 | `1e-30`（正规） | 保留 | 保留 | 保留 | 保留 |
 
-**为什么。** 根因是 nvcc 的 `--use_fast_math`，它蕴含 `-ftz=true`。后果不止于值
-本身：输入在进入函数**之前**就已经是零了，所以 `log(1e-45)` 在 CPU 上给正确的
-`-103.28`，在 CUDA 默认档下给 `-inf`；`count_nonzero([1e-45])` 在 CPU 上是 1，在
-CUDA 默认档下是 0。一个下溢到次正规区间的梯度在 CUDA 上恰好是零、在 CPU 上是一个
-极小的非零，两个设备于是对同一个模型走上不同的更新路径——在有人把它们并排比较
-之前，这件事是不可见的。
+**为什么。** `--use_fast_math` 蕴含 `-ftz=true`，并把 `sinf`/`cosf`/`expf` 换成近似
+指令（`__sinf` 等，绝对误差约 1e-7）。刷零的后果不止于值本身：`log(1e-45)` 在
+`fast` 下是 `-inf`，`count_nonzero([1e-45])` 是 0。近似三角函数的后果在量子线路里
+最明显：20 比特、400 个门的 TFIM VQE，门矩阵由参数的 `cos`/`sin` 构造，所有门同角，
+近似误差同向累积，态的范数漂到 0.99998，能量与 complex128 参考差 9.2e-4；`strict`
+下是 1.47e-4，与 JAX 相同（PyTorch 1.35e-4）。默认于是改成不会悄悄损失精度的一档。
 
-**怎么办。**
+**怎么办。** 量测过、能接受 fast math 误差的计算显式开启：
 
 ```python
-jt.flags.cuda_kernel_math = "strict"     # 去掉 --use_fast_math
+jt.flags.cuda_kernel_math = "fast"            # 整个进程
+with jt.flag_scope(cuda_kernel_math="fast"):  # 只在这段计算里
+    ...
 ```
 
-这个开关按进程生效（`src/runtime/jit_policy.cc`），切换时会先把待执行的图排空。
-实测它**完全恢复**次正规数：上表 `strict` 一列是量出来的，不是推断的。
+量子线路库按约定在其计算期间开启 `fast`。开关按进程生效
+（`src/runtime/jit_policy.cc`），切换时先把待执行的图排空；策略写进每个算子的
+JIT key，所以两档的核互不复用。也可以用环境变量 `JT_CUDA_KERNEL_MATH=fast` 在启动时
+设置。Torch 兼容层一直用 `strict`；`JITTOR_TORCH_KEEP_FAST_MATH=1` 显式切到 `fast`。
 
-代价：2026-09-10 在 RTX 4090 上量过，两轮交替、取最小值：
+代价：2026-11-12 在 RTX 4090 上量过（16M float32，p50）：
 
-| 算子（16M float32） | 默认 | strict |
+| 算子 | `strict` | `fast` |
 | --- | --- | --- |
-| `divide` | 218.6 µs | 218.8 µs |
-| `sqrt` | 148.1 | 148.8 |
-| `exp` | 150.0 | 150.2 |
-| `log` | 148.1 | 148.2 |
-| `mul-add`（对照，不受 fast-math 影响） | 218.6 | 218.6 |
+| `x / (x + 1)` | 163.5 µs | 163.1 µs |
+| `sqrt` / `exp` / `sin` | 156.4 / 156.2 / 156.1 | 156.6 / 156.2 / 155.5 |
+| `sum` | 81.2 | 81.8 |
+| 4 层 `sin/exp/sqrt/除法` 融合链 | 239.3 | 241.4 |
+| 16 层同一融合链 | **851.9** | **548.0** |
+| 2048² matmul | 358.8 | 360.5 |
+| TFIM VQE 一步（capture / eager） | 81.2 / 141.3 ms | 80.9 / 138.4 ms |
 
-**在这个规模下代价测不出来**：差异是 0.1–0.8%，和不受 fast-math 影响的对照组同
-量级。原因是这些核受访存带宽限制，fast-math 省下的 ALU 周期本来就被访存掩盖了。
-
-计算密集的情形**没有得出结论**：把 `exp/log/sqrt` 串成 8 层和 32 层的链之后，同一
-个档位在两轮之间的差异（1.01e-3 与 4.16e-4，2.4 倍）**大于**两个档位之间的差异，
-那是融合方式的波动而不是策略的效果。所以这里只能说**没测出来**，不能说"没有代价"。
-要给出一个可靠的数字，需要一个融合形态固定的基准。默认值因此没有动：没有任何证据
-说刷零是错的取舍。
+**受访存限制的核没有可测代价**；**计算密集的融合链慢约 1.55 倍**（16 层链，
+`strict` 关掉了近似指令与乘加合并）。这正是 `fast` 留作显式选择的原因：计算密集、
+又量测过误差可以接受的负载自己开。2026-09-10 的旧量测（`divide`/`sqrt`/`exp`/`log`
+各差 0.1–0.8%）与此一致。
 
 **测试**：[`tests/backends/parity/test_subnormal_contract.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/backends/parity/test_subnormal_contract.py)
-把上面那张表断言下来。它不是在说哪一种行为更对，而是在说**当前的行为是什么**：
-默认档刷成零、`strict` 保留、CPU 始终保留。三条里任何一条变了，那个测试就红——包括
-"有人把默认改成了 strict"这种好的改变，那时应该改的是这份文档和那个测试，而不是
-让它们继续描述一个已经不成立的世界。它的牙齿在于两个档位**必须真的不同**：把
-`strict` 用例指向默认档它就红。
+把上表断言下来：默认档保留次正规数、`fast` 刷成零、在 `fast` 区域里显式 `strict`
+仍保留、CPU 始终保留。两档**必须真的不同**——把 `fast` 用例指向默认档它就红。
+[`tests/codegen/test_jit_math_policy.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/codegen/test_jit_math_policy.py)
+在新进程里断言默认值是 `strict`、旧名 `default` 等于 `fast`；
+[`tests/backends/cuda/test_cuda_kernel_math_policy.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/backends/cuda/test_cuda_kernel_math_policy.py)
+断言两档编译出不同的核、舍入确实不同。
 
 (numerics-minmax)=
 ## maximum/minimum 与 max/min：NaN 与符号零
@@ -183,7 +187,7 @@ log(1 + 2**-51)   CPU 4.4408920985006252e-16   CUDA 0.0   NumPy 4.44089209850062
 **怎么办。** 不用做什么，`KI-OPS-007`（提交 `2d716db31`）已修：同一套 dtype 分派
 加到那十九项上。float32 的操作数模板发射的文本与之前**逐字相同**，所以单精度路径
 按构造不变——实测 float32 的 `log`/`exp`/`sqrt`/`sin`/`tanh` 在 100 万元素上与
-NumPy 的差距不变（约 1e-7，那是 `--use_fast_math` 造成的，改前改后都在），每次调用
+NumPy 的差距不变（当时约 1e-7，那是当时默认的 `--use_fast_math` 造成的；现在默认 `strict`，见{ref}`CUDA 核的数学档位 <numerics-subnormal>`），每次调用
 23–25 µs 也不变。
 
 **测试**：[`tests/ops/test_float64_unary_math.py`](https://github.com/Jittor/jittor/blob/2.0-refactor/tests/ops/test_float64_unary_math.py)，

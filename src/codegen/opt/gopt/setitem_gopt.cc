@@ -72,6 +72,12 @@ static void setitem_inplace(SetitemOp* op) {
     // if setitem requires type conversion, don't inplace
     if (data->dtype() != input->dtype())
         return;
+    // Computing the value straight into the region replaces what was there;
+    // the setitem then writes nothing. That is the assignment, not an `add`
+    // or `subtract` into the region (which a slice's gradient accumulating
+    // into the running gradient is), so only the output may alias for those.
+    if (op->op != ns_void)
+        return;
 
     input_op = input->input();
 

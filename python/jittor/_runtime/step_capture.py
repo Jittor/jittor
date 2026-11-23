@@ -659,6 +659,11 @@ class StepCapture:
         """Why the step is not replayed, or None."""
         return self._refused
 
+    @property
+    def graph_refused(self):
+        """Why replays do not launch a recorded device graph, or None."""
+        return self._graph_refused
+
     def _call_signature(self, args, kwargs):
         signature = _signature(args, kwargs)
         if self._guard_external_backward:
@@ -993,7 +998,17 @@ class StepCapture:
         finally:
             jt.flags.keep_graph = before
         if not handle:
-            self._graph_refused = "the recording contained no device work"
+            refusal = _core.graph_capture_refusal()
+            if refusal.startswith("retryable: "):
+                # Work done once per key (a library plan built on a miss)
+                # cannot be recorded; the replay that follows does it, so
+                # a later recording of the same step finds it done.
+                self._rerecords += 1
+                if self._rerecords < _RERECORD_LIMIT:
+                    self._record_at = self.stats["replayed"] + 2
+                    return
+                refusal = refusal[len("retryable: "):]
+            self._graph_refused = refusal or "the recording contained no device work"
             return
         self._cuda_graph = handle
         self._graph_has_host_prefix = bool(host)
@@ -1015,6 +1030,12 @@ class StepCapture:
             # Finish the previous launch before preflight or a replay hook
             # writes host staging that its asynchronous H2D may still read.
             _core.graph_wait()
+        given = _input_vars((args, kwargs), [])
+        # Resolve feeds that may read the preceding replay before entering
+        # keep_graph or copying into the captured input slots.
+        pending = [value for value in given if not value.is_finished]
+        if pending:
+            jt.sync(pending, False, False)
         dynamic_prefix = cap.dynamic_prefix is not None
         if dynamic_prefix:
             # Dynamic extents must be checked before prologue hooks advance
@@ -1022,7 +1043,7 @@ class StepCapture:
             # incompatible extent therefore still permits exactly one eager
             # step on the original inputs and current training state.
             with jt.no_grad(), jt.flag_scope(keep_graph=2):
-                for captured, given in zip(cap.inputs, _input_vars((args, kwargs), [])):
+                for captured, given in zip(cap.inputs, given):
                     captured._copy_into(given)
             valid = (_core.graph_prepare_host_prefix(self._cuda_graph, True)
                      if self._cuda_graph else cap.dynamic_prefix.check())
@@ -1063,7 +1084,6 @@ class StepCapture:
                 self.stats["preserved"] = self.stats.get("preserved", 0) + 1
             if not dynamic_prefix:
                 # Dynamic replay has already staged the inputs for preflight.
-                given = _input_vars((args, kwargs), [])
                 staged = (jt.flags.no_grad and self._cuda_graph
                           and not self._graph_has_host_prefix and not cap.prologue
                           and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))

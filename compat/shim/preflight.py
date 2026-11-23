@@ -279,9 +279,11 @@ def _prepare_kernel_math(environ):
         )
         environ["JT_CUDA_KERNEL_MATH"] = "backend"
         return
-    if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
-        return
     # Kernel policy belongs in operator keys, not in the core build fingerprint.
+    # Strict is also the core's default; keeping fast math is an explicit opt-in.
+    if is_truthy(environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
+        environ["JT_CUDA_KERNEL_MATH"] = "fast"
+        return
     environ["JT_CUDA_KERNEL_MATH"] = "strict"
 
 
@@ -297,6 +299,7 @@ def configure_torch_math_flags(jittor_module):
         return
     _prepare_kernel_math(os.environ)
     if is_truthy(os.environ.get("JITTOR_TORCH_KEEP_FAST_MATH")):
+        flags.cuda_kernel_math = "fast"
         return
     flags.cuda_kernel_math = "strict"
 

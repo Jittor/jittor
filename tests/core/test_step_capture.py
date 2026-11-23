@@ -488,6 +488,32 @@ class TestStepCapture(unittest.TestCase):
             [jt.array(rs.randn(64, 32).astype("float32")).float16()
              for _ in range(5)])
 
+    def test_an_input_built_from_the_last_replay_is_read_before_the_next(self):
+        # `x = x - lr * g` hands each call an input that is still pending and
+        # reads the previous replay's result buffers. Resolved inside the
+        # replay, it ran after those buffers were overwritten: a gradient
+        # descent drifted from its eager twin from the third replay on, with
+        # no refusal and no re-capture to show for it.
+        def step(x):
+            return jt.sin(x).sum(), jt.cos(x)
+
+        def descend(call):
+            x = jt.array(np.linspace(-1, 1, 8).astype("float32"))
+            losses = []
+            for _ in range(8):
+                loss, grad = call(x)
+                x = x - 0.3 * grad
+                losses.append(float(loss.numpy()))
+            return losses, x.numpy()
+
+        captured = jt.capture_step(step)
+        want_losses, want_x = descend(step)
+        got_losses, got_x = descend(captured)
+        self.assertIsNone(captured.refused)
+        self.assertGreater(captured.stats["replayed"], 3)
+        np.testing.assert_allclose(got_losses, want_losses, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(got_x, want_x, rtol=1e-5, atol=1e-5)
+
     def test_random_draws_differ_on_every_replay(self):
         # A step that draws random numbers draws new ones every call, the
         # way it does when it runs as written.
@@ -601,6 +627,39 @@ class TestStepCaptureCuda(TestStepCapture):
             return [((x * w) ** 2).sum() + ((x + w) ** 2).sum()]
         self._replay_matches(step, [jt.array(rs.randn(256, 128).astype("float32"))
                                     for _ in range(5)])
+
+    def test_more_transposes_than_the_plan_cache_still_record(self):
+        # A step whose cuTT working set exceeds the plan cache used to evict
+        # inside the recording -- a stream sync, which a recording cannot
+        # contain -- and silently gave up on the device graph for good.
+        cutt = getattr(jt.compile_extern, "cutt", None)
+        if cutt is None or not hasattr(cutt, "cutt_set_plan_cache_size"):
+            self.skipTest("cuTT plan cache accessors not built")
+        rs = np.random.RandomState(7)
+        shapes = [(2, 2, 2, m) for m in (3, 5, 6, 7, 9, 10, 11, 12)]
+        xs = [jt.array(rs.randn(*sh).astype("float32")) for sh in shapes]
+        w = jt.array(np.ones((1,), "float32"))
+        jt.sync(xs + [w])
+
+        def step(w):
+            e = 0
+            for x in xs:
+                e = e + ((x * w[0]).permute(3, 0, 1, 2) ** 2).sum()
+            return [e, jt.grad(e, w)]
+        expect = [v.numpy() for v in step(w)]
+        cutt.cutt_set_plan_cache_size(4)
+        self.addCleanup(cutt.cutt_set_plan_cache_size, 4096)
+        captured = jt.capture_step(step)
+        for _ in range(12):
+            got = [v.numpy() for v in captured(w)]
+            for g, e in zip(got, expect):
+                np.testing.assert_allclose(g, e, rtol=1e-5)
+        self.assertIsNone(captured.graph_refused)
+        self.assertGreater(captured.stats["graph"], 0)
+        before = cutt.cutt_plan_build_count()
+        for _ in range(3):
+            captured(w)[0].sync()
+        self.assertEqual(cutt.cutt_plan_build_count(), before)
 
     def test_random_draws_differ_on_every_launch(self):
         # The device generator's offset is baked into a recorded launch; a
