@@ -58,11 +58,16 @@ class TestFSDPPublicOwners(unittest.TestCase):
         fidelity.register_fidelity = lambda name, obj, level, detail: self.records.update(
             {name: (obj, level, detail)})
         sys.modules[fidelity.__name__] = fidelity
-        self.helpers = self.load("public_helpers")
-        self.installer = self.load("installer")
+        collectives = types.ModuleType("_fsdp_owner_probe.collectives")
+        collectives._world_size = lambda: 1
+        sys.modules[collectives.__name__] = collectives
+        self.functional_collectives = self.load("functional_collectives")
+        self.helpers = self.load("fsdp2.public_helpers")
+        self.installer = self.load("fsdp2.installer")
 
     def load(self, name):
-        spec = importlib.util.spec_from_file_location("_fsdp_owner_probe.fsdp2." + name, SOURCE / (name + ".py"))
+        path = SOURCE.parent.joinpath(*name.split(".")).with_suffix(".py")
+        spec = importlib.util.spec_from_file_location("_fsdp_owner_probe." + name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
@@ -77,16 +82,17 @@ class TestFSDPPublicOwners(unittest.TestCase):
             self.installer.install_with_registry(dist, registry=registry)
             graphs.append(registry.modules)
             self.installer.install_with_registry(dist, registry=registry)
-        for path, name in (
-            ("torch.distributed.fsdp.wrap", "enable_wrap"),
-            ("torch.distributed.fsdp.wrap", "lambda_auto_wrap_policy"),
-            ("torch.distributed.tensor.parallel", "ColwiseParallel"),
-            ("torch.distributed._functional_collectives", "AsyncCollectiveTensor"),
-            ("torch.distributed.algorithms._checkpoint.checkpoint_wrapper", "CheckpointImpl"),
+        for path, name, owner in (
+            ("torch.distributed.fsdp.wrap", "enable_wrap", self.helpers),
+            ("torch.distributed.fsdp.wrap", "lambda_auto_wrap_policy", self.helpers),
+            ("torch.distributed.tensor.parallel", "ColwiseParallel", self.helpers),
+            ("torch.distributed._functional_collectives", "AsyncCollectiveTensor", self.functional_collectives),
+            ("torch.distributed.algorithms._checkpoint.checkpoint_wrapper", "CheckpointImpl", self.helpers),
         ):
             value = getattr(graphs[0][path], name)
             self.assertIs(value, getattr(graphs[1][path], name))
-            self.assertIs(value, getattr(self.helpers, name))
+            self.assertIs(value, getattr(owner, name))
+            self.assertEqual(value.__module__, owner.__name__)
             self.assertIs(pickle.loads(pickle.dumps(value)), value)
         self.assertIn("no activation offload", self.records[
             "torch.distributed.algorithms._checkpoint.checkpoint_wrapper.offload_wrapper"][2])
