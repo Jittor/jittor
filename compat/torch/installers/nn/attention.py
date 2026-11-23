@@ -1,4 +1,5 @@
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
+from enum import IntEnum as _IntEnum
 import math as _math
 import jittor as jt
 from jittor._runtime import dispatch as _dispatch_module
@@ -484,49 +485,29 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
 
 register_fidelity("torch.nn.functional.scaled_dot_product_attention", scaled_dot_product_attention, Fidelity.APPROXIMATE, "native attention mathematics with backend selection and GQA expansion; backend capability and precision restrictions apply")
 
+class ScalingType(_IntEnum):
+    TensorWise = 0
+    RowWise = 1
+    BlockWise1x16 = 2
+    BlockWise1x32 = 3
+    BlockWise1x128 = 4
+    BlockWise2D = 5
+    DYNAMIC = 6
+
+def _scaled_grouped_mm(*args, **kwargs):
+    raise NotImplementedError(
+        "torch.nn.functional.scaled_grouped_mm: grouped scaled matmul "
+        "is not implemented in jittor-compat")
+
 def install_attention(ctx):
     nn = ctx.target_namespace.nn
     g = ctx.jittor_module
-
     ctx.state["sdpa_backend_cache"] = {}
 
-
-
-
-
-
-
-
-
-    # The Torch wrapper owns backend selection and GQA expansion. The math
-    # fallback remains the canonical native functional implementation.
-
-
     nn.functional.scaled_dot_product_attention = scaled_dot_product_attention
-    g.scaled_dot_product_attention = nn.functional.scaled_dot_product_attention
-    # torch.nn.functional.ScalingType: the enum torch 2.9 grouped-matmul APIs
-    # take. torchao spells it in module-scope defaults and converts members to
-    # int, so the members need stable values; the matmul itself
-    # (`scaled_grouped_mm`) raises instead of computing.
+    g.scaled_dot_product_attention = scaled_dot_product_attention
     if not hasattr(nn.functional, "ScalingType"):
-        import enum as _enum
-
-        class ScalingType(_enum.IntEnum):
-            TensorWise = 0
-            RowWise = 1
-            BlockWise1x16 = 2
-            BlockWise1x32 = 3
-            BlockWise1x128 = 4
-            BlockWise2D = 5
-            DYNAMIC = 6
-
         nn.functional.ScalingType = ScalingType
-
     if not hasattr(nn.functional, "scaled_grouped_mm"):
-        def _scaled_grouped_mm(*args, **kwargs):
-            raise NotImplementedError(
-                "torch.nn.functional.scaled_grouped_mm: grouped scaled matmul "
-                "is not implemented in jittor-compat")
-
         nn.functional.scaled_grouped_mm = _scaled_grouped_mm
     g._torch_sdpa_flash_backend_cache = ctx.state["sdpa_backend_cache"]
