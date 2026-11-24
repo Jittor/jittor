@@ -35,10 +35,14 @@ namespace {
 
 // The bindings this thread is inside of, innermost first, and the innermost
 // one that is suspended in a call back into Python: the ones above it are
-// running C++ now.
-thread_local GraphEntryScope* top_scope = nullptr;
-thread_local GraphEntryScope* suspended_at = nullptr;
-thread_local bool is_worker = false;
+// running C++ now. Grouped into one struct so hot entries perform at most one
+// TLS lookup instead of three.
+struct AsyncThreadState {
+    GraphEntryScope* top_scope = nullptr;
+    GraphEntryScope* suspended_at = nullptr;
+    bool is_worker = false;
+};
+thread_local AsyncThreadState async_tls;
 
 // Leaked on purpose, as `graph_mutation_mutex()` is: the worker may still be
 // asked to stop from an exit-time callback.
@@ -108,9 +112,15 @@ const std::vector<int>* l3_domain(int cpu) {
 // The worker is for one Python thread: a second one's bindings may have
 // started before a batch went out and run C++ unlocked after, so once a second
 // thread is seen no further batch is handed over.
-const void* binding_thread_token() {
+inline const void* binding_thread_token() {
+#if defined(__linux__) && defined(__x86_64__)
+    const void* self;
+    asm("mov %%fs:0, %0" : "=r"(self));
+    return self;
+#else
     thread_local char token;
     return &token;
+#endif
 }
 std::atomic<const void*> binding_thread{nullptr};
 std::atomic<bool> second_binding_thread{false};
@@ -129,7 +139,8 @@ void lock_graph(int depth=1, bool may_release_gil=true) {
 }
 
 void lock_resumed_bindings() {
-    for (auto* scope = top_scope; scope && scope != suspended_at; scope = scope->outer) {
+    auto& tls = async_tls;
+    for (auto* scope = tls.top_scope; scope && scope != tls.suspended_at; scope = scope->outer) {
         if (scope->locked) continue;
         lock_graph();
         scope->locked = true;
@@ -140,7 +151,7 @@ void lock_resumed_bindings() {
 // except the ones only graph construction reads, which models flip inside a
 // forward (`torch.no_grad()`, autocast).
 void wait_before_flag_set(const char* name) {
-    if (!async_exec_inflight.load(std::memory_order_acquire) || is_worker) return;
+    if (!async_exec_inflight.load(std::memory_order_acquire) || async_tls.is_worker) return;
     if (!strcmp(name, "no_grad") || !strcmp(name, "amp_reg")
             || !strcmp(name, "auto_mixed_precision_level")
             || !strcmp(name, "node_order"))
@@ -198,7 +209,7 @@ void spin_until(Ready ready) {
 }
 
 void worker_main() {
-    is_worker = true;
+    async_tls.is_worker = true;
     for (;;) {
         std::function<void()> job;
         uint8 submitted_order;
@@ -344,14 +355,16 @@ bool async_exec_placed() {
 #endif
 }
 
-GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locked(false) {
-    top_scope = this;
+GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(nullptr), locked(false) {
+    auto& tls = async_tls;
+    outer = tls.top_scope;
+    tls.top_scope = this;
     enter_launch_origin_entry(outer_origin_active, outer_origin);
     // The worker reaches a binding only from the compiler's Python callbacks,
     // in the middle of its own batch: not a second user.
     const void* me = binding_thread_token();
     const void* user = binding_thread.load(std::memory_order_relaxed);
-    if (user != me && !is_worker) {
+    if (PREDICT_BRANCH_NOT_TAKEN(user != me) && !tls.is_worker) {
         if (!user && binding_thread.compare_exchange_strong(user, me)) {}
         else if (binding_thread.load(std::memory_order_relaxed) != me)
             second_binding_thread.store(true, std::memory_order_relaxed);
@@ -367,23 +380,25 @@ GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locke
 GraphEntryScope::~GraphEntryScope() {
     leave_launch_origin_entry(outer_origin_active, outer_origin);
     if (locked) graph_mutation_mutex().unlock();
-    top_scope = outer;
+    async_tls.top_scope = outer;
 }
 
 GraphLockSuspend::GraphLockSuspend()
-    : depth(graph_mutation_mutex().release_all()), boundary(suspended_at) {
-    suspended_at = top_scope;
+    : depth(graph_mutation_mutex().release_all()), boundary(nullptr) {
+    auto& tls = async_tls;
+    boundary = tls.suspended_at;
+    tls.suspended_at = tls.top_scope;
 }
 
 GraphLockSuspend::~GraphLockSuspend() {
-    suspended_at = boundary;
+    async_tls.suspended_at = boundary;
     if (depth) lock_graph(depth);
     // A batch handed over while this was suspended: what resumes now runs
     // under the lock as well.
     if (async_exec_inflight.load(std::memory_order_acquire)) lock_resumed_bindings();
 }
 
-bool on_async_worker() { return is_worker; }
+bool on_async_worker() { return async_tls.is_worker; }
 
 bool async_exec_single_thread() {
     return !second_binding_thread.load(std::memory_order_relaxed);
@@ -409,7 +424,7 @@ bool async_exec_handover_pays() {
 void async_exec_hold_active_bindings() { lock_resumed_bindings(); }
 
 bool async_exec_defer_python_release(std::function<void()>&& release) {
-    if (!is_worker) return false;
+    if (!async_tls.is_worker) return false;
     auto& state = python_releases_state();
     std::lock_guard<std::mutex> lock(state.mutex);
     state.queue.push_back(std::move(release));
@@ -419,7 +434,7 @@ bool async_exec_defer_python_release(std::function<void()>&& release) {
 
 void async_exec_run_python_releases() {
     auto& state = python_releases_state();
-    if (is_worker || !state.pending.load(std::memory_order_acquire)) return;
+    if (async_tls.is_worker || !state.pending.load(std::memory_order_acquire)) return;
     if (!Py_IsInitialized() || !PyGILState_Check()) return;
     std::vector<std::function<void()>> taken;
     {
@@ -443,7 +458,7 @@ void async_exec_submit(std::function<void()>&& job) {
 }
 
 void async_exec_wait() {
-    if (is_worker) return;
+    if (async_tls.is_worker) return;
     async_exec_run_python_releases();
     if (async_exec_inflight.load(std::memory_order_acquire)) {
         note_caller_work();

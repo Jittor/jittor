@@ -466,7 +466,7 @@ struct Node {
     }
 
     inline Node() {
-        id = ++total_node;
+        id = total_node.fetch_add(1, std::memory_order_relaxed) + 1;
         #ifdef NODE_MEMCHECK
         bool track = true;
         #else
@@ -577,9 +577,18 @@ inline Node::input_t& Node::output_t::reverse() {
 class GraphMutationMutex {
     std::atomic<const void*> owner_{nullptr};
     int depth_ = 0;  // written by the owner only
-    static const void* thread_token() {
+    static inline const void* thread_token() {
+#if defined(__linux__) && defined(__x86_64__)
+        // Linux x86-64 ELF ABI stores the unique per-thread TCB self-pointer at
+        // %fs:0 (same value pthread_self() returns). Reading it directly is one
+        // instruction and avoids calling __tls_get_addr@plt on every lock/unlock.
+        const void* self;
+        asm("mov %%fs:0, %0" : "=r"(self));
+        return self;
+#else
         thread_local char token;
         return &token;
+#endif
     }
 public:
     void lock() {

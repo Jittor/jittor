@@ -132,7 +132,7 @@ void share_group_unlink_locked(Var* v) {
 
 void free_var(Var* v) {
     if (PREDICT_BRANCH_NOT_TAKEN((bool)_var_free_hook)) _var_free_hook(v);
-    Var::number_of_lived_vars--;
+    Var::number_of_lived_vars.fetch_sub(1, std::memory_order_relaxed);
     if (PREDICT_BRANCH_NOT_TAKEN(v->share_next != nullptr))
         share_group_unlink(v);
     if (save_mem)
@@ -201,7 +201,7 @@ Var::Var(NanoVector shape, NanoString dtype)
     set_flag(VarFlags::_stop_fuse, no_fuse);
     ns = dtype;
     ASSERT(ns.is_dtype());
-    number_of_lived_vars++;
+    number_of_lived_vars.fetch_add(1, std::memory_order_relaxed);
     numel();
     notify_node_created(this);
 }

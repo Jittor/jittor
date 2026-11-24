@@ -84,28 +84,9 @@ extern void free_var_mem(Var* v);
 // in the queue is a non-virtual member of Node taking no arguments, so a real
 // pointer to member expresses the same thing and `(node->*op)()` compiles to the
 // same call. No symbol changes: the queue is a file static.
-typedef void (Node::*liveness_op_t)();
-// Never destroyed, for the same reason as free_buffer above: an exit-time
-// static destructor (the compiled-fused-op cache's) reaches
-// release_both_liveness, which appends here. A namespace-scope vector would
-// already be gone by then. ASAN named this exact write as a heap-use-after-free
-// in Node::release_both_liveness <- ~VarRelayGroup; that is the corruption
-// glibc surfaced afterwards as "corrupted double-linked list".
-//
-// An entry names its step by index into `liveness_step_fn`, not by the pointer
-// to member itself. A pointer to member is 16 bytes; materialising one on the
-// stack for every push and reloading it as one 16-byte value stalls on store
-// forwarding, and that stall was three quarters of `Node::set_inputs`. The
-// drain reads the member out of the table, so the call it makes is the same
-// indirect call as before.
 enum class LivenessStep : uint8_t {
     own_forward, own_backward, own_pending,
     release_forward, release_backward, release_pending,
-};
-static constexpr liveness_op_t liveness_step_fn[] = {
-    &Node::own_forward_liveness, &Node::own_backward_liveness,
-    &Node::own_pending_liveness, &Node::release_forward_liveness,
-    &Node::release_backward_liveness, &Node::release_pending_liveness,
 };
 struct LivenessEntry {
     Node* node;
@@ -166,11 +147,9 @@ static const char* liveness_step_name(LivenessStep step) {
 
 // Run every pending propagation step, including the ones the steps themselves
 // append. `caller` only names the entry point in the log.
-static void run_liveness_queue(const char* caller) {
-    // The drain owns the queue -- it clears it on the way out -- so two threads
-    // draining at once would empty each other's work and run each other's
-    // callbacks on nodes neither of them owns.
-    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+// Caller must already hold `graph_mutation_mutex()`.
+static void run_liveness_queue_locked(const char* caller) {
+    if (liveness_queue_front >= liveness_queue.size()) return;
     LOGvvvv << "run liveness queue from" << caller << "size" << liveness_queue.size();
     // A step can throw: the counters assert their own invariants and `free`
     // reaches the allocator. Leaving the queue half-drained would make the
@@ -191,7 +170,14 @@ static void run_liveness_queue(const char* caller) {
         LivenessStep step = liveness_queue[liveness_queue_front].step;
         liveness_queue_front++;
         LOGvvvv << "liveness" << liveness_step_name(step) << (void*)node;
-        (node->*liveness_step_fn[(int)step])();
+        switch (step) {
+            case LivenessStep::own_forward:      node->own_forward_liveness(); break;
+            case LivenessStep::own_backward:     node->own_backward_liveness(); break;
+            case LivenessStep::own_pending:      node->own_pending_liveness(); break;
+            case LivenessStep::release_forward:  node->release_forward_liveness(); break;
+            case LivenessStep::release_backward: node->release_backward_liveness(); break;
+            case LivenessStep::release_pending:  node->release_pending_liveness(); break;
+        }
     }
 }
 
@@ -347,9 +333,9 @@ void Node::free() {
 
 void Node::__release() {
     if (is_var())
-        Var::number_of_lived_vars--;
+        Var::number_of_lived_vars.fetch_sub(1, std::memory_order_relaxed);
     else
-        Op::number_of_lived_ops--;
+        Op::number_of_lived_ops.fetch_sub(1, std::memory_order_relaxed);
     flags.set(NodeFlags::_released);
 }
 
@@ -528,7 +514,7 @@ void Node::own_both_liveness() {
     enqueue_liveness(this, LivenessStep::own_forward);
     enqueue_liveness(this, LivenessStep::own_backward);
     enqueue_liveness(this, LivenessStep::own_pending);
-    run_liveness_queue("own_both_liveness");
+    run_liveness_queue_locked("own_both_liveness");
 }
 
 void Node::release_both_liveness() {
@@ -547,7 +533,7 @@ void Node::release_both_liveness() {
     enqueue_liveness(this, LivenessStep::release_forward);
     enqueue_liveness(this, LivenessStep::release_backward);
     enqueue_liveness(this, LivenessStep::release_pending);
-    run_liveness_queue("release_both_liveness");
+    run_liveness_queue_locked("release_both_liveness");
 }
 
 void Node::finish_pending_liveness() {
@@ -589,7 +575,7 @@ void Node::finish_pending_liveness() {
             }
         }
     }
-    run_liveness_queue("finish_pending_liveness");
+    run_liveness_queue_locked("finish_pending_liveness");
 }
 
 void Node::release_inputs() {
@@ -613,7 +599,7 @@ void Node::release_inputs() {
             enqueue_liveness(in.node, LivenessStep::release_pending);
     }
     _inputs.clear();
-    run_liveness_queue("release_inputs");
+    run_liveness_queue_locked("release_inputs");
 }
 
 void Node::erase_input(uint index) {
@@ -648,18 +634,20 @@ void Node::set_inputs(Node* const* nodes, size_t count) {
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
     // Take the new liveness before dropping the old edges, so that a node that
     // appears in both the old and the new input list never drops to zero.
+    const bool b_active = liveness.backward.active();
+    const bool p_active = liveness.pending.active();
     for (size_t i = 0; i < count; i++) {
         Node* node = nodes[i];
         if (!node->is_stop_grad() && node->liveness.forward.active())
             enqueue_liveness(this, LivenessStep::own_forward);
-        if (liveness.backward.active()) {
+        if (b_active) {
             enqueue_liveness(node, LivenessStep::own_backward);
         }
-        if (liveness.pending.active())
+        if (p_active)
             enqueue_liveness(node, LivenessStep::own_pending);
     }
-    run_liveness_queue("set_inputs");
-    release_inputs();
+    run_liveness_queue_locked("set_inputs");
+    if (!_inputs.empty()) release_inputs();
     bool is_var = this->is_var();
     // A new producer replaces the history; the new edges answer for it.
     if (is_var) ((Var*)this)->set_flag(VarFlags::_had_backward_producer, 0);
@@ -679,16 +667,18 @@ void Node::add_inputs(const vector<Node*>& nodes) {
     LOGvvvv << "add inputs" << nodes << "to" << this;
     ASSERT(!is_finished());
     std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+    const bool b_active = liveness.backward.active();
+    const bool p_active = liveness.pending.active();
     for (Node* node : nodes) {
         if (!node->is_stop_grad() && node->liveness.forward.active())
             enqueue_liveness(this, LivenessStep::own_forward);
-        if (liveness.backward.active()) {
+        if (b_active) {
             enqueue_liveness(node, LivenessStep::own_backward);
         }
-        if (liveness.pending.active())
+        if (p_active)
             enqueue_liveness(node, LivenessStep::own_pending);
     }
-    run_liveness_queue("add_inputs");
+    run_liveness_queue_locked("add_inputs");
     bool is_var = this->is_var();
     auto iter = nodes.begin();
     uint n_old_inputs = _inputs.size();
@@ -732,7 +722,7 @@ void Node::set_stop_grad() {
             enqueue_liveness(in, LivenessStep::release_backward);
         }
     }
-    run_liveness_queue("set_stop_grad");
+    run_liveness_queue_locked("set_stop_grad");
 }
 
 std::ostream& operator<<(std::ostream& os, const Node* node) {

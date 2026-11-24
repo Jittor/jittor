@@ -53,10 +53,16 @@ jit_cache_map<string> jit_key_mapper;
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
 
-static thread_local const BackwardStorageReadScope* backward_storage_reads = nullptr;
+struct OpThreadState {
+    const BackwardStorageReadScope* backward_storage_reads = nullptr;
+    int execution_target_override = -1;
+    bool host_execution_forced = false;
+};
+static thread_local OpThreadState op_tls;
+
 BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
-    : op(op), previous(backward_storage_reads) { backward_storage_reads = this; }
-BackwardStorageReadScope::~BackwardStorageReadScope() { backward_storage_reads = previous; }
+    : op(op), previous(op_tls.backward_storage_reads) { op_tls.backward_storage_reads = this; }
+BackwardStorageReadScope::~BackwardStorageReadScope() { op_tls.backward_storage_reads = previous; }
 
 void rebase_saved_storage_versions(Var* value) {
     if (!value) return;
@@ -77,10 +83,11 @@ void rebase_saved_storage_versions(Var* value) {
 }
 
 void check_backward_storage_read(Var* value) {
-    if (!backward_storage_reads || !value) return;
+    auto* reads = op_tls.backward_storage_reads;
+    if (!reads || !value) return;
     auto token = value->peek_storage_version();
     if (!token) return;
-    for (auto* scope = backward_storage_reads; scope; scope = scope->previous)
+    for (auto* scope = reads; scope; scope = scope->previous)
         for (const auto& saved : scope->op->saved_storage_versions)
             if (saved.token == token || saved.original_id == value->id)
                 USER_CHECK(saved.token == token &&
@@ -135,15 +142,15 @@ Op::Op() {
     // the amp field".
     set_flag(OpFlags::_prefer_32, amp_reg & ((1<<OpFlags::_amp_nbits)-1),
         OpFlags::_amp_nbits);
-    number_of_lived_ops++;
-    number_of_created_ops++;
+    number_of_lived_ops.fetch_add(1, std::memory_order_relaxed);
+    number_of_created_ops.fetch_add(1, std::memory_order_relaxed);
     notify_node_created(this);
 }
 
 Op::~Op() {
     if (flag(OpFlags::_requires_grad_disabled))
         requires_grad_disabled_edges().erase(id);
-    number_of_lived_ops--;
+    number_of_lived_ops.fetch_sub(1, std::memory_order_relaxed);
 }
 
 OpId Op::type_id() const {
@@ -163,13 +170,11 @@ const OpDef& Op::definition() const {
     return *registered_definition;
 }
 
-static thread_local int execution_target_override = -1;
-static thread_local bool host_execution_forced = false;
-
 BackendId execution_target_backend() {
-    return execution_target_override < 0
+    int ov = op_tls.execution_target_override;
+    return ov < 0
         ? (runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu)
-        : static_cast<BackendId>(execution_target_override);
+        : static_cast<BackendId>(ov);
 }
 
 BackendId construction_target_backend(const Var* input) {
@@ -179,17 +184,17 @@ BackendId construction_target_backend(const Var* input) {
 }
 
 ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
-    : previous(execution_target_override) {
-    execution_target_override = static_cast<int>(backend);
+    : previous(op_tls.execution_target_override) {
+    op_tls.execution_target_override = static_cast<int>(backend);
 }
 
-ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
+ExecutionBackendScope::~ExecutionBackendScope() { op_tls.execution_target_override = previous; }
 
-HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
-    host_execution_forced = true;
+HostExecutionScope::HostExecutionScope() : previous(op_tls.host_execution_forced) {
+    op_tls.host_execution_forced = true;
 }
 
-HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
+HostExecutionScope::~HostExecutionScope() { op_tls.host_execution_forced = previous; }
 
 TensorPlacement Op::graph_placement() const {
     // An op asks this several times per execution (requested and execution
@@ -211,12 +216,12 @@ BackendId Op::requested_backend() const {
 }
 
 BackendId Op::execution_backend() const {
-    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
+    if (PREDICT_BRANCH_NOT_TAKEN(op_tls.host_execution_forced)) return BackendId::Cpu;
     return execution_backend_for(requested_backend());
 }
 
 BackendId Op::execution_backend_for(BackendId requested) const {
-    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
+    if (PREDICT_BRANCH_NOT_TAKEN(op_tls.host_execution_forced)) return BackendId::Cpu;
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
 }
