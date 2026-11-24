@@ -268,7 +268,7 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
     if (!rank) return declines;
     for (int i = 0; i < rank; i++) if (x->shape[i] <= 0) return declines;
     int64 hidden = x->shape[rank - 1];
-    if (hidden > 4096 || gamma->shape.size() != 1 || gamma->shape[0] != hidden) return declines;
+    if (hidden > 16384 || gamma->shape.size() != 1 || gamma->shape[0] != hidden) return declines;
     if (!is_floating(x->dtype()) || !is_floating(gamma->dtype())) return declines;
     if (!std::isfinite(epsilon) || epsilon <= 0) return declines;
     return accepts;

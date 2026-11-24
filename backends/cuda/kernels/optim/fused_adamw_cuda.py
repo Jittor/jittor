@@ -18,12 +18,24 @@ from jittor._runtime.dispatch import register_kernel
 
 _DTYPES = ("float32", "float16", "bfloat16")
 # Keep each mapped op small enough for nvcc and the JIT argument table.  The
-# CUDA kernel can process up to 36 tensors, but a transformer optimizer group
-# contains hundreds of differently shaped tensors; passing the whole group in
-# one graph node makes the generated wrapper exceed the compiler's memory
-# budget.  Several smaller launches retain the fused update while keeping
+# CUDA kernel can process up to 36 tensors per launch; batching 32 entries
+# per op halves launch and graph-node overhead vs 16 while keeping JIT
 # compilation bounded.
-_MAX_FUSED_ENTRIES = 16
+_MAX_FUSED_ENTRIES = 32
+_NATIVE_DTYPE_GETTER = None
+_ALLOWED_NATIVE_DTYPES = None
+
+
+def _bind_native_dtypes():
+    global _NATIVE_DTYPE_GETTER, _ALLOWED_NATIVE_DTYPES
+    cls = jt.core.Var
+    getter = getattr(cls, "_frontend_native_dtype", None) or cls.__dict__["dtype"]
+    _NATIVE_DTYPE_GETTER = getter.__get__
+    _ALLOWED_NATIVE_DTYPES = (
+        jt.core.NanoString("float32"),
+        jt.core.NanoString("float16"),
+        jt.core.NanoString("bfloat16"),
+    )
 
 
 def _supports(entries, *args, **kwargs):

@@ -35,7 +35,7 @@ PyObject* try_rms_norm_cuda(PyObject* x, PyObject* weight, PyObject* epsilon,
     for (int i = 0; i < input->shape.size(); ++i)
         if (input->shape[i] <= 0) Py_RETURN_NONE;
     int64 hidden = input->shape[input->shape.size()-1];
-    if (hidden > 4096 || gamma->shape.size() != 1 || gamma->shape[0] != hidden)
+    if (hidden > 16384 || gamma->shape.size() != 1 || gamma->shape[0] != hidden)
         Py_RETURN_NONE;
     double eps = PyFloat_AsDouble(epsilon);
     if (PyErr_Occurred()) {

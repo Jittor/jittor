@@ -121,6 +121,9 @@ def _effective_device(var):
 def _update_preserve_dtype(target, value):
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(target.dtype):
         value = value.to(target.dtype)
+    if type(target) is jt.Var:
+        target.update(value)
+        return
     # Frontends may require writes into retained storage rather than native
     # holder rebinding. The tensor type owns that policy, not each optimizer.
     writer = getattr(type(target), "_optimizer_update", None)

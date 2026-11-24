@@ -93,6 +93,10 @@ def rms_norm(x, weight, eps=1e-6, *, round_before_weight=True):
     # The legacy hook facade resolves the ambient backend before calling this
     # same registry. Select once from the actual operands; live overrides and
     # eligibility predicates remain owned by the canonical dispatcher.
+    if round_before_weight and _output_requires_grad(x, backend_weight):
+        fused = try_dispatch("nn.rms_norm.training", x, backend_weight, eps)
+        if fused is not None:
+            return fused
     operation = ("nn.rms_norm.inference" if round_before_weight
                  else "nn.rms_norm.single_round.inference")
     fused = try_dispatch(operation, x, backend_weight, eps)

@@ -5,9 +5,28 @@ from ..._core.dtypes import dtype_name
 from ..._runtime.dispatch import dispatch_context, register_kernel, select_kernel
 
 from ..base import (
-    Optimizer, _grad_matches_param, _normalize_param_group, _param_requires_grad,
-    _state_buffer, _update_preserve_dtype,
+    Optimizer, _effective_device, _grad_matches_param, _normalize_param_group,
+    _param_requires_grad, _state_buffer, _update_preserve_dtype,
 )
+
+
+def _all_same_cuda_device(active):
+    first = active[0][0]
+    if dispatch_context(first).backend != "cuda":
+        return False
+    pb0 = first.placement_backend
+    dev0 = first.device_id
+    eff0 = None
+    for p, m, v, g, _ in active:
+        for tensor in (p, m, v, g):
+            if tensor.placement_backend == pb0 and tensor.device_id == dev0:
+                continue
+            if eff0 is None:
+                eff0 = _effective_device(first)
+            if (_effective_device(tensor) != eff0
+                    or dispatch_context(tensor).backend != "cuda"):
+                return False
+    return True
 
 
 def _acl_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
@@ -177,12 +196,17 @@ class AdamW(Optimizer):
             eps = pg.get("eps", self.eps)
             weight_decay = pg.get("weight_decay", self.weight_decay)
             b0, b1 = pg.get("betas", self.betas)
+            requested_fused = pg.get("fused", self.fused)
             fused = None
-            if pg.get("fused", self.fused) is True:
+            if requested_fused is not False:
                 active = [(p, m, v, g, n - 1) for p, g, v, m in zip(
                     pg["params"], pg["grads"], pg["values"], pg["m"])
                     if _param_requires_grad(p) and _grad_matches_param(p, g)]
-                if active:
+                if active and (
+                    requested_fused is True
+                    or (not isinstance(lr, jt.Var)
+                        and _all_same_cuda_device(active))
+                ):
                     fused = select_kernel("optim.adamw_fused", active)
             if fused is not None:
                 updates = fused(
