@@ -168,6 +168,14 @@ struct SFRLAllocator : Allocator {
     int64 held_high = 0;
     // Allocations served so far, the clock `CachingBlock::freed_at` reads.
     uint64 alloc_count = 0;
+    // Recycled CachingBlock structs (guarded by `mutex`) so split/merge avoids
+    // global heap alloc/free on the hot path.
+    std::vector<CachingBlock*> block_freelist;
+    static constexpr size_t BLOCK_FREELIST_CAP = 4096;
+    size_t cached_allocation_padding = 0;
+    bool padding_cached = false;
+    CachingBlock* new_block(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr);
+    void recycle_block(CachingBlock* block);
     void trim_before_growing(size_t need);
     // An allocation the driver refused even after the retry, for the memory history.
     void note_history_oom(size_t requested);

@@ -918,14 +918,20 @@ string Op::file_name_to_class_name(const string& s) {
 }
 
 void Op::jit_run(JK& jk) {
-    // Own the lookup key before any subsequent preparation can reuse JK's
-    // thread-local scratch buffer.  Cache keys must not borrow that storage.
-    string jit_key = jk.to_string();
-    if (auto* cached = jit_ops.find(jit_key)) {
-        LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)*cached;
-        Profiler::record_and_run(*cached, this, jit_key.c_str());
+    if (auto* cached = jit_ops.find(jk.to_cstring(), (size_t)jk.size)) {
+        jit_op_entry_t entry = *cached;
+        if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
+            // Own the key before running: subsequent preparation can reuse `jk`.
+            string jit_key = jk.to_string();
+            LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)entry;
+            Profiler::record_and_run(entry, this, jit_key.c_str());
+            return;
+        }
+        LOGvvv <<  "Jit op key found:" << jk.to_cstring() << "jit op entry:" << (void*)entry;
+        entry(this);
         return;
     }
+    string jit_key = jk.to_string();
     LOGvv << "Jit op key not found:" << jit_key;
     // Serial compilation reaches this path without the parallel compiler's
     // operator context. Capture the name before compilation can release the

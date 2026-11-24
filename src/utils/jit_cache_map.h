@@ -7,9 +7,11 @@
 #pragma once
 
 #include <atomic>
-#include <tuple>
-#include <unordered_map>
+#include <cstdint>
+#include <cstring>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "core/common.h"
 
@@ -44,7 +46,11 @@ DECLARE_FLAG(int, jit_cache_size);
 //    `jit_fused_ops`) one never-freed `FusedOpContext` per entry grew for the
 //    life of the process.
 //
-// Keys are owned `string`s now, and the table has a capacity.
+// Keys are owned `string`s now, stored in a dense vector indexed by a flat
+// open-addressing hash table with precomputed 64-bit hashes and backward-shift
+// deletion. That supports zero-copy `find(const char*, size_t)` lookups without
+// constructing a temporary `std::string`, while keeping `entries` dense for
+// fast LRU scans and keeping every key owned by its entry.
 //
 // Deliberately dependent on nothing but `common.h` and the one flag above:
 // `tests/codegen/test_jit_cache_map_asan.py` compiles this header on its own
@@ -54,31 +60,32 @@ DECLARE_FLAG(int, jit_cache_size);
 template<class T>
 struct jit_cache_map {
 
-    // The value and its LRU stamp.
-    //
-    // A stamp per entry rather than an intrusive LRU list, because recording a
-    // use has to be safe from the compile workers: `parallel_compiler.cc`
-    // looks keys up from several threads, and the error path there reaches
-    // `Op::get_filename_from_jit_key`, which looks up `jit_key_mapper` without
-    // holding anything. A relaxed atomic store into the entry is race-free;
-    // relinking a shared list would not be.
     struct Entry {
         T value{};
-        std::atomic<uint64> used{0};
+        uint64 used{0};
         Entry() = default;
-        Entry(const Entry&) = delete;
     };
-    typedef std::unordered_map<string, Entry> map_t;
 
-    // Guards `entries`.
+    struct Item {
+        string first;
+        Entry second;
+        uint64 hash{0};
+        Item() = default;
+        Item(const string& k, uint64 h) : first(k), second(), hash(h) {}
+    };
+
+    struct Bucket {
+        uint64 hash{0};
+        int32_t idx{-1};
+    };
+
+    static constexpr int32_t kEmpty = -1;
+
+    // Guards `entries`, `buckets`, and `clock`.
     //
     // `find` and `size` are reached from the compile workers -- see
     // `parallel_compiler.cc`, which looks keys up while another thread inserts
-    // through `operator[]` and evicts through `evict_down_to`. An unordered_map
-    // mutated under a concurrent lookup corrupts its node chain, and the damage
-    // does not surface there: it surfaces at static destruction, when the table
-    // frees nodes whose links a race already overwrote ("corrupted
-    // double-linked list", from glibc, inside ~jit_cache_map).
+    // through `operator[]` and evicts through `evict_down_to`.
     //
     // A spinlock, not std::mutex: this header is compiled standalone under ASan
     // (tests/codegen/test_jit_cache_map_asan.py) and must not grow an include
@@ -94,12 +101,47 @@ struct jit_cache_map {
         ~Guard() { flag.clear(std::memory_order_release); }
     };
 
-    map_t entries;
-    std::atomic<uint64> clock{0};
+    std::vector<Item> entries;
+    std::vector<Bucket> buckets;
+    uint64 clock{0};
     // Per-table override; 0 means "whatever `jit_cache_size` says". Set
     // directly by src/tests/test_jit_cache_map.cc, which has to bound one
     // table without touching a process-global flag.
     size_t capacity = 0;
+
+    static inline uint64 hash_bytes(const char* data, size_t len) {
+        const uint64 m = 0xc6a4a7935bd1e995ULL;
+        const int r = 47;
+        uint64 h = 0x84222325cbf29ce4ULL ^ (uint64(len) * m);
+        const char* p = data;
+        const char* end = data + (len & ~size_t(7));
+        while (p != end) {
+            uint64 k;
+            std::memcpy(&k, p, sizeof(k));
+            p += 8;
+            k *= m;
+            k ^= k >> r;
+            k *= m;
+            h ^= k;
+            h *= m;
+        }
+        const unsigned char* tail = reinterpret_cast<const unsigned char*>(p);
+        switch (len & 7) {
+            case 7: h ^= uint64(tail[6]) << 48; // fallthrough
+            case 6: h ^= uint64(tail[5]) << 40; // fallthrough
+            case 5: h ^= uint64(tail[4]) << 32; // fallthrough
+            case 4: h ^= uint64(tail[3]) << 24; // fallthrough
+            case 3: h ^= uint64(tail[2]) << 16; // fallthrough
+            case 2: h ^= uint64(tail[1]) << 8;  // fallthrough
+            case 1: h ^= uint64(tail[0]);
+                    h *= m;
+            default: break;
+        }
+        h ^= h >> r;
+        h *= m;
+        h ^= h >> r;
+        return h;
+    }
 
     inline size_t max_entries() const {
         if (capacity) return capacity;
@@ -111,14 +153,40 @@ struct jit_cache_map {
         return entries.size();
     }
 
+    // Caller holds `lock`. Returns index in `entries`, or -1 if absent.
+    inline int32_t find_index_unlocked(const char* data, size_t len, uint64 h) const {
+        const size_t cap = buckets.size();
+        if (!cap) return kEmpty;
+        const size_t mask = cap - 1;
+        size_t pos = (size_t)h & mask;
+        for (;;) {
+            const Bucket& b = buckets[pos];
+            if (b.idx == kEmpty) return kEmpty;
+            if (b.hash == h) {
+                const string& k = entries[b.idx].first;
+                if (k.size() == len && (len == 0 || std::memcmp(k.data(), data, len) == 0))
+                    return b.idx;
+            }
+            pos = (pos + 1) & mask;
+        }
+    }
+
+    /* The cached value, or nullptr if this key is not in the table.
+       Zero-copy lookup directly from raw bytes; no std::string allocation.
+       The pointer is valid until the next insertion. */
+    inline T* find(const char* data, size_t len) {
+        const uint64 h = hash_bytes(data, len);
+        Guard guard(lock);
+        int32_t idx = find_index_unlocked(data, len, h);
+        if (idx == kEmpty) return nullptr;
+        touch(entries[idx].second);
+        return &entries[idx].second.value;
+    }
+
     /* The cached value, or nullptr if this key is not in the table.
        The pointer is valid until the next insertion. */
     inline T* find(const string& key) {
-        Guard guard(lock);
-        auto iter = entries.find(key);
-        if (iter == entries.end()) return nullptr;
-        touch(iter->second);
-        return &iter->second.value;
+        return find(key.data(), key.size());
     }
 
     /* Insert-or-get, evicting the least recently used entry first if the table
@@ -130,47 +198,108 @@ struct jit_cache_map {
        one is about to read from. The call sites spell out the two assignments
        instead. */
     T& operator[](const string& key) {
+        const uint64 h = hash_bytes(key.data(), key.size());
         Guard guard(lock);
-        auto iter = entries.find(key);
-        if (iter == entries.end()) {
+        int32_t idx = find_index_unlocked(key.data(), key.size(), h);
+        if (idx == kEmpty) {
             size_t limit = max_entries();
-            evict_down_to(limit ? limit-1 : 0);
-            // piecewise_construct: Entry holds an atomic and is therefore
-            // neither copyable nor movable, so it has to be built in place.
-            iter = entries.emplace(std::piecewise_construct,
-                                   std::forward_as_tuple(key),
-                                   std::forward_as_tuple()).first;
+            evict_down_to(limit ? limit - 1 : 0);
+            if (buckets.empty() || (entries.size() + 1) * 2 > buckets.size()) {
+                size_t new_cap = buckets.empty() ? 16 : buckets.size() * 2;
+                while ((entries.size() + 1) * 2 > new_cap) new_cap *= 2;
+                rehash_unlocked(new_cap);
+            }
+            idx = (int32_t)entries.size();
+            entries.emplace_back(key, h);
+            insert_bucket_unlocked(h, idx);
         }
-        touch(iter->second);
-        return iter->second.value;
+        touch(entries[idx].second);
+        return entries[idx].second.value;
     }
 
     inline void clear() {
         Guard guard(lock);
         entries.clear();
+        buckets.clear();
     }
 
     inline void touch(Entry& entry) {
-        entry.used.store(clock.fetch_add(1, std::memory_order_relaxed) + 1,
-                         std::memory_order_relaxed);
+        entry.used = ++clock;
+    }
+
+    // Caller holds `lock`.
+    void insert_bucket_unlocked(uint64 h, int32_t idx) {
+        const size_t mask = buckets.size() - 1;
+        size_t pos = (size_t)h & mask;
+        while (buckets[pos].idx != kEmpty) {
+            pos = (pos + 1) & mask;
+        }
+        buckets[pos].hash = h;
+        buckets[pos].idx = idx;
+    }
+
+    // Caller holds `lock`.
+    void rehash_unlocked(size_t new_cap) {
+        buckets.assign(new_cap, Bucket{0, kEmpty});
+        for (int32_t i = 0; i < (int32_t)entries.size(); ++i) {
+            insert_bucket_unlocked(entries[i].hash, i);
+        }
+    }
+
+    // Caller holds `lock`. Backward-shift deletion avoids tombstones.
+    void erase_bucket_unlocked(uint64 h, int32_t idx) {
+        const size_t mask = buckets.size() - 1;
+        size_t pos = (size_t)h & mask;
+        while (buckets[pos].idx != idx) {
+            pos = (pos + 1) & mask;
+        }
+        size_t hole = pos;
+        size_t cur = (hole + 1) & mask;
+        while (buckets[cur].idx != kEmpty) {
+            size_t ideal = (size_t)buckets[cur].hash & mask;
+            if (((hole - ideal) & mask) < ((cur - ideal) & mask)) {
+                buckets[hole] = buckets[cur];
+                hole = cur;
+            }
+            cur = (cur + 1) & mask;
+        }
+        buckets[hole].idx = kEmpty;
+        buckets[hole].hash = 0;
+    }
+
+    // Caller holds `lock`.
+    void update_bucket_idx_unlocked(uint64 h, int32_t old_idx, int32_t new_idx) {
+        const size_t mask = buckets.size() - 1;
+        size_t pos = (size_t)h & mask;
+        while (buckets[pos].idx != old_idx) {
+            pos = (pos + 1) & mask;
+        }
+        buckets[pos].idx = new_idx;
     }
 
     /* Drop entries, least recently used first, until at most `keep` remain.
 
-       The victim is found by a scan. That only happens when the table is full,
-       which is next to a compile -- so a scan of a few thousand entries is
-       nothing beside what it accompanies, and it buys the entry layout above,
-       which is what makes lookups safe from the compile workers.
+       The victim is found by a scan over the dense `entries` vector. That only
+       happens when the table is full, which is next to a compile.
 
        Caller holds `lock` (only `operator[]` calls this). */
     void evict_down_to(size_t keep) {
         while (entries.size() > keep) {
-            auto oldest = entries.begin();
-            for (auto iter = entries.begin(); iter != entries.end(); ++iter)
-                if (iter->second.used.load(std::memory_order_relaxed) <
-                        oldest->second.used.load(std::memory_order_relaxed))
-                    oldest = iter;
-            entries.erase(oldest);
+            int32_t oldest = 0;
+            uint64 oldest_used = entries[0].second.used;
+            for (int32_t i = 1; i < (int32_t)entries.size(); ++i) {
+                if (entries[i].second.used < oldest_used) {
+                    oldest_used = entries[i].second.used;
+                    oldest = i;
+                }
+            }
+            erase_bucket_unlocked(entries[oldest].hash, oldest);
+            int32_t last = (int32_t)entries.size() - 1;
+            if (oldest != last) {
+                entries[oldest] = std::move(entries[last]);
+                update_bucket_idx_unlocked(entries[oldest].hash, last, oldest);
+            }
+            entries.pop_back();
         }
     }
 };

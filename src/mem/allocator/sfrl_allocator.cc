@@ -63,20 +63,21 @@ void note_stat(int device, int stat, int pool, int64 delta) {
     if (s < 0 || !delta) return;
     for (int p : {(int)sfrl_pool_all, pool}) {
         auto& st = pool_stats[s][stat][p];
-        int64 now = st.current.fetch_add(delta) + delta;
+        int64 now = st.current.fetch_add(delta, std::memory_order_relaxed) + delta;
         if (delta > 0) {
-            st.allocated.fetch_add(delta);
-            int64 seen = st.peak.load();
-            while (now > seen && !st.peak.compare_exchange_weak(seen, now)) {}
+            st.allocated.fetch_add(delta, std::memory_order_relaxed);
+            int64 seen = st.peak.load(std::memory_order_relaxed);
+            while (now > seen && !st.peak.compare_exchange_weak(
+                    seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
         } else {
-            st.freed.fetch_add(-delta);
+            st.freed.fetch_add(-delta, std::memory_order_relaxed);
         }
     }
 }
 
 void note_counter(int device, int counter) {
     int s = slot(device);
-    if (s >= 0) pool_counters[s][counter].fetch_add(1);
+    if (s >= 0) pool_counters[s][counter].fetch_add(1, std::memory_order_relaxed);
 }
 
 // A free block that shares its segment with others: memory PyTorch calls
@@ -108,25 +109,28 @@ void note_segment_released(int device, const CachingBlock* segment) {
 void note_device_alloc(int device, int64 bytes) {
     int s = slot(device);
     if (s < 0) return;
-    device_allocated[s].fetch_add(bytes);
-    int64 now = device_live[s].fetch_add(bytes) + bytes;
-    int64 seen = device_peak[s].load();
-    while (now > seen && !device_peak[s].compare_exchange_weak(seen, now)) {}
-    seen = device_window_peak[s].load();
-    while (now > seen && !device_window_peak[s].compare_exchange_weak(seen, now)) {}
+    device_allocated[s].fetch_add(bytes, std::memory_order_relaxed);
+    int64 now = device_live[s].fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    int64 seen = device_peak[s].load(std::memory_order_relaxed);
+    while (now > seen && !device_peak[s].compare_exchange_weak(
+            seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    seen = device_window_peak[s].load(std::memory_order_relaxed);
+    while (now > seen && !device_window_peak[s].compare_exchange_weak(
+            seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
 }
 
 void note_device_free(int device, int64 bytes) {
     int s = slot(device);
-    if (s >= 0) device_live[s].fetch_sub(bytes);
+    if (s >= 0) device_live[s].fetch_sub(bytes, std::memory_order_relaxed);
 }
 
 void note_device_reserve(int device, int64 bytes) {
     int s = slot(device);
     if (s < 0) return;
-    int64 now = device_reserved[s].fetch_add(bytes) + bytes;
-    int64 seen = device_reserved_peak[s].load();
-    while (now > seen && !device_reserved_peak[s].compare_exchange_weak(seen, now)) {}
+    int64 now = device_reserved[s].fetch_add(bytes, std::memory_order_relaxed) + bytes;
+    int64 seen = device_reserved_peak[s].load(std::memory_order_relaxed);
+    while (now > seen && !device_reserved_peak[s].compare_exchange_weak(
+            seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
 }
 } // namespace
 
@@ -343,6 +347,35 @@ CachingBlock* CachingBlockPool::pop_block(size_t size) {
     return block;
 }
 
+CachingBlock* SFRLAllocator::new_block(size_t size, size_t origin_size, CachingBlockPool* blocks, void* memory_ptr) {
+    if (!block_freelist.empty()) {
+        CachingBlock* b = block_freelist.back();
+        block_freelist.pop_back();
+        b->size = size;
+        b->origin_size = origin_size;
+        b->id = 0;
+        b->allocation = 0;
+        b->share_times = 0;
+        b->requested = 0;
+        b->memory_ptr = memory_ptr;
+        b->blocks = blocks;
+        b->prev = nullptr;
+        b->next = nullptr;
+        b->occupied = false;
+        b->freed_at = 0;
+        return b;
+    }
+    return new CachingBlock(size, origin_size, blocks, memory_ptr);
+}
+
+void SFRLAllocator::recycle_block(CachingBlock* block) {
+    if (block_freelist.size() < BLOCK_FREELIST_CAP) {
+        block_freelist.push_back(block);
+    } else {
+        delete block;
+    }
+}
+
 list<SFRLAllocator*> SFRLAllocator::sfrl_allocators;
 //SFRLAllocator
 SFRLAllocator::~SFRLAllocator() {
@@ -350,6 +383,10 @@ SFRLAllocator::~SFRLAllocator() {
     for (auto it = occupied_blocks.begin(); it != occupied_blocks.end(); ++it) {
         delete it->second;
     }
+    for (CachingBlock* b : block_freelist) {
+        delete b;
+    }
+    block_freelist.clear();
 }
 
 const char* SFRLAllocator::name() const {return "sfrl";}
@@ -450,7 +487,7 @@ void SFRLAllocator::try_merge_two_blocks(CachingBlock* dst, CachingBlock* src) {
     }
     dst->size += src->size;
     src->blocks->erase(src);
-    delete src;
+    recycle_block(src);
 }
 
 CachingBlockPool* SFRLAllocator::get_blocks(size_t size) {
@@ -513,7 +550,7 @@ void SFRLAllocator::trim_before_growing(size_t need) {
         freed += block->size;
         large_blocks.ids->recycle_block_id(block->id);
         it = cached.erase(it);
-        delete block;
+        recycle_block(block);
     }
     if (!freed) return;
     unused_memory -= freed;
@@ -550,9 +587,13 @@ size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
-    size_t padding = 0;
+    size_t padding = cached_allocation_padding;
     #ifdef HAS_ACCELERATOR
-    padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
+    if (PREDICT_BRANCH_NOT_TAKEN(!padding_cached)) {
+        padding = backend_ops(accelerator_backend_id()).execution.allocation_padding;
+        cached_allocation_padding = padding;
+        padding_cached = true;
+    }
     #endif
     const size_t requested = size;
     size = align_size(size + padding);
@@ -587,7 +628,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         note_device_reserve(device(), alloc_size);
         step_trace_mem(stm_reserve, device(), alloc_size, this, 0);
         held_high = std::max(held_high, used_memory + unused_memory + (int64)alloc_size);
-        block = new CachingBlock(alloc_size, alloc_size, blocks, ptr);
+        block = new_block(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
         note_counter(device(), sfrl_counter_device_alloc);
         note_stat(device(), sfrl_stat_segment, pool_of(block), 1);
@@ -597,7 +638,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         note_inactive_split(device(), block, -1);
     }
     if (should_split(block, size)) {
-        CachingBlock* rest = new CachingBlock(block->size - size, block->origin_size,
+        CachingBlock* rest = new_block(block->size - size, block->origin_size,
             get_blocks(block->size - size), static_cast<char*>(block->memory_ptr) + size);
         rest->allocation = block->allocation;   // same underlying segment
         rest->freed_at = alloc_count;
@@ -688,7 +729,7 @@ CachingBlock* SFRLAllocator::carve_free(CachingBlock* block, char* begin, char* 
     block->blocks->erase(block);
     unused_memory -= block->size;
     auto split_after = [&](CachingBlock* b, size_t size) {
-        auto* rest = new CachingBlock(b->size - size, b->origin_size,
+        auto* rest = new_block(b->size - size, b->origin_size,
             get_blocks(b->size - size), (char*)b->memory_ptr + size);
         rest->allocation = b->allocation;
         b->size = size;

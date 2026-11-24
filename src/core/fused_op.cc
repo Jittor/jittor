@@ -387,23 +387,28 @@ void FusedOp::prepare_fused_key(JK& jk) {
 }
 
 void FusedOp::execute_fused_prepared(JK& jk) {
-    // Keep the cache lookup independent from JK's reusable thread-local
-    // buffer; preparation of the next op may overwrite it immediately.
-    string jit_key = jk.to_string();
-    if (auto* cached = jit_fused_ops.find(jit_key)) {
+    if (auto* cached = jit_fused_ops.find(jk.to_cstring(), (size_t)jk.size)) {
         // Take a reference, not a bare pointer: the cache is bounded, and the
         // kernel about to run may itself compile (relay ops) and evict.
         context_owner = *cached;
         context = context_owner.get();
-        LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)context;
+        if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
+            // Own the key before running: relay ops may overwrite `jk`.
+            string jit_key = jk.to_string();
+            LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)context;
+            Profiler::record_and_run(context->entry, this, jit_key.c_str());
+            return;
+        }
+        LOGvvv <<  "Jit fused op key found:" << jk.to_cstring() << "jit op entry:" << (void*)context;
         // This used to also do `context->vrm.fop = this`, repointing the
         // cached context at the current stack FusedOp on every hit. That was
         // the only thing keeping that field from being read stale, and it
         // dangled again the moment run_sync returned. Nothing needs it: the
         // relay manager takes the FusedOp as an argument now.
-        Profiler::record_and_run(context->entry, this, jit_key.c_str());
+        context->entry(this);
         return;
     }
+    string jit_key = jk.to_string();
     LOGvv << "Jit op key not found:" << jit_key;
     // compile JIT op
     context_owner = std::make_shared<FusedOpContext>();
