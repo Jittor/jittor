@@ -387,10 +387,10 @@ void FusedOp::prepare_fused_key(JK& jk) {
 }
 
 void FusedOp::execute_fused_prepared(JK& jk) {
-    if (auto* cached = jit_fused_ops.find(jk.to_cstring(), (size_t)jk.size)) {
-        // Take a reference, not a bare pointer: the cache is bounded, and the
-        // kernel about to run may itself compile (relay ops) and evict.
-        context_owner = *cached;
+    if (jit_fused_ops.find_copy(jk.to_cstring(), (size_t)jk.size, context_owner)) {
+        // Take a reference under the cache lock, not a bare pointer: the cache
+        // is bounded, and concurrent inserts or relay compiles may rehash or
+        // evict entries.
         context = context_owner.get();
         if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
             // Own the key before running: relay ops may overwrite `jk`.

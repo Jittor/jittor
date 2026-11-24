@@ -173,7 +173,9 @@ struct jit_cache_map {
 
     /* The cached value, or nullptr if this key is not in the table.
        Zero-copy lookup directly from raw bytes; no std::string allocation.
-       The pointer is valid until the next insertion. */
+       The pointer is valid until the next insertion or eviction.
+       For concurrent callers that may race with insertion/eviction, prefer
+       `find_copy()` or `contains()`. */
     inline T* find(const char* data, size_t len) {
         const uint64 h = hash_bytes(data, len);
         Guard guard(lock);
@@ -181,6 +183,36 @@ struct jit_cache_map {
         if (idx == kEmpty) return nullptr;
         touch(entries[idx].second);
         return &entries[idx].second.value;
+    }
+
+    /* Thread-safe zero-copy lookup: copies the cached value into `out` while
+       holding the table lock so concurrent rehash/eviction cannot invalidate
+       the returned value. */
+    inline bool find_copy(const char* data, size_t len, T& out) {
+        const uint64 h = hash_bytes(data, len);
+        Guard guard(lock);
+        int32_t idx = find_index_unlocked(data, len, h);
+        if (idx == kEmpty) return false;
+        touch(entries[idx].second);
+        out = entries[idx].second.value;
+        return true;
+    }
+
+    inline bool find_copy(const string& key, T& out) {
+        return find_copy(key.data(), key.size(), out);
+    }
+
+    inline bool contains(const char* data, size_t len) {
+        const uint64 h = hash_bytes(data, len);
+        Guard guard(lock);
+        int32_t idx = find_index_unlocked(data, len, h);
+        if (idx == kEmpty) return false;
+        touch(entries[idx].second);
+        return true;
+    }
+
+    inline bool contains(const string& key) {
+        return contains(key.data(), key.size());
     }
 
     /* The cached value, or nullptr if this key is not in the table.

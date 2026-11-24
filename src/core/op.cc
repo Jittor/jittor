@@ -869,8 +869,8 @@ void Op::run_registered() {
 void Op::do_run() { run_registered(); }
 
 string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix) {
-    auto* tuned = jit_key_mapper.find(jit_key);
-    string s = tuned ? *tuned : jit_key;
+    string s;
+    if (!jit_key_mapper.find_copy(jit_key, s)) s = jit_key;
     std::stringstream ss;
     if (s.size() > 100) {
         ss << s.substr(0, 90) << "...hash_"
@@ -918,8 +918,8 @@ string Op::file_name_to_class_name(const string& s) {
 }
 
 void Op::jit_run(JK& jk) {
-    if (auto* cached = jit_ops.find(jk.to_cstring(), (size_t)jk.size)) {
-        jit_op_entry_t entry = *cached;
+    jit_op_entry_t entry = nullptr;
+    if (jit_ops.find_copy(jk.to_cstring(), (size_t)jk.size, entry)) {
         if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
             // Own the key before running: subsequent preparation can reuse `jk`.
             string jit_key = jk.to_string();
