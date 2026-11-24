@@ -499,6 +499,8 @@ include docs/project/releases/2.0.en.md
 include docs/project/releases/2.0.md
 include docs/project/releases/index.en.md
 include docs/project/releases/index.md
+include docs/project/research/acl-private-generator.en.md
+include docs/project/research/acl-private-generator.md
 include docs/project/research/agentic-optimization.en.md
 include docs/project/research/agentic-optimization.md
 include docs/project/research/index.en.md
@@ -1072,6 +1074,7 @@ include tools/lint/count_installer_closures.py
 include tools/measure_core_test_balance.py
 include tools/probes/acl/README.md
 include tools/probes/acl/max_model_probe.py
+include tools/probes/acl/private_generator_repro.py
 include tools/probes/acl/xcheck/compare.py
 include tools/probes/acl/xcheck/gen_weights.py
 include tools/probes/acl/xcheck/model_jt.py
