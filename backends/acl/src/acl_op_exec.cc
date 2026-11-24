@@ -714,9 +714,18 @@ namespace jittor
     static void exec_acl_random(Op *op)
     {
         auto _op = (RandomOp *)op;
+        auto out = op->output(0);
+        if (_op->gen) {
+            USER_CHECK(_op->from_acl_generator && _op->gen->backend == BackendId::Acl
+                       && out->device_id == _op->gen->device_id
+                       && _op->type == ns_uniform && out->dtype() == ns_float32
+                       && out->numel() == _op->acl_span)
+                << "Invalid private ACL random reservation or output";
+            exec_acl_private_uniform(out, _op->acl_seed, _op->acl_offset, _op->acl_span);
+            return;
+        }
         AclExecutionRunner<RandomOpRunner> runner(
             _op->type == ns_uniform ? "RandomUniform" : "RandomNormal");
-        auto out = op->output(0);
         const auto rng = reserve_acl_random(out->device_id, out->numel());
         RandomAttr *attr = new RandomAttr();
         attr->seed = rng.seed;

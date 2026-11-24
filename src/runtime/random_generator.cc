@@ -5,6 +5,7 @@
 // ***************************************************************
 #include <sstream>
 #include <chrono>
+#include <limits>
 #include "runtime/random_generator.h"
 #include "runtime/rng_state.h"
 
@@ -13,18 +14,24 @@ namespace jittor {
 // Marks the counter-based CUDA offset. Strings written before it carry a
 // curand host-generator offset, which cannot be replayed on this stream.
 static const char* const kCudaStreamTag = "philox";
+static const char* const kAclStateTag = "JITTOR_ACL_RNG_1";
+static const char* const kAclAlgorithm = "philox4x32-10-raw32-v1";
 
-RandomGeneratorState::RandomGeneratorState(int64 seed, int device_id)
-    : seed_(seed), device_id(device_id), cpu_engine(seed) {}
+RandomGeneratorState::RandomGeneratorState(int64 seed, int device_id, BackendId backend)
+    : seed_(seed), device_id(device_id), backend(backend), cpu_engine(seed) {}
 
 void RandomGeneratorState::set_seed(int64 seed) {
+    std::lock_guard<std::mutex> lock(mutex);
     seed_ = seed;
     cpu_engine.seed((uint64)seed);
     cpu_torch_normal.reset();
     cuda_offset = 0;
+    acl_offset = 0;
 }
 
 int64 RandomGeneratorState::reserve_cuda(int64 raw_count) {
+    USER_CHECK(backend != BackendId::Acl)
+        << "An ACL generator cannot be used for a CUDA draw";
     ASSERT(raw_count >= 0);
     int64 base = cuda_offset;
     USER_CHECK(!__builtin_add_overflow(cuda_offset, raw_count, &cuda_offset))
@@ -32,7 +39,44 @@ int64 RandomGeneratorState::reserve_cuda(int64 raw_count) {
     return base;
 }
 
+AclPrivateRngSpan RandomGeneratorState::reserve_acl(int64 raw_count) {
+    std::lock_guard<std::mutex> lock(mutex);
+    USER_CHECK(backend == BackendId::Acl && raw_count >= 0)
+        << "ACL RNG reservation requires an ACL generator and nonnegative count";
+    USER_CHECK(raw_count <= std::numeric_limits<int64>::max() - acl_offset)
+        << "Generator: ACL raw32 stream position overflows int64";
+    AclPrivateRngSpan span{(uint64)seed_, acl_offset};
+    acl_offset += raw_count;
+    return span;
+}
+
+int64 RandomGeneratorState::get_offset() {
+    std::lock_guard<std::mutex> lock(mutex);
+    USER_CHECK(backend == BackendId::Acl)
+        << "Generator.get_offset() currently supports private ACL streams only";
+    return acl_offset;
+}
+
+void RandomGeneratorState::set_offset(int64 offset) {
+    std::lock_guard<std::mutex> lock(mutex);
+    USER_CHECK(backend == BackendId::Acl && offset >= 0)
+        << "Generator.set_offset() requires a private ACL stream and a nonnegative int64 raw32 position";
+    acl_offset = offset;
+}
+
+int64 RandomGeneratorState::get_seed() {
+    std::lock_guard<std::mutex> lock(mutex);
+    return seed_;
+}
+
 string RandomGeneratorState::get_state() {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (backend == BackendId::Acl) {
+        std::ostringstream oss;
+        oss << kAclStateTag << ' ' << kAclAlgorithm << " acl " << device_id
+            << ' ' << seed_ << ' ' << acl_offset;
+        return oss.str();
+    }
     if (cpu_torch_normal)
         return encode_cpu_rng_state((uint64)seed_, cpu_engine, cpu_torch_normal);
     std::ostringstream oss;
@@ -42,6 +86,25 @@ string RandomGeneratorState::get_state() {
 }
 
 void RandomGeneratorState::set_state(const string& s) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (backend == BackendId::Acl) {
+        std::istringstream iss(s);
+        string version, algorithm, new_backend;
+        int new_device;
+        int64 new_seed, new_offset;
+        iss >> version >> algorithm >> new_backend >> new_device >> new_seed >> new_offset;
+        USER_CHECK(!iss.fail() && version == kAclStateTag
+                   && algorithm == kAclAlgorithm && new_backend == "acl"
+                   && new_device == device_id && new_offset >= 0)
+            << "Generator.set_state(): incompatible or malformed private ACL state";
+        iss >> std::ws;
+        USER_CHECK(iss.eof()) << "Generator.set_state(): unexpected trailing ACL state bytes";
+        // Nothing mutates before all fields, including backend and ordinal,
+        // have been validated. Outstanding ops retain their captured spans.
+        seed_ = new_seed;
+        acl_offset = new_offset;
+        return;
+    }
     if (s.compare(0, 12, "JITTOR_RNG_1") == 0 || s.compare(0, 12, "JITTOR_RNG_2") == 0) {
         USER_CHECK(device_id < 0)
             << "Generator.set_state(): the state belongs to cpu but this generator is on cuda";
@@ -120,8 +183,25 @@ static int64 fresh_seed() {
 }
 
 RandomGenerator::RandomGenerator(const string& device) : device_str(device) {
+    if (device == "acl" || device.compare(0, 4, "acl:") == 0) {
+        int ordinal = 0;
+        if (device != "acl") {
+            USER_CHECK(device.size() > 4) << "Generator: expected acl:N with a nonnegative ordinal";
+            for (size_t i = 4; i < device.size(); ++i) {
+                const char c = device[i];
+                USER_CHECK(c >= '0' && c <= '9'
+                    && ordinal <= (std::numeric_limits<int>::max() - (c - '0')) / 10)
+                    << "Generator: invalid ACL device ordinal";
+                ordinal = ordinal * 10 + (c - '0');
+            }
+        }
+        device_str = "acl:" + std::to_string(ordinal);
+        state = std::make_shared<RandomGeneratorState>(fresh_seed(), ordinal, BackendId::Acl);
+        return;
+    }
     int device_id = parse_device(device);
-    state = std::make_shared<RandomGeneratorState>(fresh_seed(), device_id);
+    state = std::make_shared<RandomGeneratorState>(fresh_seed(), device_id,
+        device_id < 0 ? BackendId::Cpu : BackendId::Cuda);
 }
 
 RandomGenerator* RandomGenerator::manual_seed(int64 seed) {
@@ -136,7 +216,7 @@ int64 RandomGenerator::reseed() {
 }
 
 int64 RandomGenerator::initial_seed() {
-    return state->seed_;
+    return state->get_seed();
 }
 
 string RandomGenerator::get_state() {
@@ -144,6 +224,7 @@ string RandomGenerator::get_state() {
 }
 
 string RandomGenerator::get_cpu_rng_state() {
+    std::lock_guard<std::mutex> lock(state->mutex);
     USER_CHECK(state->device_id < 0 && state->cuda_offset == 0)
         << "CPU RNG snapshot requires a CPU-only generator stream";
     return encode_cpu_rng_state((uint64)state->seed_, state->cpu_engine, state->cpu_torch_normal);
@@ -151,6 +232,15 @@ string RandomGenerator::get_cpu_rng_state() {
 
 RandomGenerator* RandomGenerator::set_state(const string& s) {
     state->set_state(s);
+    return this;
+}
+
+int64 RandomGenerator::get_offset() {
+    return state->get_offset();
+}
+
+RandomGenerator* RandomGenerator::set_offset(int64 offset) {
+    state->set_offset(offset);
     return this;
 }
 

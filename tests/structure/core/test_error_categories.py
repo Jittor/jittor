@@ -181,8 +181,13 @@ MIGRATED_PY_ARRAY_USER_BOUNDARIES = {
 }
 
 MIGRATED_RANDOM_TYPE_USER_BOUNDARIES = {
-    # Distribution name and the device/dtype contract for Torch CPU normals.
-    "src/ops/composite/random_op.cc": 2,
+    # Original distribution-name and Torch CPU-normal dtype/device checks (2),
+    # plus private ACL caller boundaries (6): backend match, float32-uniform
+    # contract, native launcher availability (both compile-time branches count),
+    # output ordinal match, and refusal to execute an ACL owner via CPU fallback.
+    # Each added boundary reads a caller-supplied owner/output or requested draw;
+    # do not remove these checks merely to retain the old two-site ledger.
+    "src/ops/composite/random_op.cc": 8,
 }
 
 MIGRATED_PY_CALLER_USER_BOUNDARIES = {

@@ -17,4 +17,4 @@ acl-private-generator
 | 提案 | 状态 |
 | --- | --- |
 | [可由 agent 操作的框架优化](agentic-optimization.md) | 研究提案，未实现 |
-| [ACL 私有 Generator](acl-private-generator.md) | 接口与消费合同提案，未实现 |
+| [ACL 私有 Generator](acl-private-generator.md) | 首版 float32 私有流、状态/offset 合同及下游验收边界 |

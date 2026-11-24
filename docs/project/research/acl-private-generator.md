@@ -1,98 +1,84 @@
-# ACL 私有 Generator：状态隔离与算子接入提案
+# ACL 私有 Generator：状态隔离与算子接入
 
 [研究提案](index.md) · [English](acl-private-generator.en.md)
 
-状态：**提案，未实现**。维护者审查入口为
-[#18162](https://github.com/Jittor/jittor/issues/18162)。本文不宣布 ACL 私有
-Generator、seeded sampling 或 offset/discard 已受支持；进入实现前需要原生运行时和
-compat 维护者确认状态表示、算法及消耗单位。
+状态：**首版实现，范围限于下述合同**。审查入口为
+[#18162](https://github.com/Jittor/jittor/issues/18162)。实际硬件结果、匹配 Core 身份和
+剩余验收缺口记录在实现 PR 中。本文不宣布下游 seeded/discard 工作流通过。
 
-## 问题与范围
+## 支持的随机流
 
-默认设备 RNG 与私有 Generator 是两个合同。默认流的 seed、重放和全局状态恢复成功，
-不证明 `tensor.exponential_(generator=g)` 使用了 `g` 的独立状态。私有对象能创建、
-`manual_seed` 能返回，也不证明之后的随机算子消费了该对象。
+`jt.Generator("acl:N")` 是 ACL 用户设备 ordinal `N` 上的原生私有 owner。
+激活 Jittor Torch 前端后，`torch.Generator("npu:N")` 和原生 `acl:N` 拼写都选择该 owner。
+逻辑 `cuda:N` 通过现有前端 resolver 选择后端；只有 ACL 运行时才映射为 ACL owner。
+owner 与输出的 backend/ordinal 必须一致。必须重建匹配的 Core；只更新 Python
+不能让旧二进制获得此原生接口。
 
-已有合法的无请求 seed 推理路径；不能把此缺口描述成所有 Engine 或随机数均不可用。
-真正需要独立状态的调用方包括按请求设置 seed 的采样、交错请求，以及某些 warmup 和
-discard 路径。各条路径要单独验收，不得用 greedy 输出代替私有 RNG 验收。
+首版原生分布是稠密 **float32 uniform**，通过 AscendC Philox4x32-10 内核在 NPU 上生成。
+不使用主机随机数，也不借用进程默认 CANN RNG。既有 compat 逆 CDF 实现让
+`exponential_(generator=g)` 通过指定 owner 消费这条 uniform 流。
+未支持的原生分布/dtype 在 reservation 前拒绝；这不代表所有 Torch 随机工厂或所有
+exponential 输出 dtype 已通过。`generator=None` 保持既有 CANN 实现与状态格式。
+CPU/CUDA 算法和状态帧保持原样。
 
-### 已核对的源码边界
+## 精确的 seed、位置与消耗合同
 
-以下源码结论固定于 `f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb`，不代表对该提交
-做过设备复验。历史真机记录、命令、输出和对应 Core 身份写在关联 PR 中。
+- seed 是 uint64 位模式，通过原生 signed-int64 API 传递。
+- 一个位置代表一个 **原始 32 位随机字**，范围 `[0, 2**63 - 1]`，不代表 draw 次数、
+  CANN/SIMT offset 或 CUDA launch offset。
+- 对位置 `p`，counter 为 `(low32(p//4), high32(p//4), 0, 0)`，key 为
+  `(low32(seed), high32(seed))`，选取 lane `p % 4`。
+- float32 uniform 为 `(word >> 8) * 2**-24`，精确落在 `[0, 1)`。
+  每个输出元素预留一个字；空 draw 消耗零；拆分 shape 后拼接的序列不变。
+  不承诺与 PyTorch、torch-npu 或 CANN 分布逐 bit 相同。
+- `manual_seed` 将位置重置为零。`get_offset`/`set_offset` 只在 ACL 公开这个 raw32
+  位置。非法、负值和溢出位置在改变状态前拒绝。本次 CPU/CUDA offset 接口仍明确拒绝。
 
-1. [compat Generator](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/compat/torch/generator.py#L19)
-   只发布 CPU/CUDA 私有对象语义，未发布 `get_offset` / `set_offset`。
-2. [工厂的 owner 检查](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/compat/torch/installers/factories.py#L761)
-   将 backend 2 归为 `unsupported`；显式随机调用会在分配和发射之前被拒绝。
-3. [RandomOp](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/src/ops/composite/random_op.cc#L39)
-   虽保存传入的 Generator state，
-   [ACL 发射器](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/backends/acl/src/acl_op_exec.cc#L714)
-   却从 `reserve_acl_random(device, numel)` 获取默认流的 seed/offset，没有消费 `op.gen`。
+算法依据原始 [Random123 论文](https://thesalmons.org/john/random123/papers/random123sc11.pdf)。
+测试包含公开的零 key/零 counter
+[Philox 已知答案向量](https://github.com/DEShawResearch/random123/blob/main/tests/kat_vectors)，
+以及非零 seed 和高位位置的独立整数参考。
 
-因此仅删除 compat 拒绝检查，或把 ACL 字符串改成 CUDA，都不能实现状态隔离。
-也不能由默认 ACL 发射器按元素推进的行为，推断所有 CANN 分布的 counter 单位。
+## 状态与惰性执行
 
-## 最小实现边界
+原生 owner 使用 mutex 保护 seed 和位置。状态帧包含版本 `JITTOR_ACL_RNG_1`、算法
+`philox4x32-10-raw32-v1`、backend、用户 ordinal、seed 与位置。恢复前验证全部字段和
+多余字节，验证完成后才修改状态；其它算法、后端或设备的帧拒绝恢复。
+compat 通过 CPU ByteTensor 传递状态帧，不自行解释字段。
 
-| 层 | 需要审查的能力 |
-| --- | --- |
-| 原生运行时 | 明确 backend/device 的私有 owner；独立、可保活的状态；验证后原子恢复；每次 draw 的不可变 reservation |
-| ACL 随机发射 | 显式 owner 使用该 owner 的 seed/counter；只有 `generator=None` 使用默认流；不支持的分布在消费前拒绝 |
-| compat | 通过正式设备 resolver 接入 backend 2；校验 owner 与输出 ordinal；公开 seed/state 及经定义的 offset 接口 |
-| 下游 Adapter | 能力/版本准入、请求绑定及真实消费链验收；不读取私有 C++ ABI，不伪造 Generator，不交换全局流冒充私有状态 |
+RandomOp 在构造时原子预留并捕获不可变 seed/base/span。之后 reseed/restore、反序执行、
+删除 Python wrapper 或重计算，均不改变已发布 draw，也不重复消费跨度。
+不同 owner 与默认流互不推进。验证失败不消费状态；draw 发布后的编译/发射失败不会
+静默回退位置或重用区间，而是让操作失败。私有 draw 不允许回退 CPU 或默认设备 RNG。
 
-现有 CPU/CUDA 算法、状态格式和放置检查须保持。原生状态标签和发射接入需要匹配的
-Core；不能只更新 Python 包后继续使用来源或 ABI 不匹配的二进制。
+首版内核使用一个逻辑 block，通过具有显式 scalar/DMA 同步的 UB-to-GM copy 写入，
+支持尾部不足一个 tile 的情况，不猜测物理 core 数量。需要已安装的 CANN AscendC
+编译器与实际 SoC 的 platform 配置。这是正确性实现，不声明吞吐性能、异步或图捕获能力。
 
-### 状态与惰性执行
+## 验收边界
 
-- 两个 owner 的交错 draw、默认流 draw 和其它请求不得改变彼此的序列。
-- seed 重置只影响指定 owner。状态帧必须识别版本、算法、backend、设备和当前位置；
-  错误帧、跨设备恢复和溢出在变更前拒绝。
-- draw 绑定不可变 seed/起点/跨度及所需生命周期；删除 Python wrapper、之后 reseed、
-  完成顺序变化或同一 op 重计算不能改变已发布 draw 或重复消费状态。
-- 验证失败不消费状态；已发布后发射失败的状态处理必须有明确合同，不能静默重用区间。
+`tests/backends/acl/test_acl_private_generator.py` 覆盖算法参考、lane/tile 边界、
+高位位置、reservation、owner 生命周期和原子拒绝。
+`compat/tests/torch/test_acl_private_generator_compat.py` 覆盖真实 owner 路由、隔离、
+state/offset 重放、原地 exponential 消费及非法输入。两者均要求实际准入的 ACL 设备与
+零回退；CPU 检查、导入成功及默认 RNG 检查不能代替真机验收。
 
-### offset 不是任意 Python 计数器
+原提案 N0–N5 对应这些原生/compat 语义。**A0**（原始 warmup/请求使用与自然退出）及
+**A1**（原始 discard 恢复、请求绑定及过期快照拒绝）仍需下游独立验收。
+特别是 `set_offset(get_offset() - 4)` 只回退四个 raw32 字，不能撤销包含任意词表元素数的 draw。
+接口存在不代表 vLLM 该假设成立。图捕获、投机采样及跨进程状态共享不在首版合同中；
+下游适配必须使用经过审查的公开状态接口，并保留已有 CUDA 分支。
 
-必须先定义算法、offset 单位和各分布/dtype/shape 的消费规则。vLLM 某些路径的
-`set_offset(get_offset() - 4)` 是调用方约定，不证明 ACL 算子消费相同的单位或跨度。
-不能用普通指数与 SIMT 算子的推进数互相替换，也不能只加两个方法就宣布 discard 正确。
-
-如果所选算法不符合该假设，应单独审查使用公开完整状态快照的请求级恢复：绑定请求、
-owner 和采样步，拒绝过期或有后续未处理 draw 的快照。CUDA 原有分支不变。
-图捕获、异步/投机采样和跨进程共享不隐含在首版支持范围中。
-
-## 分层验收
-
-N0–N5 与 A0–A1 是待实现的验收项目，不是已通过结果。
-
-- **N0**：真实 ACL owner、backend/ordinal、伪句柄及跨设备拒绝。
-- **N1**：同 seed 重放；多 owner 与默认流交错隔离。
-- **N2**：seed/reset/initial_seed 以及高位 seed 往返。
-- **N3**：选定算法的参考向量、边界长度、拆分 draw、空 draw、溢出和准确消费跨度。
-- **N4**：state/offset 恢复、非法恢复原子性、惰性 op 保活、reseed 后已发布 draw 不变。
-- **N5**：真正的 `exponential_(generator=g)` 保持原地对象和存储，并在 ACL 消费指定 owner，零回退。
-- **A0**：真正需要私有 Generator 的原始 warmup/请求调用链与自然退出。
-- **A1**：原始 discard 的状态恢复、多请求隔离及过期快照拒绝。
-
-CPU 检查、导入成功、默认 RNG 或同一随机算子的一次执行，不代替上述验收。
-不要求 CPU/CUDA/ACL 浮点输出逐 bit 相同。
-
-## 手动最小复现
+## 手动复现
 
 [复现工具](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/probes/acl/private_generator_repro.py)
-只比较默认流与显式 Generator 的小规模调用，并记录 offset 接口是否存在。
-须先由操作者完成设备准入和独立缓存配置；工具不代替资源许可，不构建 Core。
+记录默认流/私有流的小规模调用、真实接口来源、原始错误与回退计数。
+须先完成资源准入并准备独立、匹配的 Core；工具不授予设备许可，也不构建 Core。
 
 ```bash
-# 使用与所选框架匹配的已构建 ACL Core，并先完成设备/资源准入。
 JT_BACKEND=acl JITTOR_NO_BUILD=1 python tools/probes/acl/private_generator_repro.py \
   --run --ordinal "$ACL_USER_ORDINAL"
 ```
 
-调用使用逻辑 `cuda:<user ordinal>` API，必须由 Jittor-owned Torch 和真实 backend 2
-证明 ACL 归属；该拼写不代表 CUDA 硬件。报告包含实际接口来源、原始错误和回退计数。
-非零退出保留失败，不把捕获异常或默认流通过当作私有 Generator PASS。
+逻辑 `cuda:<user ordinal>` 输入不代表 CUDA 硬件；实际 backend 2、Tensor 放置与 SDK
+映射证明物理 ACL 设备归属。捕获异常、默认流通过或单独退出零均不能代表私有 Generator 通过。

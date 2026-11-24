@@ -1214,6 +1214,117 @@ namespace jittor
 
     } // namespace
 
+    void exec_acl_private_uniform(Var *output, uint64 seed, int64 offset, int64 span)
+    {
+        USER_CHECK(output && output->dtype() == ns_float32 && output->is_contiguous()
+                   && output->storage_offset_bytes == 0 && output->num == span
+                   && offset >= 0 && span >= 0)
+            << "Private ACL uniform requires a dense float32 output and a valid raw32 span";
+        if (!span) return;
+        USER_CHECK(var_on_device(output)) << "Private ACL uniform requires ACL device storage";
+
+        // This is our stream definition, not CANN's unspecified distribution
+        // offset convention: counter=(position/4,0,0), lane=position%4;
+        // key=(seed.low32,seed.high32). Each float uses the high 24 bits of
+        // exactly one Philox4x32-10 word, scaled by 2^-24 into [0,1).
+        // The source is independent of the draw's seed/offset/size, so all
+        // owners and reservations reuse one compiled kernel per toolchain.
+        static const string src = R"ACL_PHILOX(
+#include "kernel_operator.h"
+#include <acl/acl.h>
+using namespace AscendC;
+
+__aicore__ inline uint32_t jt_private_philox_word(uint64_t seed, uint64_t position)
+{
+    uint64_t block = position >> 2;
+    uint32_t c0 = (uint32_t)block;
+    uint32_t c1 = (uint32_t)(block >> 32);
+    uint32_t c2 = 0, c3 = 0;
+    uint32_t k0 = (uint32_t)seed, k1 = (uint32_t)(seed >> 32);
+    for (uint32_t round = 0; round < 10; ++round) {
+        uint64_t p0 = (uint64_t)0xD2511F53u * c0;
+        uint64_t p1 = (uint64_t)0xCD9E8D57u * c2;
+        uint32_t n0 = (uint32_t)(p1 >> 32) ^ c1 ^ k0;
+        uint32_t n2 = (uint32_t)(p0 >> 32) ^ c3 ^ k1;
+        c0 = n0;
+        c1 = (uint32_t)p1;
+        c2 = n2;
+        c3 = (uint32_t)p0;
+        k0 += 0x9E3779B9u;
+        k1 += 0xBB67AE85u;
+    }
+    uint32_t lane = (uint32_t)(position & 3);
+    return lane == 0 ? c0 : lane == 1 ? c1 : lane == 2 ? c2 : c3;
+}
+
+extern "C" __global__ __aicore__ void jt_private_philox_kernel(
+    GM_ADDR out, uint64_t seed, uint64_t base, uint64_t n)
+{
+    constexpr uint32_t tile = 256;
+    TPipe pipe;
+    TQue<QuePosition::VECOUT, 1> queue;
+    pipe.InitBuffer(queue, 1, tile * sizeof(float));
+    GlobalTensor<float> dst;
+    dst.SetGlobalBuffer((__gm__ float*)out, n);
+    uint64_t tiles = n / tile + (n % tile != 0);
+    for (uint64_t t = GetBlockIdx(); t < tiles; t += GetBlockNum()) {
+        uint64_t start = t * tile;
+        uint32_t count = (uint32_t)((n - start) < tile ? n - start : tile);
+        LocalTensor<float> values = queue.AllocTensor<float>();
+        for (uint32_t i = 0; i < count; ++i) {
+            uint32_t word = jt_private_philox_word(seed, base + start + i);
+            // AICore supports signed scalar-to-float conversion. The upper
+            // 24 bits fit exactly in both int32 and float32.
+            values.SetValue(i, (float)(int32_t)(word >> 8) * (1.0f / 16777216.0f));
+        }
+        // Scalar stores populate UB. Never use cached scalar GM stores:
+        // each block owns whole 1024-byte tiles, with only the final tile
+        // partial, and the MTE3 transfer writes exactly the valid tail.
+        PipeBarrier<PIPE_ALL>();
+        queue.EnQue(values);
+        values = queue.DeQue<float>();
+        event_t scalarToCopy = static_cast<event_t>(pipe.FetchEventID(HardEvent::S_MTE3));
+        SetFlag<HardEvent::S_MTE3>(scalarToCopy);
+        WaitFlag<HardEvent::S_MTE3>(scalarToCopy);
+        if (count % 8 == 0) DataCopy(dst[start], values, count);
+        else {
+            DataCopyExtParams ep{1, count * (uint32_t)sizeof(float), 0, 0, 0};
+            DataCopyPad(dst[start], values, ep);
+        }
+        // Queue reuse synchronizes V with MTE3; our producer is scalar S.
+        // Finish this DMA before any scalar store can overwrite the tile.
+        event_t copyToScalar = static_cast<event_t>(pipe.FetchEventID(HardEvent::MTE3_S));
+        SetFlag<HardEvent::MTE3_S>(copyToScalar);
+        WaitFlag<HardEvent::MTE3_S>(copyToScalar);
+        queue.FreeTensor(values);
+    }
+    PipeBarrier<PIPE_ALL>();
+}
+
+extern "C" void jt_asc_launch(void** p, uint32_t, uint32_t blocks, void* stream)
+{
+    // These are host scalar kernel arguments, copied by the launch stub.
+    // Only the output pointer addresses device memory; no random values
+    // are generated on or uploaded from the host.
+    jt_private_philox_kernel<<<blocks, nullptr, (aclrtStream)stream>>>(
+        (GM_ADDR)p[0], *(const uint64_t*)p[1], *(const uint64_t*)p[2],
+        *(const uint64_t*)p[3]);
+}
+)ACL_PHILOX";
+        LaunchFn launch = build_or_get(src);
+        USER_CHECK(launch) << "Private ACL uniform: AscendC kernel compilation/loading failed; no fallback is allowed";
+        uint64 base = (uint64)offset, n = (uint64)span;
+        void *args[] = {output->mem_ptr, &seed, &base, &n};
+        // One legal virtual block is sufficient to visit every tile. Do not
+        // inherit fusion's guessed core-count fallback for a mandatory RNG
+        // path. This first implementation makes no throughput guarantee.
+        const uint32_t blocks = 1;
+        launch(args, 0, blocks, aclstream);
+        const auto error = aclrtPeekAtLastError(ACL_RT_THREAD_LEVEL);
+        USER_CHECK(error == ACL_SUCCESS)
+            << "Private ACL uniform: AscendC kernel launch failed, error" << error;
+    }
+
     int64 acl_ascendc_fused_count() { return fused_count; }
     int64 acl_ascendc_fused_node_count() { return fused_node_count; }
 

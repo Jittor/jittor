@@ -18,6 +18,12 @@
 namespace jittor
 {
     struct FusedOp;
+    struct Var;
+
+    // A private, versioned Philox4x32-10 raw32 stream. Unlike the optional
+    // fusion optimization, this entry must succeed natively or throw. It
+    // never uses the default CANN RNG or a host-generated output.
+    void exec_acl_private_uniform(Var *output, uint64 seed, int64 offset, int64 span);
 
     // Runs `fop` as a single generated AscendC kernel. Returns false without
     // any side effect when the group is not eligible or the feature is off,
