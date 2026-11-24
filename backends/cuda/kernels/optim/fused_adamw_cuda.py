@@ -13,10 +13,9 @@ The arithmetic is the one ``optimizer_api._adam_step`` uses per parameter.
 """
 
 import jittor as jt
-from jittor._core.dtypes import var_dtype_name
 from jittor._runtime.dispatch import register_kernel
 
-_DTYPES = ("float32", "float16", "bfloat16")
+_DTYPES = frozenset(("float32", "float16", "bfloat16"))
 # Keep each mapped op small enough for nvcc and the JIT argument table.  The
 # CUDA kernel can process up to 36 tensors, but a transformer optimizer group
 # contains hundreds of differently shaped tensors; passing the whole group in
@@ -24,19 +23,40 @@ _DTYPES = ("float32", "float16", "bfloat16")
 # budget.  Several smaller launches retain the fused update while keeping
 # compilation bounded.
 _MAX_FUSED_ENTRIES = 16
+_NATIVE_DTYPE_GETTER = None
+_ALLOWED_NATIVE_DTYPES = None
+
+
+def _bind_native_dtypes():
+    global _NATIVE_DTYPE_GETTER, _ALLOWED_NATIVE_DTYPES
+    cls = jt.core.Var
+    getter = getattr(cls, "_frontend_native_dtype", None) or cls.__dict__["dtype"]
+    _NATIVE_DTYPE_GETTER = getter.__get__
+    _ALLOWED_NATIVE_DTYPES = (
+        jt.core.NanoString("float32"),
+        jt.core.NanoString("float16"),
+        jt.core.NanoString("bfloat16"),
+    )
 
 
 def _supports(entries, *args, **kwargs):
     """Dense tensors of one supported dtype per entry: the kernel writes raw pointers."""
     if not entries:
         return False
+    get_dtype = _NATIVE_DTYPE_GETTER
+    if get_dtype is None:
+        _bind_native_dtypes()
+        get_dtype = _NATIVE_DTYPE_GETTER
+    f32, f16, bf16 = _ALLOWED_NATIVE_DTYPES
     for parameter, moment, variance, gradient, _ in entries:
-        dtype = var_dtype_name(parameter)
-        if dtype not in _DTYPES:
+        dtype = get_dtype(parameter)
+        if dtype != f32 and dtype != f16 and dtype != bf16:
             return False
-        for tensor in (parameter, moment, variance, gradient):
-            if var_dtype_name(tensor) != dtype or not tensor._storage_is_contiguous():
-                return False
+        if (not parameter._storage_is_contiguous()
+                or get_dtype(moment) != dtype or not moment._storage_is_contiguous()
+                or get_dtype(variance) != dtype or not variance._storage_is_contiguous()
+                or get_dtype(gradient) != dtype or not gradient._storage_is_contiguous()):
+            return False
     return True
 
 
@@ -56,10 +76,21 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     """
     hyper = lr if isinstance(lr, jt.Var) else None
     results = [None] * len(entries)
+    get_dtype = _NATIVE_DTYPE_GETTER
+    if get_dtype is None:
+        _bind_native_dtypes()
+        get_dtype = _NATIVE_DTYPE_GETTER
+    f32, f16, bf16 = _ALLOWED_NATIVE_DTYPES
     groups = {}
     for index, entry in enumerate(entries):
-        key = (0 if hyper is not None else int(entry[4]), var_dtype_name(entry[0]))
-        groups.setdefault(key, []).append(index)
+        dt = get_dtype(entry[0])
+        dt_key = 0 if dt == f32 else (1 if dt == f16 else (2 if dt == bf16 else str(dt)))
+        key = (0 if hyper is not None else int(entry[4]), dt_key)
+        bucket = groups.get(key)
+        if bucket is None:
+            groups[key] = [index]
+        else:
+            bucket.append(index)
     for (steps, _), indices in groups.items():
         if hyper is not None:
             step, lr = hyper, 0.0

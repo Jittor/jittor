@@ -1374,7 +1374,7 @@ static void preserve_copy_storage(VarPtr& value, VarHolder* destination) {
         << "copy commit cannot preserve incompatible storage geometry";
     auto version = storage->var->storage_version_token();
     replacement._update(storage.get(), false);
-    std::atomic_store(&replacement.var->storage_mutation_version, version);
+    replacement.var->set_storage_version(move(version));
     USER_CHECK(replacement.var->mem_ptr == storage->var->mem_ptr)
         << "copy commit did not retain its actual allocation";
     value = VarPtr(replacement.var);
@@ -1818,8 +1818,7 @@ VarHolder* VarHolder::storage_data_alias() {
     // Tensor.data shares bytes but has an independent version counter and
     // trainability. Detach above shares the counter for its distinct contract.
     alias->var->autograd_alias = std::make_shared<AutogradAliasState>();
-    std::atomic_store(&alias->var->storage_mutation_version,
-        std::make_shared<StorageMutationVersion>());
+    alias->var->set_storage_version(StorageVersionPtr::make(alias->var->id));
     return alias;
 }
 
@@ -2258,7 +2257,7 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
         var->placement = replacement->placement;
         auto version = var->storage_version_token();
         var->share_with(replacement.ptr);
-        std::atomic_store(&var->storage_mutation_version, version);
+        var->set_storage_version(move(version));
         CHECK(var->alloc(replacement->allocator));
         return this;
     }

@@ -20,7 +20,8 @@ namespace jittor {
 
 std::atomic<int64> Var::number_of_lived_vars{0};
 
-StorageMutationVersion::StorageMutationVersion() {
+StorageMutationVersion::StorageMutationVersion(int64 origin_var_id)
+    : origin_var_id(origin_var_id) {
     static std::atomic<uint64> next{1};
     identity = next.fetch_add(1, std::memory_order_relaxed);
 }

@@ -53,6 +53,7 @@ jit_cache_map<string> jit_key_mapper;
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
 
+std::atomic<int32> backward_storage_read_active_count{0};
 struct OpThreadState {
     const BackwardStorageReadScope* backward_storage_reads = nullptr;
     int execution_target_override = -1;
@@ -61,8 +62,14 @@ struct OpThreadState {
 static thread_local OpThreadState op_tls;
 
 BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
-    : op(op), previous(op_tls.backward_storage_reads) { op_tls.backward_storage_reads = this; }
-BackwardStorageReadScope::~BackwardStorageReadScope() { op_tls.backward_storage_reads = previous; }
+    : op(op), previous(op_tls.backward_storage_reads) {
+    backward_storage_read_active_count.fetch_add(1, std::memory_order_relaxed);
+    op_tls.backward_storage_reads = this;
+}
+BackwardStorageReadScope::~BackwardStorageReadScope() {
+    op_tls.backward_storage_reads = previous;
+    backward_storage_read_active_count.fetch_sub(1, std::memory_order_relaxed);
+}
 
 void rebase_saved_storage_versions(Var* value) {
     if (!value) return;
@@ -82,18 +89,26 @@ void rebase_saved_storage_versions(Var* value) {
     for (Op* consumer : value->outputs()) rebase(consumer);
 }
 
-void check_backward_storage_read(Var* value) {
+void check_backward_storage_read_slow(Var* value) {
     auto* reads = op_tls.backward_storage_reads;
     if (!reads || !value) return;
     auto token = value->peek_storage_version();
     if (!token) return;
     for (auto* scope = reads; scope; scope = scope->previous)
-        for (const auto& saved : scope->op->saved_storage_versions)
-            if (saved.token == token || saved.original_id == value->id)
-                USER_CHECK(saved.token == token &&
-                        saved.version == saved.token->value.load(std::memory_order_relaxed))
+        for (const auto& saved : scope->op->saved_storage_versions) {
+            if (saved.token) {
+                if (saved.token == token || saved.original_id == value->id)
+                    USER_CHECK(saved.token == token &&
+                            saved.version == saved.token->value.load(std::memory_order_relaxed))
+                        << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
+                        << saved.original_id << "read by" << scope->op->name();
+            } else if (saved.original_id == value->id || token->origin_var_id == saved.original_id) {
+                USER_CHECK(token->origin_var_id == saved.original_id &&
+                        token->value.load(std::memory_order_relaxed) == 0)
                     << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
                     << saved.original_id << "read by" << scope->op->name();
+            }
+        }
 }
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
@@ -477,8 +492,9 @@ void Op::init() {
         }
     }
     infer_shape();
-    if (!flag(OpFlags::_no_input_storage))
-        for (Var* value : inputs()) check_backward_storage_read(value);
+    if (!flag(OpFlags::_no_input_storage) && PREDICT_BRANCH_NOT_TAKEN(
+            backward_storage_read_active_count.load(std::memory_order_relaxed) != 0))
+        for (Var* value : inputs()) check_backward_storage_read_slow(value);
     if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
         propagate_device();
     if (first_init && has_first_order_only_input)
@@ -515,13 +531,16 @@ void Op::init() {
     // Native assignment/rebinding remains unchanged.
     if (first_init && !no_grad && !all_inputs_stopped &&
             autograd_policy.preserve_requires_grad_on_assignment) {
+        saved_storage_versions.reserve(_inputs.size() + _outputs.size());
         for (Var* value : inputs()) {
-            auto token = value->storage_version_token();
-            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+            auto token = value->peek_storage_version();
+            uint64 ver = token ? token->value.load(std::memory_order_relaxed) : 0;
+            saved_storage_versions.push_back({move(token), ver, value->id});
         }
         for (Var* value : outputs()) {
-            auto token = value->storage_version_token();
-            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+            auto token = value->peek_storage_version();
+            uint64 ver = token ? token->value.load(std::memory_order_relaxed) : 0;
+            saved_storage_versions.push_back({move(token), ver, value->id});
         }
     }
 }

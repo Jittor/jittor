@@ -106,18 +106,15 @@ struct Var : Node {
     // unwritten rule.
     Var* share_src = nullptr;
     size_t share_offset = 0;
-    shared_ptr<StorageMutationVersion> storage_mutation_version;
-    inline shared_ptr<StorageMutationVersion> peek_storage_version() const {
-        return std::atomic_load(&storage_mutation_version);
+    AtomicStorageVersionPtr storage_mutation_version;
+    inline StorageVersionPtr peek_storage_version() const {
+        return storage_mutation_version.load();
     }
-    inline shared_ptr<StorageMutationVersion> storage_version_token() {
-        auto token = peek_storage_version();
-        if (!token) {
-            auto fresh = std::make_shared<StorageMutationVersion>();
-            if (std::atomic_compare_exchange_strong(&storage_mutation_version, &token, fresh))
-                token = move(fresh);
-        }
-        return token;
+    inline StorageVersionPtr storage_version_token() {
+        return storage_mutation_version.get_or_create(id);
+    }
+    inline void set_storage_version(StorageVersionPtr token) {
+        storage_mutation_version.store(move(token));
     }
     inline void note_storage_mutation() {
         storage_version_token()->value.fetch_add(1, std::memory_order_relaxed);
@@ -188,7 +185,7 @@ struct Var : Node {
     bool alloc(Allocator* allocator);
     inline void share_with(Var* x, size_t offset = 0) {
         CHECK_EXIST;
-        std::atomic_store(&storage_mutation_version, x->storage_version_token());
+        set_storage_version(x->storage_version_token());
         share_src = x;
         share_offset = offset;
         storage_offset_bytes = x->storage_offset_bytes + offset;
