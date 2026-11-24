@@ -91,19 +91,58 @@ struct FusedOp final : Op {
 
     // A run of the snapshot, or of a copy of the live list when there is no
     // batch to borrow from -- a `FusedOp` built outside `run_sync` (the relay
-    // test). Iterating one allocates nothing in the first case.
+    // test). The fast path is a bare pointer pair with a null `own`, avoiding
+    // per-call vector construction/destruction and cross-TU calls.
     template <class T>
     struct Snapshot {
         const T* first = nullptr;
         const T* last = nullptr;
-        vector<T> own;
+        unique_ptr<vector<T>> own;
+        Snapshot() = default;
+        Snapshot(const T* f, const T* l) : first(f), last(l) {}
+        explicit Snapshot(unique_ptr<vector<T>> owned)
+            : first(owned->data()), last(owned->data() + owned->size()), own(move(owned)) {}
         const T* begin() const { return first; }
         const T* end() const { return last; }
     };
-    Snapshot<Var*> snapshot_outputs(Op* op) const;
-    Snapshot<pair<Var*, int>> snapshot_inputs(Op* op) const;
+    Snapshot<Var*> snapshot_outputs_slow(Op* op) const;
+    Snapshot<pair<Var*, int>> snapshot_inputs_slow(Op* op) const;
+    pair<Op*, int> snapshot_producer_slow(Var* v) const;
+
+    inline Snapshot<Var*> snapshot_outputs(Op* op) const {
+        if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan || op->batch_stamp != batch_stamp_wanted))
+            return snapshot_outputs_slow(op);
+        int idx = op->batch_index_at(batch_stamp_wanted);
+        if (PREDICT_BRANCH_NOT_TAKEN(idx < 0 || idx + 1 >= (int)batch_plan->op_outputs_begin.size()))
+            return snapshot_outputs_slow(op);
+        auto* base = batch_plan->op_outputs.data();
+        return Snapshot<Var*>(
+            base + batch_plan->op_outputs_begin[idx],
+            base + batch_plan->op_outputs_begin[idx + 1]);
+    }
+
+    inline Snapshot<pair<Var*, int>> snapshot_inputs(Op* op) const {
+        if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan || op->batch_stamp != batch_stamp_wanted))
+            return snapshot_inputs_slow(op);
+        int idx = op->batch_index_at(batch_stamp_wanted);
+        if (PREDICT_BRANCH_NOT_TAKEN(idx < 0 || idx + 1 >= (int)batch_plan->op_inputs_begin.size()))
+            return snapshot_inputs_slow(op);
+        auto* base = batch_plan->op_inputs.data();
+        return Snapshot<pair<Var*, int>>(
+            base + batch_plan->op_inputs_begin[idx],
+            base + batch_plan->op_inputs_begin[idx + 1]);
+    }
+
     // {producing op, slot in its output list}
-    pair<Op*, int> snapshot_producer(Var* v) const;
+    inline pair<Op*, int> snapshot_producer(Var* v) const {
+        if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan || v->batch_stamp != batch_stamp_wanted))
+            return snapshot_producer_slow(v);
+        int idx = v->batch_index_at(batch_stamp_wanted);
+        if (PREDICT_BRANCH_NOT_TAKEN(idx < 0 || idx >= (int)batch_plan->var_producer.size()
+                || batch_plan->all_vars[idx] != v))
+            return snapshot_producer_slow(v);
+        return batch_plan->var_producer[idx];
+    }
 
     // A var the batch classified as fusable may be fused away. A var that is
     // not in the batch -- a multi-output op only one of whose outputs this

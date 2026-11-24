@@ -60,45 +60,19 @@ void FusedOp::update_jit_key() {
     do_jit_prepare(jk);
 }
 
-FusedOp::Snapshot<Var*> FusedOp::snapshot_outputs(Op* op) const {
-    Snapshot<Var*> out;
-    if (batch_plan && op->batch_stamp == batch_stamp_wanted) {
-        int idx = op->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && idx + 1 < (int)batch_plan->op_outputs_begin.size()) {
-            out.first = batch_plan->op_outputs.data() + batch_plan->op_outputs_begin[idx];
-            out.last = batch_plan->op_outputs.data() + batch_plan->op_outputs_begin[idx + 1];
-            return out;
-        }
-    }
-    for (Var* o : op->outputs()) out.own.push_back(o);
-    out.first = out.own.data();
-    out.last = out.own.data() + out.own.size();
-    return out;
+FusedOp::Snapshot<Var*> FusedOp::snapshot_outputs_slow(Op* op) const {
+    unique_ptr<vector<Var*>> owned(new vector<Var*>());
+    for (Var* o : op->outputs()) owned->push_back(o);
+    return Snapshot<Var*>(move(owned));
 }
 
-FusedOp::Snapshot<pair<Var*, int>> FusedOp::snapshot_inputs(Op* op) const {
-    Snapshot<pair<Var*, int>> in;
-    if (batch_plan && op->batch_stamp == batch_stamp_wanted) {
-        int idx = op->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && idx + 1 < (int)batch_plan->op_inputs_begin.size()) {
-            in.first = batch_plan->op_inputs.data() + batch_plan->op_inputs_begin[idx];
-            in.last = batch_plan->op_inputs.data() + batch_plan->op_inputs_begin[idx + 1];
-            return in;
-        }
-    }
-    for (auto ve : op->_inputs) in.own.emplace_back(ve.node->var(), ve.reverse().index);
-    in.first = in.own.data();
-    in.last = in.own.data() + in.own.size();
-    return in;
+FusedOp::Snapshot<pair<Var*, int>> FusedOp::snapshot_inputs_slow(Op* op) const {
+    unique_ptr<vector<pair<Var*, int>>> owned(new vector<pair<Var*, int>>());
+    for (auto ve : op->_inputs) owned->emplace_back(ve.node->var(), ve.reverse().index);
+    return Snapshot<pair<Var*, int>>(move(owned));
 }
 
-pair<Op*, int> FusedOp::snapshot_producer(Var* v) const {
-    if (batch_plan && v->batch_stamp == batch_stamp_wanted) {
-        int idx = v->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && idx < (int)batch_plan->var_producer.size()
-                && batch_plan->all_vars[idx] == v)
-            return batch_plan->var_producer[idx];
-    }
+pair<Op*, int> FusedOp::snapshot_producer_slow(Var* v) const {
     int slot = 0;
     if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
     return {v->input(), slot};

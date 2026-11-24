@@ -7,6 +7,7 @@
 #include "core/common.h"
 #include "runtime/traversal_epoch.h"
 #include "runtime/backend.h"
+#include "runtime/node_index.h"
 
 namespace jittor {
 
@@ -18,6 +19,7 @@ namespace jittor {
 // allocated and freed some forty vectors.
 struct PlanScratch {
     vector<Node*> bfs_q;
+    NodeIndex planning_held;
     vector<int> roots, next, deps;
     vector<int> in_var, producer, out_var, consumers_begin, consumers;
     vector<int> readers, read_by;
@@ -28,6 +30,7 @@ struct PlanScratch {
     vector<int> father, fuse_level, fuse_queue, unvisited_consumers, group_size;
     vector<BackendId> op_backend;
     vector<char> op_scalar;
+    vector<int8_t> op_scalar_rank, op_tiny_numel;
     vector<char> forced_material, half_union, bounded;
     // schedule_hold_release
     vector<int> last_use;

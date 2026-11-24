@@ -16,7 +16,11 @@ def test_native_holder_state_cursor_lifecycle(tmp_path):
 #include <cassert>
 #include <type_traits>
 namespace jittor {
-struct VarHolder { int id; };
+struct VarHolder {
+    int id;
+    HolderLink holder_link;
+    HolderLink pending_link;
+};
 // Only LaunchHistory::report needs it, and nothing below calls report.
 // Stubbed rather than linking backend.cc, which drags the whole backend
 // registry into a case about holder-state ownership.
@@ -58,30 +62,48 @@ int main() {
     RuntimeHolderState roots;
     assert(roots.holders().empty() && !roots.peek_pending());
     roots.consume_pending();
-    VarHolder a{1}, b{2}, c{3}, moved{4};
-    auto ia = roots.add(&a);
-    auto ib = roots.add(&b);
-    auto ic = roots.add(&c);
+    VarHolder a{1, {}, {}}, b{2, {}, {}}, c{3, {}, {}}, moved{4, {}, {}};
+    roots.add(a.holder_link, a.pending_link, &a, true);
+    roots.add(b.holder_link, b.pending_link, &b, true);
+    roots.add(c.holder_link, c.pending_link, &c, false);
+    assert(roots.holders().size() == 3 && roots.pending_size() == 2);
     assert(roots.peek_pending() == &a);
     roots.consume_pending();
     // Peeking beyond a sync cutoff must not consume the next candidate.
     assert(roots.peek_pending() == &b);
     assert(roots.peek_pending() == &b);
-    roots.erase(ia); // erase the consumed cursor node, not the pending one
-    roots.erase(ia); // released holder can subsequently be destructed
-    assert(!roots.contains(ia) && roots.peek_pending() == &b);
-    *ib = &moved; // VarHolder's move-from-pointer constructor keeps its slot
+    roots.erase(a.holder_link, a.pending_link); // erase the consumed cursor node, not the pending one
+    roots.erase(a.holder_link, a.pending_link); // released holder can subsequently be destructed
+    assert(!roots.contains(a.holder_link) && roots.peek_pending() == &b);
+    // VarHolder's move-from-pointer constructor replaces the intrusive links in place.
+    roots.replace(b.holder_link, moved.holder_link, b.pending_link, moved.pending_link, &moved);
+    assert(!roots.contains(b.holder_link) && roots.contains(moved.holder_link));
     assert(roots.peek_pending() == &moved);
-    roots.erase(ib);
+    // Also exercise replacing the exact node sync_cursor_ currently points to.
+    roots.consume_pending();
+    VarHolder moved2{5, {}, {}};
+    roots.replace(moved.holder_link, moved2.holder_link, moved.pending_link, moved2.pending_link, &moved2);
+    assert(roots.peek_pending() == &c);
+    roots.erase(moved2.holder_link, moved2.pending_link);
     assert(roots.peek_pending() == &c);
     roots.consume_pending();
     assert(!roots.peek_pending());
-    auto another = roots.add(&a);
+    // Rebinding a finished holder marks it pending again; lazy pruning removes finished entries.
+    roots.mark_pending(c.holder_link, c.pending_link, &c);
+    assert(roots.pending_size() == 1);
+    int visited = 0;
+    roots.for_each_pending([&](VarHolder* h) -> bool {
+        visited++;
+        assert(h == &c);
+        return false; // prune as finished
+    });
+    assert(visited == 1 && roots.pending_size() == 0);
+    roots.add(a.holder_link, a.pending_link, &a, true);
     assert(roots.peek_pending() == &a);
-    roots.erase(ic);
+    roots.erase(c.holder_link, c.pending_link);
     assert(roots.peek_pending() == &a);
-    roots.erase(another);
-    assert(roots.holders().empty() && !roots.peek_pending());
+    roots.erase(a.holder_link, a.pending_link);
+    assert(roots.holders().empty() && roots.pending_size() == 0 && !roots.peek_pending());
     assert(&runtime_holder_state() == &runtime_holder_state());
     return 0;
 }
@@ -108,7 +130,7 @@ def test_holder_globals_are_no_longer_exported():
     assert "EXTERN_LIB list<VarHolder*> hold_vars" not in header
     assert "EXTERN_LIB list<VarHolder*>::iterator sync_ptr" not in header
     assert "list<VarHolder*> hold_vars;" not in source
-    assert "runtime_holder_state().add(self)" in source
+    assert "runtime_holder_state().add(" in source
 
 
 def test_executor_instance_is_owned_by_native_runtime():

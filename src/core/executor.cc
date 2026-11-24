@@ -133,20 +133,22 @@ void Executor::auto_flush() {
         return;
     vector<Var*> vars;
     int64 pending_bytes = 0;
-    for (auto holder : runtime_holder_state().holders()) {
+    auto& holder_state = runtime_holder_state();
+    holder_state.for_each_pending([&](VarHolder* holder) -> bool {
         auto var = holder->var;
-        if (var->_outputs.size() || var->is_finished()) continue;
+        if (var->is_finished()) return false;
+        if (var->_outputs.size()) return true;
         // Recovery work must not implicitly retry a failed, unrelated graph.
         // Explicit roots and their data dependencies still run normally.
-        if (var->flag(VarFlags::_execution_failed)) continue;
+        if (var->flag(VarFlags::_execution_failed)) return true;
         // The third place a kept graph must not be picked up as a
         // bystander (see `top_weak_sync` and `sync_all`), and the easiest
         // to miss: this fires in the middle of the NEXT call's
         // construction, so the kept graph is re-executed while the caller
         // is still building the work that was going to replace it.
-        if (var->flag(VarFlags::_kept)) continue;
+        if (var->flag(VarFlags::_kept)) return true;
         auto op = var->input();
-        if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+        if (op && op->flag(OpFlags::_must_stay_pending)) return true;
         // Nor a var an elementwise op is still to compute. Launched now it
         // is written out, and a training forward keeps it for the backward,
         // where it would otherwise have fused into its readers and never
@@ -156,10 +158,11 @@ void Executor::auto_flush() {
         // when something that must be written out -- a matmul, a
         // convolution, a reduction -- needs it.
         if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
-            continue;
+            return true;
         vars.push_back(var);
         pending_bytes += var->size;
-    }
+        return true;
+    });
     // Enough operators, but is there enough work? Cutting the graph costs
     // a fusion boundary and a second planning pass; that only pays for
     // itself when the device has something substantial to chew on
