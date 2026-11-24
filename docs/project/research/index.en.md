@@ -13,8 +13,10 @@ architecture review before implementation starts.
 :hidden:
 
 agentic-optimization.en
+acl-private-generator.en
 ```
 -->
 | Proposal | Status |
 | --- | --- |
 | [Framework optimisation operable by an agent](agentic-optimization.en.md) | Research proposal, not implemented |
+| [Private ACL Generator](acl-private-generator.en.md) | Interface and consumption proposal, not implemented |
