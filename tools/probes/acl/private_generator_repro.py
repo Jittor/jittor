@@ -20,8 +20,9 @@ def provenance(obj):
 def run(ordinal):
     import jittor as jt
     from jittor.compat.shim import activate
+    # Keep stdout parseable as a single JSON report.
     activate(strict=True, auto_scan_extensions=False, build_extensions=False,
-             local_home=False)
+             local_home=False, verbose=False)
     import torch
     from jittor.compat.torch import namespace_owner
     if namespace_owner(torch) is not jt:
