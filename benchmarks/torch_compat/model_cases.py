@@ -286,7 +286,7 @@ def transformer_model(torch, case, assets, inputs):
         mask[:, :length] = 1
         kwargs.update(input_ids=inputs.tensor(tokens, torch.int64),
                       attention_mask=inputs.tensor(mask, torch.int64), do_sample=False,
-                      semantic_max_new_tokens=32)
+                      semantic_max_new_tokens=32, fine_temperature=1.0)
         forward = model.generate
     else:
         kwargs["input_ids"] = inputs.ids(case.shape, text_config.vocab_size, low=3)
