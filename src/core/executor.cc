@@ -596,7 +596,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // immediately, then let the planner extend this hold to every Var it
     // reaches before any graph rewrite can release their producer Ops.
     VarPtrBatch& planning_hold = state->planning_hold;
-    planning_hold.own_all(vars);
+    planning_hold = std::move(root_hold);
     build_exec_plan(vars, weak_sync, plan, planning_hold);
     trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
@@ -625,6 +625,18 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     {
         std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         batch_hold.own_all_locked(plan.all_vars);
+        if (vars.size() != static_cast<size_t>(plan.start_var_num)) {
+            // Waiting for the previous batch can finish some requested roots
+            // before planning starts. The runner still checks them at the
+            // end, after the caller has resumed and can rebind their holders.
+            auto& ready_roots = plan.scratch.new_planning_vars;
+            for (Var* v : vars)
+                if (!plan.epoch->marked(v)) ready_roots.push_back(v);
+            std::sort(ready_roots.begin(), ready_roots.end(), std::less<Var*>{});
+            ready_roots.erase(std::unique(ready_roots.begin(), ready_roots.end()), ready_roots.end());
+            batch_hold.own_all_locked(ready_roots);
+            ready_roots.clear();
+        }
         // The final batch hold now owns every pointer the plan keeps. Releasing
         // traversal-only holds may discard superseded nodes from earlier graph
         // optimization passes, but cannot invalidate this plan.
