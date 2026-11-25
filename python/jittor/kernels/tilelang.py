@@ -233,17 +233,17 @@ def _native_tilelang_call(kernel, args):
         elif arg is None:
             param_kinds.append(_PARAM_NONE)
             param_values.append(0)
-        elif atype is bool:
+        elif atype is bool or isinstance(arg, bool):
             param_kinds.append(_PARAM_BOOL)
             param_values.append(1 if arg else 0)
-        elif atype is int:
+        elif atype is int or isinstance(arg, int):
             if not -(1 << 63) <= arg < (1 << 63):
                 raise OverflowError("tilelang_call integer scalar outside int64")
             param_kinds.append(_PARAM_INT)
-            param_values.append(arg & 0xFFFFFFFFFFFFFFFF)
-        elif atype is float:
+            param_values.append(int(arg) & 0xFFFFFFFFFFFFFFFF)
+        elif atype is float or isinstance(arg, float):
             param_kinds.append(_PARAM_FLOAT)
-            param_values.append(_UNPACK_U64(_PACK_DOUBLE(arg))[0])
+            param_values.append(_UNPACK_U64(_PACK_DOUBLE(float(arg)))[0])
         else:
             raise TypeError("kernel arguments must be Vars, TensorSpecs, or scalar values")
 

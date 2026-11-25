@@ -492,3 +492,38 @@ def test_tilelang_zero_input_and_cuda_graph_replay():
         assert out._mem_ptr_now == ptr
         assert buf._mem_ptr_now == ptr
         np.testing.assert_array_equal(buf.numpy(), np.full(257, 8.0, dtype=np.float32))
+
+
+def test_triton_async_worker_execution():
+    kernel = add_kernel()
+    with jt.flag_scope(async_execution=1, auto_flush_ops=8, async_min_caller_us=0), jt.no_grad():
+        warm = jt.full((257,), 0.25, dtype="float32")
+        _ = triton_call(kernel, warm, warm, TensorSpec((257,), "float32"), N=257, BLOCK=128, grid=3).numpy()
+
+        before = jt.core.async_exec_batches()
+        x = jt.full((257,), 0.5, dtype="float32")
+        expected = np.full(257, 0.5, dtype=np.float32)
+        for _ in range(16):
+            x = triton_call(kernel, x, x, TensorSpec((257,), "float32"), N=257, BLOCK=128, grid=3) * 0.5 + 0.125
+            expected = (expected * 2.0) * 0.5 + 0.125
+        actual = x.numpy()
+        assert jt.core.async_exec_batches() > before
+        np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
+
+def test_tilelang_async_worker_execution():
+    kernel = make_tilelang_add(257)
+    with jt.flag_scope(async_execution=1, auto_flush_ops=8, async_min_caller_us=0), jt.no_grad():
+        warm = jt.full((257,), 0.25, dtype="float32")
+        _ = tilelang_call(kernel, warm, warm, TensorSpec((257,), "float32")).numpy()
+
+        before = jt.core.async_exec_batches()
+        x = jt.full((257,), 0.5, dtype="float32")
+        expected = np.full(257, 0.5, dtype=np.float32)
+        for _ in range(16):
+            x = tilelang_call(kernel, x, x, TensorSpec((257,), "float32")) * 0.5 + 0.125
+            expected = (expected * 2.0) * 0.5 + 0.125
+        actual = x.numpy()
+        assert jt.core.async_exec_batches() > before
+        np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
+
