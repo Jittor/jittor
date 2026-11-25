@@ -221,6 +221,29 @@ struct jit_cache_map {
         return find(key.data(), key.size());
     }
 
+    /* Thread-safe insert-or-assign: writes `value` while holding `lock` so
+       concurrent readers/writers (e.g., background Tier-1 promotion) never
+       race on a reference invalidated by rehash or eviction. */
+    void set(const string& key, T value) {
+        const uint64 h = hash_bytes(key.data(), key.size());
+        Guard guard(lock);
+        int32_t idx = find_index_unlocked(key.data(), key.size(), h);
+        if (idx == kEmpty) {
+            size_t limit = max_entries();
+            evict_down_to(limit ? limit - 1 : 0);
+            if (buckets.empty() || (entries.size() + 1) * 2 > buckets.size()) {
+                size_t new_cap = buckets.empty() ? 16 : buckets.size() * 2;
+                while ((entries.size() + 1) * 2 > new_cap) new_cap *= 2;
+                rehash_unlocked(new_cap);
+            }
+            idx = (int32_t)entries.size();
+            entries.emplace_back(key, h);
+            insert_bucket_unlocked(h, idx);
+        }
+        touch(entries[idx].second);
+        entries[idx].second.value = std::move(value);
+    }
+
     /* Insert-or-get, evicting the least recently used entry first if the table
        is at capacity.
 

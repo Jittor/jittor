@@ -16,6 +16,7 @@
 #include "mem/allocator.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "runtime/tier0_ops.h"
 #include "runtime/launch_diagnostics.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "core/executor.h"
@@ -939,6 +940,8 @@ string Op::file_name_to_class_name(const string& s) {
 }
 
 void Op::jit_run(JK& jk) {
+    if (PREDICT_BRANCH_NOT_TAKEN(jit_tier_mode() == 0) && tier0_try_execute_op(this, jk))
+        return;
     jit_op_entry_t entry = nullptr;
     if (jit_ops.find_copy(jk.to_cstring(), (size_t)jk.size, entry)) {
         if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
@@ -952,6 +955,8 @@ void Op::jit_run(JK& jk) {
         entry(this);
         return;
     }
+    if (tier0_try_execute_op(this, jk))
+        return;
     string jit_key = jk.to_string();
     LOGvv << "Jit op key not found:" << jit_key;
     // Serial compilation reaches this path without the parallel compiler's
@@ -966,8 +971,8 @@ void Op::jit_run(JK& jk) {
             + " failed.\n\nReason: " + error.what());
     }
     CHECK(get_jit_key(jk) == jit_key) << "Non-fused compilation changed its JIT key";
-    jit_ops[jit_key] = op_entry;
-    jit_key_mapper[jit_key] = jit_key;
+    jit_ops.set(jit_key, op_entry);
+    jit_key_mapper.set(jit_key, jit_key);
     LOGvv << "Get jit op entry:" << (void*)op_entry;
     Profiler::record_and_run(op_entry, this, jit_key.c_str());
 }
