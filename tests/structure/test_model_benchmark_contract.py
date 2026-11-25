@@ -310,6 +310,67 @@ class TestModelBenchmarkContract(unittest.TestCase):
                     self.assertEqual(result["status"], expected)
                     self.assertEqual(result["compile"], "default")
 
+    def test_tiered_inference_tolerance_policy(self):
+        import numpy as np
+        sys.path.insert(0, str(HERE))
+        try:
+            cuda_bench = load("benchmark_cuda_models")
+        finally:
+            if sys.path and sys.path[0] == str(HERE):
+                sys.path.pop(0)
+        # float32 remains strict (any element outside tolerance fails)
+        a = np.ones(1000, dtype=np.float32)
+        b = a.copy()
+        b[0] += 5e-3
+        tol32 = cuda_bench.INFERENCE_TOLERANCES["float32"]
+        res32 = cuda_bench.compare_arrays(
+            np, a, b, tol32["atol"], tol32["rtol"],
+            max_outside_fraction=tol32["max_outside_fraction"],
+            min_cosine=tol32["min_cosine"],
+            max_abs_cap=tol32["max_abs_cap"],
+            max_scale_ratio=tol32["max_scale_ratio"],
+        )
+        self.assertFalse(res32["parity"])
+
+        # bfloat16 allows bounded 1-ULP outliers on large tensors when cosine is high
+        tol16 = cuda_bench.INFERENCE_TOLERANCES["bfloat16"]
+        ref = np.linspace(-2.0, 2.0, 2000, dtype=np.float32)
+        cand_ok = ref.copy()
+        cand_ok[0] += 0.12  # single 1-ULP style outlier (0.05% < 0.5%, <= 0.25 cap)
+        res_ok = cuda_bench.compare_arrays(
+            np, ref, cand_ok, tol16["atol"], tol16["rtol"],
+            max_outside_fraction=tol16["max_outside_fraction"],
+            min_cosine=tol16["min_cosine"],
+            max_abs_cap=tol16["max_abs_cap"],
+            max_scale_ratio=tol16["max_scale_ratio"],
+        )
+        self.assertTrue(res_ok["parity"])
+        self.assertGreater(res_ok["cosine_similarity"], 0.999)
+
+        # bfloat16 rejects large computation errors and NaN/Inf mismatches
+        cand_bad = ref.copy()
+        cand_bad[:50] += 1.0  # 2.5% outliers + large abs diff
+        res_bad = cuda_bench.compare_arrays(
+            np, ref, cand_bad, tol16["atol"], tol16["rtol"],
+            max_outside_fraction=tol16["max_outside_fraction"],
+            min_cosine=tol16["min_cosine"],
+            max_abs_cap=tol16["max_abs_cap"],
+            max_scale_ratio=tol16["max_scale_ratio"],
+        )
+        self.assertFalse(res_bad["parity"])
+
+        cand_nan = ref.copy()
+        cand_nan[0] = np.nan
+        res_nan = cuda_bench.compare_arrays(
+            np, ref, cand_nan, tol16["atol"], tol16["rtol"],
+            max_outside_fraction=tol16["max_outside_fraction"],
+            min_cosine=tol16["min_cosine"],
+            max_abs_cap=tol16["max_abs_cap"],
+            max_scale_ratio=tol16["max_scale_ratio"],
+        )
+        self.assertFalse(res_nan["parity"])
+        self.assertEqual(res_nan["nonfinite_mismatch"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

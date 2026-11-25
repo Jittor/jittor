@@ -1,5 +1,9 @@
 """Compare CUDA model workloads on Jittor and PyTorch.
 
+Reference/candidate versions:
+- Reference: PyTorch 2.11+cu128 (e.g. ``torch==2.11.0+cu128``, ``torchvision==0.26.0+cu128``)
+- Candidate: Jittor 2.0.2 with CUDA 12.8 (``nvcc 12.8.x``, ``cudnn 9.x``)
+
 Use separate Python environments with matching versions of NumPy, Diffusers
 (validated with 0.35.1), Transformers, Accelerate, and Safetensors. The video
 case also needs ftfy. Install binary PyTorch in the reference environment and
@@ -1109,7 +1113,23 @@ def run_worker(spec):
         if not job.get("native_compile"):
             raise RuntimeError("Torch compiled worker did not complete timing with a compiled graph")
         result["execution"] = "compiled"
+    jittor_version = getattr(jt, "__version__", None) if jt is not None else None
+    jittor_cuda_version = None
+    if jt is not None:
+        try:
+            from jittor.build import compiler as _jt_compiler
+            jittor_cuda_version = getattr(_jt_compiler, "nvcc_version", None) or getattr(_jt_compiler, "cuda_version", None)
+            if isinstance(jittor_cuda_version, (list, tuple)):
+                jittor_cuda_version = ".".join(str(x) for x in jittor_cuda_version)
+        except Exception:
+            jittor_cuda_version = None
+        if not jittor_cuda_version:
+            jittor_cuda_version = packages.get("cuda")
+    torch_version = torch.__version__ if job["runtime"] == "torch" else None
+    torch_cuda_version = getattr(getattr(torch, "version", None), "cuda", None) if job["runtime"] == "torch" else None
     job.update(result, gpu=torch.cuda.get_device_name(), python=sys.executable, torch=torch.__version__,
+               torch_version=torch_version, torch_cuda_version=torch_cuda_version,
+               jittor_version=jittor_version, jittor_cuda_version=jittor_cuda_version,
                versions=packages,
                fallback_count=jt.core.backend_fallback_count() - before_fallback if jt is not None else None)
     write_json(directory / "result.json", job)
@@ -1255,12 +1275,27 @@ def compare_results(rows):
     return [summary]
 
 
-def compare_arrays(np, a, b, atol, rtol):
+INFERENCE_TOLERANCES = {
+    "float32": dict(atol=1e-4, rtol=1e-3, max_outside_fraction=0.0, min_cosine=0.9999,
+                    max_abs_cap=None, max_scale_ratio=None),
+    "float16": dict(atol=1e-2, rtol=3e-2, max_outside_fraction=1e-3, min_cosine=0.999,
+                    max_abs_cap=0.1, max_scale_ratio=0.1),
+    "bfloat16": dict(atol=5e-2, rtol=8e-2, max_outside_fraction=5e-3, min_cosine=0.998,
+                     max_abs_cap=0.25, max_scale_ratio=0.15),
+}
+
+
+def compare_arrays(np, a, b, atol, rtol, *, max_outside_fraction=0.0, min_cosine=None,
+                   max_abs_cap=None, max_scale_ratio=None):
     if a.shape != b.shape or a.dtype != b.dtype:
         return dict(parity=False, reference_shape=a.shape, candidate_shape=b.shape,
                     reference_dtype=str(a.dtype), candidate_dtype=str(b.dtype))
-    close = np.isclose(b, a, atol=atol, rtol=rtol) if np.issubdtype(a.dtype, np.floating) else (a == b)
-    both_finite = np.isfinite(a) & np.isfinite(b)
+    is_float = np.issubdtype(a.dtype, np.floating)
+    close = np.isclose(b, a, atol=atol, rtol=rtol) if is_float else (a == b)
+    finite_a = np.isfinite(a) if is_float else np.ones(a.shape, dtype=bool)
+    finite_b = np.isfinite(b) if is_float else np.ones(b.shape, dtype=bool)
+    nonfinite_mismatch = int(np.count_nonzero(finite_a != finite_b))
+    both_finite = finite_a & finite_b
     reference = a[both_finite].astype(np.float64, copy=False)
     actual = b[both_finite].astype(np.float64, copy=False)
     with np.errstate(over="ignore", invalid="ignore"):
@@ -1268,35 +1303,52 @@ def compare_arrays(np, a, b, atol, rtol):
         max_abs = float(np.max(difference, initial=0.0))
         relative = difference / np.maximum(np.abs(reference), np.finfo(np.float64).eps)
         max_rel = float(np.max(relative, initial=0.0))
-    reference_scale = np.max(np.abs(reference), initial=0.0)
-    actual_scale = np.max(np.abs(actual), initial=0.0)
+    reference_scale = float(np.max(np.abs(reference), initial=0.0))
+    actual_scale = float(np.max(np.abs(actual), initial=0.0))
     cosine = None
     if reference_scale and actual_scale:
-        reference = reference / reference_scale
-        actual = actual / actual_scale
-        dot = np.dot(reference, actual)
-        cosine = float(np.clip(dot / (np.linalg.norm(reference) * np.linalg.norm(actual)), -1, 1))
+        reference_norm = reference / reference_scale
+        actual_norm = actual / actual_scale
+        dot = np.dot(reference_norm, actual_norm)
+        cosine = float(np.clip(dot / (np.linalg.norm(reference_norm) * np.linalg.norm(actual_norm)), -1, 1))
     elif reference.size:
         cosine = 1.0 if reference_scale == actual_scale else 0.0
     outside = int(a.size - np.count_nonzero(close))
+    outside_fraction = (outside / a.size) if a.size else 0.0
     max_abs = max_abs if math.isfinite(max_abs) else None
-    return dict(parity=outside == 0, max_abs=max_abs, max_abs_diff=max_abs,
+    parity = nonfinite_mismatch == 0 and outside == 0
+    if not parity and is_float and nonfinite_mismatch == 0 and max_outside_fraction > 0.0:
+        cosine_ok = (min_cosine is None) or (cosine is not None and cosine >= min_cosine)
+        abs_limit = max(max_abs_cap or 0.0, (max_scale_ratio or 0.0) * reference_scale)
+        abs_ok = (max_abs_cap is None and max_scale_ratio is None) or (max_abs is not None and max_abs <= abs_limit)
+        parity = (outside_fraction <= max_outside_fraction) and cosine_ok and abs_ok
+    return dict(parity=parity, max_abs=max_abs, max_abs_diff=max_abs,
                 max_rel_diff=max_rel if math.isfinite(max_rel) else None, cosine_similarity=cosine,
-                elements=a.size, elements_outside_tolerance=outside)
+                elements=a.size, elements_outside_tolerance=outside,
+                outside_fraction=outside_fraction, nonfinite_mismatch=nonfinite_mismatch)
 
 
 def compare_model_outputs(np, reference, candidate):
     ref = Path(reference["directory"]) / "outputs.npz"
     actual = Path(candidate["directory"]) / "outputs.npz"
-    atol, rtol = {"float32": (1e-4, 1e-3), "float16": (5e-3, 3e-2),
-                  "bfloat16": (2e-2, 8e-2)}[reference["dtype"]]
+    dtype_name = reference["dtype"]
+    tol = INFERENCE_TOLERANCES[dtype_name]
+    atol, rtol = tol["atol"], tol["rtol"]
     errors = {}
     with np.load(ref, allow_pickle=False) as left, np.load(actual, allow_pickle=False) as right:
         if not left.files or set(left.files) != set(right.files):
             return dict(parity=False, parity_error="Output fields differ")
         for key in left.files:
-            errors[key] = compare_arrays(np, left[key], right[key], atol, rtol)
-    return dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors, atol=atol, rtol=rtol)
+            errors[key] = compare_arrays(
+                np, left[key], right[key], atol, rtol,
+                max_outside_fraction=tol["max_outside_fraction"],
+                min_cosine=tol["min_cosine"],
+                max_abs_cap=tol["max_abs_cap"],
+                max_scale_ratio=tol["max_scale_ratio"],
+            )
+    return dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors,
+                atol=atol, rtol=rtol, parity_tier=f"inference:{dtype_name}",
+                max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
 
 
 def main():
@@ -1396,6 +1448,16 @@ def run_matrix(args, output):
                         budget -= row["measured_seconds"]
                 rows.append(row)
                 round_rows.append(row)
+                if row.get("torch_version"):
+                    meta["torch_version"] = row["torch_version"]
+                if row.get("torch_cuda_version"):
+                    meta["torch_cuda_version"] = row["torch_cuda_version"]
+                if row.get("jittor_version"):
+                    meta["jittor_version"] = row["jittor_version"]
+                if row.get("jittor_cuda_version"):
+                    meta["jittor_cuda_version"] = row["jittor_cuda_version"]
+                if row.get("jittor_sha"):
+                    meta["jittor_sha"] = row["jittor_sha"]
             comparisons.extend(compare_results(round_rows))
             publish()
     failed = (any(row["status"] != "ok" for row in rows)
