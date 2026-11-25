@@ -537,3 +537,20 @@ def _shape_remainder(self, other):
 
 def _shape_softplus(self, beta=1, threshold=20):
     return nn.softplus(self)
+
+
+def _shape_unbind(self, dim=0):
+    """Share native split cotangents instead of full-size per-row gradients."""
+    import operator
+    dim = operator.index(dim)
+    if not self.ndim or not -self.ndim <= dim < self.ndim:
+        raise IndexError("unbind dimension out of range")
+    dim %= self.ndim
+    length = int(self.shape[dim])
+    if not length:
+        return ()
+    # The public native-backed split already owns placement and multi-output
+    # autograd. Current Tensor is a Var subclass: no separate carrier scope
+    # or alternate split implementation is needed.
+    owner = get_install_context(jt).target_namespace
+    return tuple(part.squeeze(dim) for part in owner.split(self, [1] * length, dim=dim))

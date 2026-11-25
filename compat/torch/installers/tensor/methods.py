@@ -256,6 +256,12 @@ def _bind_native_binary(jt, natives, mark_cpu_like):
     method_api._FAST_BINARY = jt.core._fast_binary
 
 
+def _api_iter(self):
+    if not self.ndim:
+        raise TypeError("iteration over a 0-d tensor")
+    return iter(self.unbind(0))
+
+
 def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     # Var.dtype natively returns jittor's NanoString, which is unhashable and
     # not == to torch dtype objects. Return the canonical immutable frontend
@@ -268,6 +274,9 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _native_cpu_copy = _type_attribute(_NativeVar, "cpu")
     _install_expand_shape_adapter(Var)
     _install_expand_as_grad_adapter(Var)
+    from .shape_api import _shape_unbind
+    Var.unbind = _shape_unbind
+    Var.__iter__ = _api_iter
     _native_operators = {name: getattr(Var, name, None)
                          for name in (*_BINARY_APIS, '__ne__')}
     _bind_native_binary(_owner.jt, _native_operators, _owner._mark_cpu_like)
