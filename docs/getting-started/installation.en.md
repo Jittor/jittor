@@ -70,8 +70,10 @@ PYHIP
 
 `use_cuda` is the runtime's general accelerator switch; `JT_BACKEND=rocm` selects the actual backend.
 This check forbids CPU fallback. Configuration reports a missing HIP runtime development library as
-`libamdhip64.so`; missing hipBLAS or rocPRIM dependencies also fail explicitly. MIOpen and RCCL
-providers remain unimplemented. This check does not establish convolution-library, multi-device
+`libamdhip64.so`; missing hipBLAS or rocPRIM dependencies also fail explicitly. When the SDK
+provides the MIOpen header and library, large FP32 inference convolutions can use bounded MIOpen
+solutions, with the native hipBLAS path also available. RCCL remains unimplemented.
+This check does not establish convolution-library, multi-device
 communication, or arbitrary-model support; see [platform support](../guides/hardware/platform-support.en.md)
 for the validation scope.
 

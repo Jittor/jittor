@@ -35,7 +35,12 @@ def supports_group_norm(x, num_groups, weight=1, bias=0, eps=1e-5):
     if type(num_groups) is not int or num_groups <= 0 or x.shape[1] % num_groups:
         return False
     width = math.prod(x.shape[1:]) // num_groups
-    return (0 < width <= 1048576 and x.shape[0] * num_groups <= 2147483647
+    rows = x.shape[0] * num_groups
+    # One HIP block per group underutilizes the device for very wide, few-row
+    # inputs. The shared parallel reduction is faster for these shapes.
+    if 0 < rows <= 32 and width >= 262144:
+        return False
+    return (0 < width <= 1048576 and rows <= 2147483647
             and all(not isinstance(v, jt.Var) or tuple(v.shape) == (x.shape[1],)
                     for v in (weight, bias)))
 

@@ -185,6 +185,27 @@ def test_group_norm_silu_offer_and_fresh_affine_values():
         np.testing.assert_allclose(changed.numpy(), xhat*2-.5, rtol=2e-5, atol=3e-6)
 
 
+def test_wide_group_norm_uses_parallel_reduction():
+    from jittor.backends.rocm.kernels.normalization import supports_group_norm
+    rng = np.random.RandomState(133)
+    raw = rng.normal(size=(1, 128, 256, 256)).astype("float32")
+    weights = np.linspace(.5, 1.5, 128, dtype="float32")
+    biases = np.linspace(-.1, .1, 128, dtype="float32")
+    expected, _ = normalized(raw, "group", 32)
+    expected = expected * weights.reshape(1, -1, 1, 1) + biases.reshape(1, -1, 1, 1)
+    with jt.no_grad():
+        x, w, b = map(jt.array, (raw, weights, biases))
+        assert not supports_group_norm(x, 32, w, b)
+        assert select_kernel("nn.group_norm", x, 32, w, b, 1e-5) is None
+        out = jt.nn.group_norm(x, 32, w, b)
+        out.sync()
+        assert out.location() == "device" and not out.requires_grad
+        np.testing.assert_allclose(out.numpy(), expected, rtol=2e-5, atol=3e-6)
+        batched = jt.zeros((2, 128, 256, 256))
+        assert supports_group_norm(batched, 32, w, b)
+        assert select_kernel("nn.group_norm", batched, 32, w, b, 1e-5) is not None
+
+
 def test_empty_shapes_and_precision_policy():
     from jittor.backends.rocm.kernels.normalization import supports_group_norm, supports_layer_norm
     with jt.no_grad():

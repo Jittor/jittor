@@ -67,6 +67,27 @@ def test_specs_resolve_only_native_source_and_quote_paths(tmp_path, parent_name)
         blas.name = "cublas"
 
 
+def test_optional_miopen_requires_header_and_library(tmp_path):
+    build = load_build()
+    sdk = sdk_fixture(tmp_path)
+    header = sdk / "include/miopen/miopen.h"
+    header.parent.mkdir()
+    header.touch()
+    missing_library = build.library_build(sdk, ROCM, "hipblas")
+    assert missing_library.libraries == ("hipblas",)
+    assert "HAS_ROCM_MIOPEN" not in missing_library.defines
+    (sdk / "lib64/libMIOpen.so").touch()
+    enabled = build.library_build(sdk, ROCM, "hipblas")
+    assert enabled.libraries == ("hipblas", "MIOpen")
+    assert "-DHAS_ROCM_MIOPEN" in shlex.split(enabled.extra_flags)
+    assert "-lMIOpen" in shlex.split(enabled.extra_flags)
+    assert any(path.endswith("miopen_conv.cc") for path in enabled.sources)
+    header.unlink()
+    missing_header = build.library_build(sdk, ROCM, "hipblas")
+    assert missing_header.libraries == ("hipblas",)
+    assert "HAS_ROCM_MIOPEN" not in missing_header.defines
+
+
 def test_missing_sdk_and_unknown_provider_fail_before_build(tmp_path):
     build = load_build()
     with pytest.raises(RuntimeError, match="development header"):

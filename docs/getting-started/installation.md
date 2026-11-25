@@ -70,7 +70,7 @@ PYHIP
 
 `use_cuda` 是运行时通用的加速器开关；实际后端由 `JT_BACKEND=rocm` 选择。上面的
 检查禁止 CPU 回退。缺少 HIP 运行时开发库时，配置阶段会明确报出 `libamdhip64.so`；
-hipBLAS 和 rocPRIM 缺失也会直接报错。MIOpen 与 RCCL provider 尚未实现；此检查不代表
+hipBLAS 和 rocPRIM 缺失也会直接报错。SDK 同时提供 MIOpen 头文件和库时，大工作区 FP32 推理卷积可使用有界 MIOpen 算法，hipBLAS 路径仍可用。RCCL 尚未实现；此检查不代表
 卷积库、多卡通信或任意模型已经通过验收，后端验证范围见[平台支持](../guides/hardware/platform-support.md)。
 
 ## 需要 Torch 兼容接口时

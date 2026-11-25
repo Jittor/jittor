@@ -12,10 +12,12 @@ class LibraryBuild:
     include_dirs: tuple
     library_dirs: tuple
     libraries: tuple
+    defines: tuple = ()
 
     @property
     def extra_flags(self):
-        args = ["-I" + path for path in self.include_dirs]
+        args = ["-D" + name for name in self.defines]
+        args += ["-I" + path for path in self.include_dirs]
         args += ["-L" + path for path in self.library_dirs]
         args += ["-Wl,-rpath," + path for path in self.library_dirs]
         args += ["-l" + name for name in self.libraries]
@@ -72,10 +74,26 @@ def library_build(rocm_home, backend_root, name):
                                % (library, sdk))
         if str(directory) not in library_dirs:
             library_dirs.append(str(directory))
+    # MIOpen is optional for the existing ROCm inference convolution path.
+    # A complete SDK enables it; otherwise hipBLAS remains self-contained.
+    defines = ()
+    if name == "hipblas":
+        miopen_include = next((path for path in (sdk / "include", sdk / "miopen/include")
+                               if (path / "miopen/miopen.h").is_file()), None)
+        miopen_lib = next((path for path in (sdk / "lib", sdk / "lib64",
+                                             sdk / "miopen/lib", sdk / "miopen/lib64")
+                           if (path / "libMIOpen.so").is_file()), None)
+        if miopen_include is not None and miopen_lib is not None:
+            includes += (str(miopen_include),)
+            if str(miopen_lib) not in library_dirs:
+                library_dirs.append(str(miopen_lib))
+            libraries += ("MIOpen",)
+            relative_sources += ("hipblas/miopen_conv.h", "hipblas/miopen_conv.cc")
+            defines = ("HAS_ROCM_MIOPEN",)
     sources = tuple(str(root / source) for source in relative_sources)
     for source in sources:
         if not Path(source).is_file():
             raise RuntimeError("ROCm provider source is missing: " + source)
     # HIP headers are shared by all providers, including the header-only rocPRIM.
     includes = tuple(dict.fromkeys((str(sdk / "include"),) + includes + (str(root),)))
-    return LibraryBuild(name, sources, includes, tuple(library_dirs), libraries)
+    return LibraryBuild(name, sources, includes, tuple(library_dirs), libraries, defines)

@@ -1839,7 +1839,7 @@ VarHolder* VarHolder::storage_bytes() {
         ready->allocator = source->allocator;
         ready->allocation = source->allocation;
         ready->mem_ptr = static_cast<char*>(source->mem_ptr) - source->storage_offset_bytes;
-        std::atomic_store(&ready->storage_mutation_version, source->storage_version_token());
+        ready->set_storage_version(source->storage_version_token());
         share_group_link(source, ready);
     } else {
         CHECK(bytes == 0) << "Nonempty storage has no allocation address";

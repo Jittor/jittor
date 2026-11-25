@@ -1,7 +1,8 @@
 """Native HIP/ROCm backend provider.
 
 This provider owns the native HIP runtime, hipBLAS/rocPRIM/hipRAND libraries
-and FP32 inference kernels. MIOpen and RCCL are not provided.
+and FP32 inference kernels with optional native MIOpen convolution acceleration.
+RCCL is not provided.
 """
 import os
 import re

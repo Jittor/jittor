@@ -188,6 +188,8 @@ Verdict rocm_norm_rule(PyObject* args, bool group) {
         }
         if (x->shape[0] > INT_MAX / groups) return declines;
         rows = x->shape[0] * groups;
+        // Match the ROCm single-block group normalization predicate.
+        if (rows > 0 && rows <= 32 && width >= 262144) return declines;
     } else {
         if (!PyTuple_CheckExact(extent)) return unknown;
         int rank = PyTuple_GET_SIZE(extent);
