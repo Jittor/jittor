@@ -59,8 +59,10 @@ PyObject* try_rms_norm_cuda(PyObject* x, PyObject* weight, PyObject* epsilon,
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     // The generated code-op constructor normalizes storage strides, just as
     // jt.code does. Source text is owned and cached by the CUDA backend.
+    // Pass eps via DataMap so different eps values share one compiled kernel.
     unique_ptr<VarHolder> result(new VarHolder(make_code(input->shape,
-        input->dtype(), {input, gamma}, "", {}, "", string(text, length), {}, "", {}, "")));
+        input->dtype(), {input, gamma}, "", {}, "", string(text, length), {}, "",
+        DataMap{{"eps", eps}}, "")));
     result->stop_grad();
     return to_py_object<VarHolder*>(result.release());
 }

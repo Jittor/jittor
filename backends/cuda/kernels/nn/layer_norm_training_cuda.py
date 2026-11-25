@@ -20,7 +20,7 @@ _FUSED_BLOCKS = 256
 
 
 
-def _warp_kernels(hidden, eps, backward):
+def _warp_kernels(hidden, backward):
     """The forward and the input gradient with a warp per row.
 
     A block per row is mostly idle at these widths and pays its barriers for
@@ -39,7 +39,7 @@ def _warp_kernels(hidden, eps, backward):
     forward = f"""
     __global__ static void layer_norm_forward_warp(
             const in0_type* x, const in1_type* weight, const in2_type* bias,
-            out0_type* y, out1_type* mean, out2_type* rstd, long long rows) {{
+            out0_type* y, out1_type* mean, out2_type* rstd, long long rows, float eps) {{
         long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
         int lane = threadIdx.x & 31;
         if (row >= rows) return;
@@ -59,7 +59,7 @@ def _warp_kernels(hidden, eps, backward):
             float d = cache[i] - m;
             if (lane + i * 32 < {hidden}) var += d * d;
         }}
-        float r = rsqrtf(jt_ln_allsum(var) / {hidden}.0f + {eps:.9g}f);
+        float r = rsqrtf(jt_ln_allsum(var) / {hidden}.0f + eps);
         if (lane == 0) {{
             mean[row] = out1_type(m);
             rstd[row] = out2_type(r);
@@ -172,7 +172,7 @@ def _warp_kernels(hidden, eps, backward):
 
 
 @lru_cache(maxsize=256)
-def _layer_norm_cuda_sources(hidden, eps, warp, blocks):
+def _layer_norm_cuda_sources(hidden, warp, blocks):
     """Cache immutable programs; each call still builds fresh operators.
 
     CodeOp's grouped VJP receives x, weight, bias, dout, and the three saved
@@ -181,13 +181,14 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks):
     """
     if warp:
         header = '#include "core/executor.h"'
-        forward = _warp_kernels(hidden, eps, False) + f"""
+        forward = _warp_kernels(hidden, False) + f"""
+        float eps = static_cast<float>(data["eps"]);
         long long rows = in0->num / {hidden};
         layer_norm_forward_warp<<<(unsigned)((rows + 7) / 8), 256>>>(
-            in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows);
+            in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows, eps);
         CHECK(0 == cudaGetLastError());
         """
-        backward = _warp_kernels(hidden, eps, True) + f"""
+        backward = _warp_kernels(hidden, True) + f"""
         auto scratch = runtime_executor().alloc_temp(sizeof(float) * {2 * blocks * hidden});
         float* partial = static_cast<float*>(scratch.ptr);
         long long rows = in3->num / {hidden};
@@ -211,7 +212,7 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks):
     __global__ static void layer_norm_forward(
             const in0_type* x, const in1_type* weight,
             const in2_type* bias, out0_type* y,
-            out1_type* mean, out2_type* rstd, int rows) {{
+            out1_type* mean, out2_type* rstd, int rows, float eps) {{
         typedef cub::BlockReduce<float, {threads}> BlockReduce;
         __shared__ typename BlockReduce::TempStorage storage;
         __shared__ float mean_shared;
@@ -263,7 +264,7 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks):
         reduced = BlockReduce(storage).Sum(local);
         if (threadIdx.x == 0) {{
             rstd_shared = rsqrtf(
-                reduced / {hidden}.0f + {eps:.9g}f);
+                reduced / {hidden}.0f + eps);
             rstd[row] = out2_type(rstd_shared);
         }}
         __syncthreads();
@@ -279,9 +280,10 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks):
                 + static_cast<float>(bias[j]));
         }}
     }}
+    float eps = static_cast<float>(data["eps"]);
     int rows = in0->num / {hidden};
     layer_norm_forward<<<rows, {threads}>>>(
-        in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows);
+        in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows, eps);
     CHECK(0 == cudaGetLastError());
     """
     backward = f"""
@@ -437,9 +439,9 @@ def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
     rows = int(x.numel()) // hidden
     warp = hidden <= _WARP_ROW_LIMIT and rows >= _WARP_ROWS_MIN
     blocks = min(_FUSED_BLOCKS, -(-rows // 8)) if warp else 0
-    header, forward, backward = _layer_norm_cuda_sources(hidden, float(eps), warp, blocks)
+    header, forward, backward = _layer_norm_cuda_sources(hidden, warp, blocks)
     y, _, _ = jt.code(
         [shape, (rows,), (rows,)], [x.dtype, "float32", "float32"],
         [x, weight, bias], cuda_header=header, cuda_src=forward,
-        cuda_grad_src=[backward], data={"multi_grad": 1})
+        cuda_grad_src=[backward], data={"multi_grad": 1, "eps": float(eps)})
     return y

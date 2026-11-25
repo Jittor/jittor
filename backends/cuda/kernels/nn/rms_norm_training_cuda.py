@@ -26,7 +26,7 @@ _FUSED_BLOCKS = 256
 
 
 
-def _warp_kernels(hidden, eps, backward):
+def _warp_kernels(hidden, backward):
     """The forward, or the fused backward, with a warp per row; see
     `layer_norm_training_cuda._warp_kernels`. (No comments inside the source:
     `jt.code` lifts the kernels out by their text.)"""
@@ -40,7 +40,7 @@ def _warp_kernels(hidden, eps, backward):
     forward = f"""
     __global__ static void rms_norm_forward_warp(
             const in0_type* x, const in1_type* gamma, out0_type* y, out1_type* rstd,
-            long long rows) {{
+            long long rows, float eps) {{
         long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
         int lane = threadIdx.x & 31;
         if (row >= rows) return;
@@ -53,7 +53,7 @@ def _warp_kernels(hidden, eps, backward):
             cache[i] = j < {hidden} ? static_cast<float>(xr[j]) : 0.0f;
             sq += cache[i] * cache[i];
         }}
-        float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + {eps:.9g}f);
+        float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + eps);
         if (lane == 0) rstd[row] = out1_type(r);
         out0_type* yr = y + row * {hidden};
         #pragma unroll
@@ -136,25 +136,28 @@ def _warp_kernels(hidden, eps, backward):
 
 
 @lru_cache(maxsize=128)
-def _rms_norm_training_cuda_cls(hidden_size, epsilon):
+def _rms_norm_training_cuda_cls(hidden_size):
     threads = 32
     while threads < min(hidden_size, 256):
         threads *= 2
     header = f"#include <{library_resource('cub', 'home')}cub/cub.cuh>"
 
     class RMSNormTrainingCUDA(jt.Function):
-        def execute(self, x, gamma):
+        def execute(self, x, gamma, eps):
             rows = int(x.numel()) // hidden_size
             self.warp = hidden_size <= _WARP_ROW_LIMIT and rows >= _WARP_ROWS_MIN
+            eps_val = float(eps)
             if self.warp:
                 y, rstd = jt.code(
                     [x.shape, (rows,)], [x.dtype, "float32"], [x, gamma],
-                    cuda_src=_warp_kernels(hidden_size, epsilon, False) + f"""
+                    cuda_src=_warp_kernels(hidden_size, False) + f"""
+                    float eps = static_cast<float>(data["eps"]);
                     long long rows = in0->num / {hidden_size};
                     rms_norm_forward_warp<<<(unsigned)((rows + 7) / 8), 256>>>(
-                        in0_p, in1_p, out0_p, out1_p, rows);
+                        in0_p, in1_p, out0_p, out1_p, rows, eps);
                     CHECK(0 == cudaGetLastError());
-                    """)
+                    """,
+                    data={"eps": eps_val})
                 self.saved = x, rstd, gamma
                 return y
             y, rstd = jt.code(
@@ -165,7 +168,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                 cuda_src=f"""
                 __global__ static void rms_norm_forward(
                         const in0_type* x, const in1_type* gamma,
-                        out0_type* y, out1_type* rstd, int rows) {{
+                        out0_type* y, out1_type* rstd, int rows, float eps) {{
                     typedef cub::BlockReduce<float, {threads}> BlockReduce;
                     __shared__ typename BlockReduce::TempStorage storage;
                     __shared__ float rstd_shared;
@@ -180,7 +183,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                     float reduced = BlockReduce(storage).Sum(local);
                     if (threadIdx.x == 0) {{
                         rstd_shared = rsqrtf(
-                            reduced / {hidden_size}.0f + {epsilon:.9g}f);
+                            reduced / {hidden_size}.0f + eps);
                         rstd[row] = out1_type(rstd_shared);
                     }}
                     __syncthreads();
@@ -192,11 +195,13 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                             * static_cast<float>(gamma[j]));
                     }}
                 }}
+                float eps = static_cast<float>(data["eps"]);
                 int rows = in0->num / {hidden_size};
                 rms_norm_forward<<<rows, {threads}>>>(
-                    in0_p, in1_p, out0_p, out1_p, rows);
+                    in0_p, in1_p, out0_p, out1_p, rows, eps);
                 CHECK(0 == cudaGetLastError());
                 """,
+                data={"eps": eps_val},
             )
             self.saved = x, rstd, gamma
             return y
@@ -210,7 +215,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                     [grad_y.shape, gamma.shape, (blocks * hidden_size,)],
                     [grad_y.dtype, gamma.dtype, "float32"],
                     [grad_y, x, rstd, gamma],
-                    cuda_src=_warp_kernels(hidden_size, epsilon, True) + f"""
+                    cuda_src=_warp_kernels(hidden_size, True) + f"""
                     long long rows = in0->num / {hidden_size};
                     rms_norm_backward_fused<<<{blocks}, 256>>>(
                         in0_p, in1_p, in2_p, in3_p, out0_p, out2_p, rows);
@@ -218,7 +223,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                         out2_p, out1_p, {blocks});
                     CHECK(0 == cudaGetLastError());
                     """)
-                return grad_x, grad_gamma
+                return grad_x, grad_gamma, None
             # The gamma gradient is a column sum. A block is 32 channels by 8
             # rows, so a warp reads 32 consecutive channels of one row, and the
             # rows are cut into segments whose partial sums a second kernel
@@ -311,7 +316,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                 CHECK(0 == cudaGetLastError());
                 """,
             )
-            return grad_x, grad_gamma
+            return grad_x, grad_gamma, None
 
     return RMSNormTrainingCUDA
 
@@ -348,5 +353,5 @@ def _supports_rms_norm_training(x, gamma, epsilon=1e-6):
                  dtypes=("float32",),
                  supports=_supports_rms_norm_training)
 def _rms_norm_training_cuda(x, gamma, epsilon=1e-6):
-    cls = _rms_norm_training_cuda_cls(int(x.shape[-1]), float(epsilon))
-    return cls.apply(x, gamma)
+    cls = _rms_norm_training_cuda_cls(int(x.shape[-1]))
+    return cls.apply(x, gamma, float(epsilon))
