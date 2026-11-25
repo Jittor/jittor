@@ -5,6 +5,7 @@
 #include "mem/allocator.h"
 #include "ops/composite/code_op.h"
 #include "ops/op_register.h"
+#include "runtime/backend_streams.h"
 #include "runtime/dispatch_context.h"
 #include "runtime/executor_entry.h"
 #include "runtime/graph_capture.h"
@@ -84,7 +85,10 @@ PyObject* try_snapshot_cuda_step_output(PyObject* source) {
     snapshot->set_stop_grad();
     // The snapshot is owned by the caller and may outlive the graph pool.
     CHECK(snapshot->alloc(get_regular_allocator(device, false)));
+    backend_compute_stream_acquire();
     backend_copy(snapshot->mem_ptr, device, value->mem_ptr, device, value->size, true);
+    if (device.index >= 0 && device.index < 64)
+        backend_compute_stream_release(1ull << device.index);
     snapshot->finish_pending_liveness();
     return to_py_object<VarHolder*>(new VarHolder(move(snapshot)));
 }

@@ -162,6 +162,10 @@ def fused_add_rms_norm(x, residual, weight, eps=1e-6, *, round_before_weight=Tru
         return (total * scale * weight).cast(dtype), total.cast(dtype)
     if offset:
         weight = weight + offset
+    if round_before_weight and _output_requires_grad(x, residual, weight):
+        fused = try_dispatch("nn.add_rms_norm.training", x, residual, weight, eps)
+        if fused is not None:
+            return fused
     acl_backend = _backend_hooks.acl_grouped_add_rms_norm
     if round_before_weight and acl_backend is not None:
         fused = acl_backend(x, residual, weight, eps)
