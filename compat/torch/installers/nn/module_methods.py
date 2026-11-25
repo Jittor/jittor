@@ -14,6 +14,7 @@ from jittor._core.hooks import _RemovableHandle
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
 from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
+from ...checkpoint_linear import finish_deferred_linear_parameter
 from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
@@ -599,12 +600,25 @@ def _apply_loaded_parameters(self, state_dict, assign, recurse=True):
         return self._named_vars("parameters", recurse=False)
 
     trainable = set()
+    has_deferred = False
     try:
         for name, parameter in named_parameters():
+            has_deferred = has_deferred or getattr(parameter, "_jittor_checkpoint_linear_meta", False)
             if parameter.requires_grad:
                 trainable.add(name)
     except EXPECTED as exc:
         swallowed("torch/installers/nn.py _load_state_dict: read trainable parameters", exc)
+    deferred_assignments = []
+    if has_deferred:
+        for key, value in state_dict.items():
+            target = _find_state_target(self, str(key))
+            if not getattr(target, "_jittor_checkpoint_linear_meta", False):
+                continue
+            if not assign:
+                raise RuntimeError("Deferred Linear checkpoint parameters require assign=True")
+            if getattr(getattr(value, "device", None), "type", None) == "meta" or is_lazy(value):
+                raise RuntimeError(f"Cannot assign meta checkpoint storage to deferred Linear parameter {key!r}")
+            deferred_assignments.append(target)
     # A lazy-to-lazy checkpoint carries no tensor contents to copy.
     if any(is_lazy(value) for value in state_dict.values()):
         state_dict = {key: value for key, value in state_dict.items() if not is_lazy(value)}
@@ -635,6 +649,8 @@ def _apply_loaded_parameters(self, state_dict, assign, recurse=True):
     # copies. The native loader must not invoke them a second time.
     with self._state_dict_hook_scope(False):
         _ORIG_MODULE_LOAD_STATE_DICT(self, load_state)
+    for target in deferred_assignments:
+        finish_deferred_linear_parameter(target)
     try:
         for name, parameter in named_parameters():
             if name in trainable and parameter.is_stop_grad():
