@@ -98,13 +98,13 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     >>> w = jt.randn(32, 24, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    stride = _pair(stride)
-    dilation = _pair(dilation)
+    stride = tuple(_pair(stride))
+    dilation = tuple(_pair(dilation))
     if weight.ndim != 4:
         raise jt.JittorShapeError("Conv2d expected a 4-D weight, got shape {}".format(list(weight.shape)))
     if isinstance(padding, str):
         x, padding = _resolve_string_padding(x, padding, weight.shape[-2:], stride, dilation)
-    padding = _pair(padding)
+    padding = tuple(_pair(padding))
     if any(len(values) != 2 for values in (padding, stride, dilation)):
         raise ValueError("Conv2d stride, padding and dilation must each have two entries")
     if (any(value <= 0 for values in (stride, dilation) for value in values)

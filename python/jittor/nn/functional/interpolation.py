@@ -2,6 +2,7 @@
 
 import math
 from numbers import Integral, Real
+from operator import index
 
 import jittor as jt
 from jittor._core.dtypes import dtype_name
@@ -26,9 +27,12 @@ def _antialias_size(input_size, size, scale_factor, recompute_scale_factor):
         if recompute_scale_factor:
             raise ValueError("recompute_scale_factor requires scale_factor")
         size = (size, size) if isinstance(size, Integral) else tuple(size)
-        if len(size) != 2 or not all(isinstance(extent, Integral) for extent in size):
+        if len(size) != 2:
             raise ValueError("size must have two integer spatial dimensions")
-        return tuple(map(int, size)), (None, None)
+        try:
+            return tuple(map(index, size)), (None, None)
+        except TypeError as error:
+            raise ValueError("size must have two integer spatial dimensions") from error
     factors = (scale_factor, scale_factor) if isinstance(scale_factor, Real) else tuple(scale_factor)
     if len(factors) != 2 or not all(
         isinstance(factor, Real) and math.isfinite(factor) and factor > 0 for factor in factors

@@ -754,6 +754,19 @@ class TestInterpolate(Base):
 
         both_devices(body)
 
+    def test_antialias_accepts_scalar_tensor_sizes(self):
+        def body(device):
+            source = torch.arange(48, device=device, dtype=torch.float32).reshape(1, 2, 4, 6)
+            height, width = torch.tensor([3, 5], device=device)
+            expected = torch.nn.functional.interpolate(source, size=(3, 5),
+                                                       mode="bilinear", antialias=True)
+            result = torch.nn.functional.interpolate(source, size=(height, width),
+                                                     mode="bilinear", antialias=True)
+            self.assertEqual(result.device, source.device)
+            self.ac(result.cpu().numpy(), expected.cpu().numpy(), msg=device)
+
+        both_devices(body)
+
     def test_interpolate_nearest_upsample(self):
         x = np.random.RandomState(40).randn(1, 2, 3, 3).astype("float32")
         def body(dev):

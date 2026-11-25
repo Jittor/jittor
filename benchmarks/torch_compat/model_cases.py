@@ -16,6 +16,7 @@ class ModelCase:
     dtype: str = "float32"
     checkpoint: str = ""
     options: dict = field(default_factory=dict)
+    masked_outputs: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -43,9 +44,9 @@ MODEL_CASES = {
 }
 
 
-def hf(group, cls, config, task, shape, *, dtype="float32", checkpoint="", **config_options):
+def hf(group, cls, config, task, shape, *, dtype="float32", checkpoint="", masked_outputs=None, **config_options):
     return ModelCase(group, "transformers", cls, task, shape, dtype, checkpoint,
-                     {"config_type": config, "config": config_options})
+                     {"config_type": config, "config": config_options}, masked_outputs or {})
 
 
 MODEL_CASES.update({
@@ -68,7 +69,9 @@ MODEL_CASES.update({
                             ("mask-rcnn", "maskrcnn_resnet50_fpn"))
     },
     "grounding-dino": hf("cv", "GroundingDinoForObjectDetection", "", "text-guided detection", (480, 640),
-                         checkpoint="IDEA-Research/grounding-dino-tiny"),
+                         checkpoint="IDEA-Research/grounding-dino-tiny",
+                         masked_outputs={"output.logits": -1, "output.enc_outputs_class": -1,
+                                         "output.encoder_logits": -1, "output.enc_outputs_coord_logits": 1}),
     "owlv2": hf("cv", "Owlv2ForObjectDetection", "", "text-guided detection", (480, 640),
                  checkpoint="google/owlv2-base-patch16-ensemble"),
     "unet": ModelCase("cv", "diffusers", "UNet2DModel", "U-Net forward", (1, 3, 64, 64)),
@@ -78,6 +81,8 @@ MODEL_CASES.update({
               checkpoint="facebook/sam-vit-base"),
     "sam2": hf("cv", "Sam2Model", "", "image prompt segmentation", (512, 640),
                checkpoint="facebook/sam2.1-hiera-tiny"),
+    "sam2-large": hf("cv", "Sam2Model", "", "image prompt segmentation", (512, 640),
+                     checkpoint="facebook/sam2.1-hiera-large"),
     "sam3": hf("cv", "Sam3Model", "", "text-guided segmentation", (512, 640),
                checkpoint="facebook/sam3"),
     "bert": hf("nlp", "BertModel", "bert", "text encoder", (1, 512)),
@@ -156,13 +161,14 @@ MODEL_CASES.update({
 
 
 class Inputs:
-    def __init__(self, torch, seed, dtype):
+    def __init__(self, torch, seed, dtype, processed=None):
         import numpy as np
 
         self.torch = torch
         self.random = np.random.default_rng(seed)
         self.dtype = getattr(torch, dtype)
         self.tensors = []
+        self.processed = processed
 
     def tensor(self, array, dtype):
         value = self.torch.from_numpy(array).to(device="cuda", dtype=dtype)
@@ -215,22 +221,39 @@ def ultralytics_model(torch, case, assets, inputs):
     return PreparedModel(model, (inputs.real(case.shape).sigmoid(),))
 
 
-def processor_inputs(torch, case, model, assets, inputs):
-    from transformers import AutoProcessor
+def needs_processor(case):
+    return (case.scope in ("text-guided detection", "text-guided segmentation", "image prompt segmentation",
+                           "vision-language prefill") or case.model == "Siglip2Model")
 
-    processor = AutoProcessor.from_pretrained(assets, local_files_only=True)
+
+def processor_batch(case, assets, inputs):
+    if case.model == "Sam2Model":
+        from transformers import Sam2Processor as factory
+    else:
+        from transformers import AutoProcessor as factory
+
+    processor = factory.from_pretrained(assets, local_files_only=True)
     image = inputs.image(case.shape)
     if case.scope == "image prompt segmentation":
-        batch = processor(images=image, input_points=[[[case.shape[1] // 2, case.shape[0] // 2]]],
-                          input_labels=[[1]], return_tensors="pt")
-    elif case.scope == "vision-language prefill":
+        point = [case.shape[1] // 2, case.shape[0] // 2]
+        points, labels = ([[[point]]], [[[1]]]) if case.model == "Sam2Model" else ([[point]], [[1]])
+        return processor(images=image, input_points=points, input_labels=labels, return_tensors="pt")
+    if case.scope == "vision-language prefill":
         content = [{"type": "image", "image": image}, {"type": "text", "text": "Describe this image."}]
         prompt = processor.apply_chat_template([{"role": "user", "content": content}],
                                                tokenize=False, add_generation_prompt=True)
-        batch = processor(text=[prompt], images=[image], return_tensors="pt")
-    else:
-        batch = processor(images=image, text=["a person"], return_tensors="pt")
+        return processor(text=[prompt], images=[image], return_tensors="pt")
+    return processor(images=image, text=["a person"], return_tensors="pt")
+
+
+def processor_inputs(torch, case, model, assets, inputs):
     supported = signature(model.forward).parameters
+    if inputs.processed:
+        import numpy as np
+
+        with np.load(inputs.processed, allow_pickle=False) as arrays:
+            return {key: inputs.place(torch.from_numpy(arrays[key])) for key in arrays.files if key in supported}
+    batch = processor_batch(case, assets, inputs)
     return {key: inputs.place(value) for key, value in batch.items()
             if key in supported and isinstance(value, torch.Tensor)}
 
@@ -249,8 +272,7 @@ def transformer_model(torch, case, assets, inputs):
     text_config = model.config.get_text_config()
     kwargs = {}
     forward = None
-    if case.scope in ("text-guided detection", "text-guided segmentation", "image prompt segmentation",
-                      "vision-language prefill") or case.model == "Siglip2Model":
+    if needs_processor(case):
         kwargs = processor_inputs(torch, case, model, assets, inputs)
     elif case.scope in ("image features", "semantic mask prediction"):
         kwargs["pixel_values"] = inputs.real(case.shape)
@@ -265,7 +287,17 @@ def transformer_model(torch, case, assets, inputs):
     elif case.scope == "forecast":
         kwargs["past_values"] = inputs.real(case.shape)
     elif case.scope == "greedy speech synthesis":
-        kwargs.update(input_ids=inputs.ids(case.shape, 1000), do_sample=False, max_new_tokens=32)
+        import numpy as np
+
+        max_length = model.generation_config.semantic_config["max_input_semantic_length"]
+        batch, length = case.shape
+        tokens = np.zeros((batch, max_length), dtype=np.int64)
+        tokens[:, :length] = inputs.random.integers(0, 1000, size=case.shape, dtype=np.int64)
+        mask = np.zeros_like(tokens)
+        mask[:, :length] = 1
+        kwargs.update(input_ids=inputs.tensor(tokens, torch.int64),
+                      attention_mask=inputs.tensor(mask, torch.int64), do_sample=False,
+                      semantic_max_new_tokens=32)
         forward = model.generate
     else:
         kwargs["input_ids"] = inputs.ids(case.shape, text_config.vocab_size, low=3)
@@ -363,7 +395,7 @@ def cosyvoice_model(torch, case, assets, inputs):
     return PreparedModel(generator, kwargs={"speech_feat": inputs.real(case.shape)}, forward=generator.inference)
 
 
-def prepare_model(torch, name, assets_root, seed):
+def prepare_model(torch, name, assets_root, seed, processed=None):
     from workloads import deterministic_init
 
     case = MODEL_CASES[name]
@@ -373,7 +405,7 @@ def prepare_model(torch, name, assets_root, seed):
     if case.checkpoint and assets is None:
         raise FileNotFoundError(f"{name} requires a local snapshot of {case.checkpoint} at --model-assets/{name}")
     torch.manual_seed(seed)
-    inputs = Inputs(torch, seed, case.dtype)
+    inputs = Inputs(torch, seed, case.dtype, processed)
     result = LOADERS[case.loader](torch, case, assets, inputs)
     model = result.model.eval()
     if assets is None:

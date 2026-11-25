@@ -48,6 +48,55 @@ def log1p(x):
     return jt.ops.log1p(x)
 
 
+def logit(input, eps=None, *, out=None):
+    """Log odds with Torch's optional clipping and boundary gradients."""
+    from . import jt
+    from jittor._core.dtypes import dtype_name
+    from ...context import get_install_context
+    from ...types import _dtype_to_str
+
+    name = dtype_name(input.dtype)
+    if name.startswith("complex"):
+        raise RuntimeError("logit is not implemented for complex tensors")
+    if name == "bool" or name.startswith(("int", "uint")):
+        torch = get_install_context(jt).target_namespace
+        name = _dtype_to_str(torch.get_default_dtype())
+    compute = "float32" if name in ("float16", "bfloat16") else name
+    value = input.cast(compute)
+    eps = -1.0 if eps is None else float(eps)
+
+    def forward(value):
+        if eps >= 0:
+            value = jt.where(value < eps, eps, jt.where(value > 1 - eps, 1 - eps, value))
+        return jt.log(value) - jt.ops.log1p(-value)
+
+    if value.requires_grad and not jt.flags.no_grad:
+        if out is not None:
+            raise RuntimeError("logit with out= does not support automatic differentiation")
+
+        class Logit(jt.Function):
+            def execute(self, value):
+                self.value = value
+                return forward(value)
+
+            def grad(self, upstream):
+                x = self.value
+                derivative = upstream / (x * (1 - x))
+                if eps < 0:
+                    return jt.where((x < 0) | (x > 1), float("nan"), derivative)
+                return jt.where((x < eps) | (x > 1 - eps), 0, derivative)
+
+        result = Logit()(value)
+    else:
+        result = forward(value)
+    result = result.cast(name)
+    if out is not None:
+        if out.shape != result.shape:
+            out.resize_(result.shape)
+        return out.copy_(result)
+    return result
+
+
 def reciprocal(x):
     """Compute the elementwise multiplicative reciprocal."""
     return 1.0 / x

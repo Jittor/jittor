@@ -76,6 +76,21 @@ def test_cpu_clamp_bounds_do_not_allocate_cuda_memory():
         assert torch.cuda.max_memory_allocated() == baseline
 
 
+@pytest.mark.parametrize("device, ambient", [("cpu", "cuda"), ("cuda", "cpu")])
+def test_clamp_scalar_bounds_follow_input_device(device, ambient):
+    from jittor._core.var import device_scope_like
+    import torch
+
+    with _cuda_runtime(), torch.no_grad():
+        source = torch.tensor([-1, 0, 2, 3], dtype=torch.int32, device=device)
+        with device_scope_like(torch.empty(1, device=ambient)):
+            upper = source.clip(max=2)
+            both = source.clamp(0, 2)
+        assert upper.device == both.device == source.device
+        np.testing.assert_array_equal(upper.cpu().numpy(), [-1, 0, 2, 2])
+        np.testing.assert_array_equal(both.cpu().numpy(), [0, 0, 2, 2])
+
+
 @pytest.mark.parametrize("spatial_shape", [(6, 8), (4, 6, 8)])
 def test_cpu_grid_operations_do_not_allocate_cuda_memory(spatial_shape):
     import torch

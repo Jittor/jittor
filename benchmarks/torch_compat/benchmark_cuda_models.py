@@ -56,6 +56,8 @@ Use --case ecosystem for inference presets spanning CV, NLP, generation,
 audio, graphs and forecasting. --list prints the scope of these presets.
 Synthetic input shapes and deterministic weights are used for architecture
 presets. Supply local snapshots via --model-assets for checkpoint presets.
+With a reference Python, image and text processors run once on the host and
+both CUDA workers read the same input tensors. Preprocessing is outside timing.
 Ecosystem eager runs suspend automatic graph replay to provide an eager
 baseline. --model-mode reduce-overhead explicitly measures replay.
 """
@@ -82,7 +84,7 @@ import tempfile
 from time import monotonic, perf_counter
 
 from run import lab_root, list_workloads
-from model_cases import MODEL_CASES, prepare_model
+from model_cases import MODEL_CASES, Inputs, needs_processor, prepare_model, processor_batch
 from worker import import_torch
 
 
@@ -799,13 +801,15 @@ def output_tensors(torch, result, prefix="output"):
             yield from output_tensors(torch, item, f"{prefix}.{index}")
 
 
-def output_array(np, torch, tensor):
+def output_array(np, torch, tensor, *, key="output", infinity_sign=None):
     value = tensor.detach().cpu()
     if value.dtype in (torch.bfloat16, torch.float16):
         value = value.float()
     array = value.numpy()
-    if not np.isfinite(array).all():
-        raise RuntimeError("Nonfinite inference output")
+    finite = np.isfinite(array)
+    if not finite.all():
+        if infinity_sign is None or not finite.any() or not (finite | (array == infinity_sign * np.inf)).all():
+            raise RuntimeError(f"Unexpected nonfinite inference values in {key}")
     return array
 
 
@@ -817,10 +821,15 @@ def run_model(job, directory, torch, jt, np):
     configure(torch, "cuda", False, False, job["runtime"])
     sync = Synchronizer(torch, job["runtime"], "cuda")
     start = perf_counter()
-    forward, inputs, model, assets = prepare_model(torch, job["case"], job["model_assets"], job["seed"])
+    forward, inputs, model, assets = prepare_model(
+        torch, job["case"], job["model_assets"], job["seed"], job.get("processed_inputs"))
     residency = {"inputs": [cuda_residency(torch, jt, tensor) for tensor in inputs],
                  "weight": cuda_residency(torch, jt, next(model.parameters()))}
     if job["mode"] == "reduce-overhead":
+        if jt is None and MODEL_CASES[job["case"]].loader == "recurrent":
+            from torch._dynamo import config
+
+            config.allow_rnn = True
         forward = torch.compile(forward, mode="reduce-overhead", dynamic=False)
     sync([])
     setup_s = perf_counter() - start
@@ -839,7 +848,9 @@ def run_model(job, directory, torch, jt, np):
     replay_before = dict(getattr(forward, "stats", {}))
     outputs, measurements = timed_calls(directory, job, call, index)
     residency["outputs"] = {key: cuda_residency(torch, jt, tensor) for key, tensor in outputs.items()}
-    arrays = {key: output_array(np, torch, tensor) for key, tensor in outputs.items()}
+    masked_outputs = MODEL_CASES[job["case"]].masked_outputs
+    arrays = {key: output_array(np, torch, tensor, key=key, infinity_sign=masked_outputs.get(key))
+              for key, tensor in outputs.items()}
     np.savez_compressed(directory / "outputs.npz", **arrays)
     execution = job["mode"]
     replay = {}
@@ -863,8 +874,39 @@ def run_model(job, directory, torch, jt, np):
     package = {"pyg": "torch-geometric", "chronos": "chronos-forecasting"}.get(loader, loader)
     dependency = None if loader in ("recurrent", "cosyvoice", "torchvision") else {package: version(package)}
     return dict(execution=execution, measured_replay=replay, replay_refused=getattr(forward, "refused", None),
-                dependency=dependency, weights=str(assets) if assets else "deterministic initialization",
+                dependency=dependency, weights=str(assets.resolve()) if assets else "deterministic initialization",
                 setup_s=setup_s, warmups=warmups, measurements=measurements, residency=residency)
+
+
+def prepare_shared_inputs(args, output, job):
+    inputs = output / "inputs"
+    inputs.mkdir(exist_ok=True)
+    path = inputs / (job["case"] + ".npz")
+    if not path.exists():
+        spec = path.with_suffix(".json")
+        write_json(spec, job)
+        env = worker_env(args, output, "torch")
+        env["CUDA_VISIBLE_DEVICES"] = ""
+        with path.with_suffix(".log").open("w") as log:
+            subprocess.run([args.torch_python, str(Path(__file__).resolve()), "--preprocess", str(spec)],
+                           env=env, stdout=log, stderr=subprocess.STDOUT,
+                           timeout=args.setup_timeout, check=True)
+    return dict(processed_inputs=str(path), input_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def preprocess(spec):
+    import numpy as np
+
+    torch = import_torch("torch")
+    job = json.loads(spec.read_text())
+    name = job["case"]
+    case = MODEL_CASES[name]
+    batch = processor_batch(case, Path(job["model_assets"]) / name, Inputs(torch, job["seed"], case.dtype))
+    arrays = {key: (value.float() if value.dtype == torch.bfloat16 else value).numpy()
+              for key, value in batch.items() if isinstance(value, torch.Tensor)}
+    if not arrays:
+        raise RuntimeError("Model processor returned no tensors")
+    np.savez(spec.with_suffix(".npz"), **arrays)
 
 
 def limit_cv_batches(job, steps):
@@ -1011,26 +1053,48 @@ def run_worker(spec):
     write_json(directory / "result.json", job)
 
 
+def compare_training(np, reference, candidate):
+    expected, actual = reference["rank_results"], candidate["rank_results"]
+    if len(expected) != len(actual):
+        return dict(same_inputs=False, parity=False, comparable=False,
+                    parity_error="Training rank counts differ")
+    keys = ("training_input_sha256", "initial_state_sha256")
+    inputs_match = all(left.get(key) is not None and left[key] == right.get(key)
+                       for left, right in zip(expected, actual) for key in keys)
+    errors = []
+    for rank, (left, right) in enumerate(zip(expected, actual)):
+        expected_steps = [row["step"] for row in left["records"]]
+        actual_steps = [row["step"] for row in right["records"]]
+        if expected_steps != actual_steps:
+            errors.append(dict(rank=rank, parity_error="Training steps differ"))
+            continue
+        reference_loss = np.array([row["loss"] for row in left["records"]])
+        candidate_loss = np.array([row["loss"] for row in right["records"]])
+        failed = np.flatnonzero(~np.isclose(reference_loss, candidate_loss, atol=0.02, rtol=0.03))
+        if failed.size:
+            first = failed[0]
+            errors.append(dict(rank=rank, first_step=expected_steps[first], steps_outside_tolerance=int(failed.size),
+                               reference_loss=float(reference_loss[first]), candidate_loss=float(candidate_loss[first]),
+                               max_abs=float(np.abs(reference_loss - candidate_loss).max())))
+    return dict(same_inputs=inputs_match, parity=not errors, comparable=inputs_match and not errors,
+                loss_errors=errors)
+
+
 def compare_pair(reference, candidate):
     import numpy as np
 
     kind = reference["kind"]
     if kind == "training":
-        keys = ("training_input_sha256", "initial_state_sha256")
-        rank_pairs = list(zip(reference["rank_results"], candidate["rank_results"]))
-        inputs_match = all(left.get(key) is not None and left[key] == right.get(key)
-                           for left, right in rank_pairs for key in keys)
-        loss_matches = all(np.allclose([row["loss"] for row in left["records"]],
-                                       [row["loss"] for row in right["records"]], atol=0.02, rtol=0.03)
-                           for left, right in rank_pairs)
-        return dict(same_inputs=inputs_match, parity=loss_matches, comparable=inputs_match and loss_matches)
+        return compare_training(np, reference, candidate)
     dependencies_match = all(reference["versions"].get(key) == candidate["versions"].get(key)
                              for key in ("diffusers", "transformers"))
     if kind == "model":
         output = compare_model_outputs(np, reference, candidate)
         dependencies_match = dependencies_match and reference["dependency"] == candidate["dependency"]
-        output.update(same_dependencies=dependencies_match,
-                      comparable=output["parity"] and dependencies_match
+        inputs_match = (reference["seed"] == candidate["seed"]
+                        and reference.get("input_sha256") == candidate.get("input_sha256"))
+        output.update(same_dependencies=dependencies_match, same_inputs=inputs_match,
+                      comparable=output["parity"] and dependencies_match and inputs_match
                       and reference["weights"] == candidate["weights"])
         return output
     if kind == "wan":
@@ -1105,10 +1169,13 @@ def compare_arrays(np, a, b, atol, rtol):
     if a.shape != b.shape or a.dtype != b.dtype:
         return dict(parity=False, reference_shape=a.shape, candidate_shape=b.shape,
                     reference_dtype=str(a.dtype), candidate_dtype=str(b.dtype))
-    equal = (np.allclose(a, b, atol=atol, rtol=rtol)
-             if np.issubdtype(a.dtype, np.floating) else np.array_equal(a, b))
-    max_abs = float(np.max(np.abs(a.astype(np.float64) - b.astype(np.float64)))) if a.size else 0.0
-    return dict(parity=bool(equal), max_abs=max_abs)
+    close = np.isclose(a, b, atol=atol, rtol=rtol) if np.issubdtype(a.dtype, np.floating) else (a == b)
+    both_finite = np.isfinite(a) & np.isfinite(b)
+    with np.errstate(invalid="ignore"):
+        difference = np.abs(a.astype(np.float64) - b.astype(np.float64))
+    max_abs = float(np.max(difference, where=both_finite, initial=0.0))
+    outside = int(a.size - np.count_nonzero(close))
+    return dict(parity=outside == 0, max_abs=max_abs, elements=a.size, elements_outside_tolerance=outside)
 
 
 def compare_model_outputs(np, reference, candidate):
@@ -1128,6 +1195,9 @@ def compare_model_outputs(np, reference, candidate):
 def main():
     if sys.argv[1:2] == ["--worker"]:
         run_worker(Path(sys.argv[2]))
+        return 0
+    if sys.argv[1:2] == ["--preprocess"]:
+        preprocess(Path(sys.argv[2]))
         return 0
     args = parse_args()
     if args.output_dir:
@@ -1185,6 +1255,8 @@ def run_matrix(args, output):
     for name in args.case:
         executions = execution_order(args, name)
         rounds = args.rounds or (1 if len(args.case) > 1 and name not in WAN_CASES else 2)
+        processed = None
+        preprocessing_error = None
         for round_id in range(1, 2 if name == VIDEO else rounds + 1):
             budget = args.measurement_timeout
             round_rows = []
@@ -1200,8 +1272,20 @@ def run_matrix(args, output):
                     row = dict(phase, status=status, error=str(error))
                     print(f"{name} {runtime}: {error}", flush=True)
                 else:
-                    row = run_one(args, output, job, budget)
-                    budget -= row["measured_seconds"]
+                    if (job["kind"] == "model" and args.torch_python
+                            and needs_processor(MODEL_CASES[name]) and processed is None
+                            and preprocessing_error is None):
+                        try:
+                            processed = prepare_shared_inputs(args, output, job)
+                        except (OSError, subprocess.SubprocessError) as error:
+                            preprocessing_error = str(error)
+                    if preprocessing_error is not None:
+                        row = dict(job, status="failed", error=preprocessing_error,
+                                   directory=str(output / "inputs"))
+                    else:
+                        job.update(processed or {})
+                        row = run_one(args, output, job, budget)
+                        budget -= row["measured_seconds"]
                 rows.append(row)
                 round_rows.append(row)
             comparisons.extend(compare_results(round_rows))

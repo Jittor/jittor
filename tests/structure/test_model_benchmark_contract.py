@@ -104,6 +104,34 @@ class TestModelBenchmarkContract(unittest.TestCase):
         self.assertEqual(result["jittor_compiled_ms"], 0.5)
         self.assertEqual(result["jittor_over_torch"], 1.5)
         self.assertFalse(result["jittor_checks"]["jittor_compiled"]["parity"])
+        mismatch = result["jittor_checks"]["jittor_compiled"]["output_errors"]["batch.1.0"]
+        self.assertEqual(mismatch["elements_outside_tolerance"], 1)
+
+    def test_cuda_training_parity_reports_first_failed_step(self):
+        rank = dict(training_input_sha256="inputs", initial_state_sha256="weights",
+                    records=[dict(step=0, loss=1.0), dict(step=1, loss=0.8), dict(step=2, loss=0.6)])
+        reference = dict(kind="training", rank_results=[rank])
+        candidate = copy.deepcopy(reference)
+        candidate["rank_results"][0]["records"][1]["loss"] = 0.5
+        result = cuda_runner.compare_pair(reference, candidate)
+        self.assertTrue(result["same_inputs"])
+        self.assertFalse(result["comparable"])
+        self.assertEqual(result["loss_errors"], [
+            dict(rank=0, first_step=1, steps_outside_tolerance=1, reference_loss=0.8,
+                 candidate_loss=0.5, max_abs=0.8 - 0.5),
+        ])
+
+    def test_cuda_logit_masks_compare_infinities_at_the_same_positions(self):
+        import numpy as np
+
+        reference = np.array([1.0, -np.inf, 2.0], dtype=np.float32)
+        same = cuda_runner.compare_arrays(np, reference, reference, 1e-4, 1e-3)
+        self.assertTrue(same["parity"])
+        self.assertEqual(same["max_abs"], 0.0)
+        candidate = np.array([-np.inf, 1.0, 2.0], dtype=np.float32)
+        moved_mask = cuda_runner.compare_arrays(np, reference, candidate, 1e-4, 1e-3)
+        self.assertFalse(moved_mask["parity"])
+        self.assertEqual(moved_mask["elements_outside_tolerance"], 2)
 
     def test_matching_contract_produces_ratio(self):
         pair = {r: measurement(r) for r in ("torch", "jittor")}

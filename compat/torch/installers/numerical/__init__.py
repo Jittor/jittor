@@ -1497,6 +1497,8 @@ def install_parity(ctx):
             setattr(special, name, value)
     special.expit = getattr(g, "sigmoid")
     special.entr = _special_entr
+    from .elementwise import logit
+    special.logit = logit
     g.special = special
 
 def _special_entr(input):
