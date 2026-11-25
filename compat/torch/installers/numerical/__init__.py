@@ -1118,7 +1118,7 @@ register_fidelity(
     "layout, and requires_grad semantics are not implemented",
 )
 
-from .signal import stft
+from .signal import istft, stft
 
 register_fidelity(
     "torch.stft",
@@ -1127,6 +1127,14 @@ register_fidelity(
     "native STFT on the input's device with waveform/window gradients and "
     "complex64 or real/imag output; CPU and CUDA verified; float16, bfloat16 "
     "and float64 inputs are transformed in float32 and return complex64",
+)
+register_fidelity(
+    "torch.istft",
+    istft,
+    Fidelity.APPROXIMATE,
+    "native ISTFT on the input's device with overlap-add window normalization; "
+    "CPU and CUDA verified; float16, bfloat16 and float64 inputs are "
+    "transformed in float32",
 )
 
 def _bind_missing(target, name, implementation):
@@ -1525,3 +1533,5 @@ def install_signal(ctx):
         g.kaiser_window = kaiser_window
     if not hasattr(g, "stft"):
         g.stft = stft
+    if not hasattr(g, "istft"):
+        g.istft = istft

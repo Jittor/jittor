@@ -177,3 +177,60 @@ def test_stft_circular_padding_rejects_multiple_wraps():
                 pad_mode="circular",
                 return_complex=True,
             )
+
+
+@pytest.mark.parametrize("center", [True, False])
+@pytest.mark.parametrize("normalized", [False, True])
+@pytest.mark.parametrize("onesided", [True, False])
+@pytest.mark.parametrize("use_cuda", _DEVICES)
+def test_istft_roundtrip_on_cpu_and_cuda(center, normalized, onesided, use_cuda):
+    with jt.runtime.scope(use_cuda=use_cuda):
+        t = torch.arange(257, dtype=torch.float32)
+        samples = torch.stack(((0.1 * t).sin(), (0.3 * t).cos()))
+        window = torch.hann_window(32)
+        spec = torch.stft(
+            samples, 32, hop_length=8, win_length=32, window=window,
+            center=center, normalized=normalized, onesided=onesided,
+            return_complex=True,
+        )
+        restored = torch.istft(
+            spec, 32, hop_length=8, win_length=32, window=window,
+            center=center, normalized=normalized, onesided=onesided,
+            length=257 if center else None,
+        )
+        if center:
+            assert tuple(restored.shape) == (2, 257)
+            np.testing.assert_allclose(
+                restored.detach().cpu().numpy(),
+                samples.detach().cpu().numpy(),
+                rtol=2e-5,
+                atol=3e-5,
+            )
+        else:
+            # With center=False, interior region away from edge taper matches exactly
+            interior = slice(32, restored.shape[-1] - 32)
+            np.testing.assert_allclose(
+                restored[:, interior].detach().cpu().numpy(),
+                samples[:, interior].detach().cpu().numpy(),
+                rtol=2e-5,
+                atol=3e-5,
+            )
+
+
+@pytest.mark.parametrize("use_cuda", _DEVICES)
+def test_istft_real_imag_and_unbatched_no_host_copy(use_cuda):
+    with jt.runtime.scope(use_cuda=use_cuda):
+        t = torch.arange(128, dtype=torch.float32)
+        samples = (0.2 * t).sin()
+        window = torch.hann_window(32)
+        spec_ri = torch.stft(samples, 32, hop_length=8, window=window, return_complex=False)
+        with patch.object(torch.Tensor, "numpy", side_effect=AssertionError("host read")):
+            restored = torch.istft(spec_ri, 32, hop_length=8, window=window, length=128)
+            restored.sync()
+        assert tuple(restored.shape) == (128,)
+        np.testing.assert_allclose(
+            restored.detach().cpu().numpy(),
+            samples.detach().cpu().numpy(),
+            rtol=2e-5,
+            atol=3e-5,
+        )
