@@ -20,6 +20,7 @@ namespace jittor {
 
 struct DualAllocation {
     size_t ref_cnt;
+    size_t nbytes;
     void* host_ptr, * device_ptr;
     size_t host_allocation, device_allocation;
 };
@@ -50,6 +51,7 @@ struct CudaDualAllocator : Allocator {
         allocation = free_ids[n_free_ids];
         auto& da = allocations[allocation];
         da.ref_cnt = 1;
+        da.nbytes = size;
         da.host_ptr = cuda_dual_host_allocator.alloc(size, da.host_allocation);
         da.device_ptr = cuda_dual_device_allocator.alloc(size, da.device_allocation);
         return da.device_ptr;
@@ -70,6 +72,9 @@ struct CudaDualAllocator : Allocator {
         return true;
     };
     bool can_share() const override { return true; }
+    size_t allocation_nbytes(size_t allocation) override {
+        return allocations[allocation].nbytes;
+    }
 
     inline DualAllocation get_dual_allocation(const size_t& allocation) {
         return allocations[allocation];
@@ -98,6 +103,9 @@ struct DelayFree final : Allocator {
         return cuda_dual_allocator.share_with(size, allocation, offset);
     };
     bool can_share() const override { return true; }
+    size_t allocation_nbytes(size_t allocation) override {
+        return cuda_dual_allocator.allocation_nbytes(allocation);
+    }
     void free(void* mem_ptr, size_t size, const size_t& allocation) override {
         using namespace cuda_dual_local;
         if (no_device_error_when_free) return;

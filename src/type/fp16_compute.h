@@ -17,9 +17,12 @@
 
 // Half reduction identities also need infinity outside parallel_pass kernels.
 #include "type/cuda_limits.h"
+#ifdef IS_ROCM
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
+#else
 #include <driver_types.h>
 #include <cuda_fp16.h>
-#ifndef IS_ROCM
 #include <cuda_bf16.h>
 #endif
 

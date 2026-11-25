@@ -1,7 +1,8 @@
 """Batches executed on a worker thread (src/runtime/async_exec.h).
 
-On CUDA and ACL, where the worker also binds the device the batch was posted
-from, an inference or training-forward
+On CUDA and ACL, inference and training-forward batches may use the worker.
+On ROCm, inference batches require ``no_grad`` and strict backend fallback.
+An eligible
 auto-flushed batch runs on one worker thread while Python keeps building the
 graph. What has to hold: the numbers are the ones a
 batch on the calling thread gives, every read of a Var's data sees the
@@ -30,7 +31,7 @@ def _worker_backend():
     ACL takes a batch only under ``backend_fallback=error`` (see
     `may_run_async`), so the cases set that policy there.
     """
-    for name in ("cuda", "acl"):
+    for name in ("cuda", "rocm", "acl"):
         if _test_capability.check_accelerator(name, backend=jt).enabled:
             return name
     return None

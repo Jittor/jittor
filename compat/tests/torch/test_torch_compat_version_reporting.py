@@ -11,6 +11,9 @@ an explicit and reversible call.  tests/structure/test_vllm_compat_structure.py
 holds the other half: no staged adapter may assign to a torch/jittor attribute.
 """
 import unittest
+from types import ModuleType, SimpleNamespace
+
+import pytest
 
 from packaging.version import Version
 
@@ -71,6 +74,40 @@ class TestTorchApiVersionReporting(unittest.TestCase):
 
     def test_xpu_build_flag_follows_registered_backend(self):
         self.assertIs(torch._C._has_xpu, "xpu" in jt.core.registered_backends())
+
+
+@pytest.mark.parametrize("rocm,nvcc,resources,cuda,hip", [
+    (False, None, {}, None, None),
+    (False, (12, 4, 0), {}, "12.4", None),
+    (True, (12, 4, 0), {"hip_version": "6.3.12345"}, None, "6.3.12345"),
+])
+def test_toolkit_identity_follows_the_selected_backend(monkeypatch, rocm, nvcc,
+                                                      resources, cuda, hip):
+    from jittor.compat.torch.installers.cuda import bindings
+    from jittor.compat.torch.context import ModuleRegistry
+
+    compiler = SimpleNamespace(nvcc_version=nvcc, build_config=SimpleNamespace(
+        has_rocm=rocm, resources=resources))
+    monkeypatch.setattr(bindings, "jt", SimpleNamespace(compiler=compiler, __version__="2.0.2"))
+    target = ModuleType("toolkit_version_target")
+    target.__version__ = "2.0.2"
+    registry = ModuleRegistry(target, modules={})
+    bindings._install_version(target, registry)
+    assert target.version.cuda == cuda
+    assert target.version.hip == hip
+    assert registry.module_map["torch.version"] is target.version
+    assert target.__version__ == "2.0.2"
+
+
+def test_missing_hip_build_metadata_is_not_fabricated_or_swallowed(monkeypatch):
+    from jittor.compat.torch.installers.cuda import bindings
+    from jittor.compat.torch.context import ModuleRegistry
+
+    compiler = SimpleNamespace(build_config=SimpleNamespace(has_rocm=True, resources={}))
+    monkeypatch.setattr(bindings, "jt", SimpleNamespace(compiler=compiler))
+    target = ModuleType("missing_hip_version")
+    with pytest.raises(RuntimeError, match="missing the HIP SDK version"):
+        bindings._install_version(target, ModuleRegistry(target, modules={}))
 
 
 if __name__ == "__main__":
