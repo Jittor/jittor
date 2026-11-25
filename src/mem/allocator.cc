@@ -282,6 +282,35 @@ void gc_all() {
         for (auto& kv : allocators) all.push_back(kv.second.get());
     }
     for (auto* allocator : all) allocator->gc();
+    #ifdef HAS_ACCELERATOR
+    // Fetch staging owns static pools outside the allocator registry. Their
+    // normal gc keeps live/capture-held blocks and uses the same pool locks.
+    cuda_dual_host_allocator.gc();
+    cuda_dual_device_allocator.gc();
+    #endif
+}
+
+void gc_device_cache(int device) {
+    USER_CHECK(device >= 0 && device < get_device_count())
+        << "Invalid accelerator device for cache collection:" << device;
+    async_exec_wait();
+    vector<Allocator*> pools;
+    {
+        std::lock_guard<std::mutex> guard(allocators_mutex);
+        for (auto& kv : allocators) {
+            auto* pool = kv.second.get();
+            if (pool->is_cuda() && pool->device() == device)
+                pools.push_back(pool);
+        }
+    }
+    // Release the registry lock before entering a pool lock, as gc_all does.
+    for (auto* pool : pools) pool->gc();
+    #ifdef HAS_ACCELERATOR
+    // Staging's physical allocator device, not the caller's ambient device.
+    // Pinned host storage belongs to global GC, never a per-device request.
+    if (cuda_dual_device_allocator.device() == device)
+        cuda_dual_device_allocator.gc();
+    #endif
 }
 
 static void migrate_empty_var(Var* var, Allocator* allocator) {

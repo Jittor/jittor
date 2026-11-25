@@ -411,7 +411,7 @@ class CudaRuntimeState:
         self.cudnn_precision = "high"
         self.matmul_refinement = "high"
         self.empty_cache_mode = str(os.environ.get(
-            "JITTOR_TORCH_CUDA_EMPTY_CACHE", "0")).strip().lower()
+            "JITTOR_TORCH_CUDA_EMPTY_CACHE", "gc")).strip().lower()
 
 
 def _identity(value):
@@ -559,22 +559,18 @@ class _CudaDeviceOf(_CudaDeviceContext):
 
 
 def _empty_cache():
-    if _cuda_runtime().empty_cache_mode in ("0", "false", "no", "off", "none", "noop"):
+    """Release unused native allocator blocks; propagate collection failures."""
+    mode = _cuda_runtime().empty_cache_mode
+    if mode in ("0", "false", "no", "off", "none", "noop"):
         return
-    if _cuda_runtime().empty_cache_mode in ("", "1", "true", "yes", "on", "gc"):
-        try:
-            jt.gc()
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda/api.py _empty_cache: jt.gc()", exc)
-    elif _cuda_runtime().empty_cache_mode in ("sync", "full"):
-        try:
-            jt.sync_all(True)
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda/api.py _empty_cache: jt.sync_all(True)", exc)
-        try:
-            jt.gc()
-        except EXPECTED as exc:
-            swallowed("torch/installers/cuda/api.py _empty_cache: jt.gc()", exc)
+    if mode in ("", "1", "true", "yes", "on", "gc"):
+        jt.gc()
+        return
+    if mode in ("sync", "full"):
+        jt.sync_all(True)
+        jt.gc()
+        return
+    raise ValueError("Unsupported JITTOR_TORCH_CUDA_EMPTY_CACHE mode: " + repr(mode))
 
 
 def _device_name(device=None, *a, **k):
@@ -1901,7 +1897,7 @@ _CUDA_FIDELITY_DETAILS = {
     _api_cudnn_is_available: "Reports whether the native Jittor cuDNN library is usable.",
     _api_cuda_get_device_capability: "Queried per device ordinal from the CUDA driver; falls back to (8, 0) where the driver query is unavailable.",
     _api_cuda_get_device_properties: "Name, compute capability, total memory, SM count and UUID are real and per ordinal; the remaining fields are class defaults.",
-    _empty_cache: "Environment-selected no-op, GC or synchronized GC; default is a memory hint.",
+    _empty_cache: "Default releases unused allocator blocks; explicit no-op or synchronized GC is available; collection failures propagate.",
     _get_float32_matmul_precision: "Frontend-owned CUDA matmul policy; native Jittor and cuDNN policies are independent.",
     _set_float32_matmul_precision: "Frontend-owned highest/high/medium CUDA matmul accumulation; does not change cuDNN or native Jittor.",
 }

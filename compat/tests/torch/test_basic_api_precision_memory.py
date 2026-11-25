@@ -192,15 +192,7 @@ class TestDeviceMemory(unittest.TestCase):
         del t
 
     def test_explicit_release_returns_device_memory(self):
-        """Release is available; ``empty_cache()`` is deliberately not it.
-
-        ``torch.cuda.empty_cache()`` defaults to a hint that does nothing,
-        because TRELLIS calls it inside its inference path where a collection
-        costs seconds; the opt-in is ``JITTOR_TORCH_CUDA_EMPTY_CACHE=gc``.
-        This asserts that the underlying release actually works, so a future
-        change to that default is a decision about cost rather than a guess
-        about whether anything is reclaimable.
-        """
+        """Explicit native collection also remains available to direct callers."""
         import gc as _gc
         import jittor as jt
 
@@ -218,7 +210,7 @@ class TestDeviceMemory(unittest.TestCase):
             self._allocated() - baseline, self.NBYTES * 0.5,
             "device memory was not reclaimed by an explicit collection")
 
-    def test_default_empty_cache_is_a_hint_that_does_not_grow_memory(self):
+    def test_default_empty_cache_keeps_live_memory(self):
         t = self._materialize(torch.ones(1024 * 1024, device="cuda"))
         before = self._allocated()
         torch.cuda.empty_cache()
