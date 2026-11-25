@@ -64,11 +64,11 @@ class TestShardedGradScaler(cu.JittorTestCase):
                     saved = scaler.state_dict()
                     restored = ShardedGradScaler(device, init_scale=1.)
                     restored.load_state_dict(saved)
-                    self.assertEqual(restored.state_dict(), saved)
+                    self.assertDictEqual(restored.state_dict(), saved)
                     scaler = restored
             self.assertEqual(len(calls), 3)
             self.assertEqual(scaler.get_scale(), 16.)
-            self.assertEqual(set(scaler.state_dict()), {
+            self.assertSetEqual(set(scaler.state_dict()), {
                 "scale", "growth_factor", "backoff_factor", "growth_interval", "_growth_tracker"})
 
     def test_nonfinite_skips_step_and_backs_off(self, device):
@@ -144,7 +144,7 @@ class TestShardedGradScaler(cu.JittorTestCase):
                 scaler.unscale_(opt)
             # Refusal must precede all gradient mutation and collectives.
             np.testing.assert_array_equal(p.grad.numpy(), [8.])
-            self.assertEqual(calls, [])
+            self.assertListEqual(calls, [])
 
             restored = ShardedGradScaler(device, init_scale=8., growth_interval=1)
             opt.zero_grad()
@@ -160,7 +160,7 @@ class TestShardedGradScaler(cu.JittorTestCase):
         value = torch.tensor(1., device=device)
         self.assertIs(scaler.scale(value), value)
         self.assertFalse(scaler.is_enabled())
-        self.assertEqual(scaler.state_dict(), {})
+        self.assertDictEqual(scaler.state_dict(), {})
         self.assertEqual(scaler.get_scale(), 1.)
 
 
