@@ -171,6 +171,7 @@ from .nn.functional.tensor import kron, tensordot
 from . import numpy2cupy
 from ._runtime.graph_replay import graph_replay, graph_replay_barrier
 from ._runtime.step_capture import capture_step
+from ._runtime.graphed_module import graphed_module
 from . import profiling
 from .profiling import profile
 from .misc.concatenation import concat, cat
@@ -384,7 +385,7 @@ _ROOT_EXPORTS = (
     "math_util", "matmul", "misc", "mkl_ops", "mpi", "mpi_ops", "nn",
     "numpy2cupy", "optim", "ops", "rank", "sparse", "tensordot", "vmap",
     "amp",
-    "world_size", "config", "capability", "introspection", "graph_replay", "graph_replay_barrier", "capture_step",
+    "world_size", "config", "capability", "introspection", "graph_replay", "graph_replay_barrier", "capture_step", "graphed_module",
     "profile", "profiling",
     "JittorError", "JittorInternalError", "JittorIndexError", "JittorTypeError",
     "JittorShapeError", "JittorOutOfMemoryError",

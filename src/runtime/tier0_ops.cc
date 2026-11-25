@@ -624,7 +624,7 @@ static inline float cpu_apply_unary_f32(T0UnaryOp op, float x, T0DType ty) {
             if (ty == T0DType::BF16) return 1.0f / (1.0f + std::exp(std::min(-x, 300.0f)));
             return 1.0f / (1.0f + std::exp(-x));
         }
-        case T0UnaryOp::Erf:      return (ty == T0DType::F32) ? (double)std::erff((float)x) : std::erf(x);
+        case T0UnaryOp::Erf:      return (ty == T0DType::F32) ? _fast_erff(x) : std::erf(x);
         case T0UnaryOp::Erfinv:   return _erfinv(x);
         default: return x;
     }

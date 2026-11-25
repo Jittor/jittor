@@ -103,7 +103,12 @@ def compile_backend_sources(config, common_flags):
             # Precompiled Tier-0 CUDA kernels enforce strict IEEE math parity
             # with default Tier-1 strict CUDA kernels.
             flags = remove_flags(flags, ["--use_fast_math", "-Ofast"]) + " --fmad=false --prec-div=true --prec-sqrt=true "
-        command = '"%s" "%s" %s -c -o "%s"' % (driver, path, flags, output)
+        prefix = ""
+        if source.language not in ("cuda", "hip"):
+            prefix, map_flags_str = ccache_compile_prefix(driver, config.jittor_path)
+            if map_flags_str:
+                flags += " " + map_flags_str
+        command = '%s"%s" "%s" %s -c -o "%s"' % (prefix, driver, path, flags, output)
         commands.append(fix_cl_flags(command))
         objects.append(output)
     if commands:
@@ -528,7 +533,60 @@ def select_cuda_archs(requested, max_arch, min_arch=30):
     return sorted(set(archs))
 
 
-def cuda_arch_flags(archs):
+def fast_dev_enabled(environ=None):
+    """True when ``JT_FAST_DEV`` requests fast local-dev CUDA compilation.
+
+    When enabled, nvcc omits redundant PTX (``code=compute_XX``) generation
+    and emits only SASS (``code=sm_XX``) for the local GPU(s), provided the
+    toolkit natively supports all requested compute capabilities. Off by
+    default so release/production builds retain PTX forward compatibility.
+    """
+    environ = os.environ if environ is None else environ
+    value = (environ.get("JT_FAST_DEV") or "").strip().lower()
+    return value not in ("", "0", "false", "off", "no")
+
+
+_ccache_probe_cache = {}
+
+
+def ccache_compile_prefix(driver, repo_jittor_path=None, environ=None):
+    """Return ``(launcher_prefix, extra_prefix_map_flags)`` for ``JT_CCACHE=1``.
+
+    Returns ``("", "")`` when ``JT_CCACHE`` is unset/off or neither ``ccache``
+    nor ``sccache`` is available on ``PATH``, guaranteeing zero effect by
+    default and a clean fallback if no launcher is installed.
+    """
+    environ = os.environ if environ is None else environ
+    value = (environ.get("JT_CCACHE") or "").strip().lower()
+    if value in ("", "0", "false", "off", "no") or os.name == "nt":
+        return "", ""
+    import shutil
+    launcher = shutil.which("ccache") or shutil.which("sccache")
+    if not launcher:
+        return "", ""
+    cache_key = (driver, launcher)
+    supports_prefix_map = _ccache_probe_cache.get(cache_key)
+    if supports_prefix_map is None:
+        supports_prefix_map = False
+        try:
+            probe = sp.run(
+                [driver, "-ffile-prefix-map=/tmp=/tmp", "-x", "c++", "-c", "-", "-o", os.devnull],
+                input=b"",
+                stdout=sp.PIPE,
+                stderr=sp.PIPE,
+            )
+            supports_prefix_map = (probe.returncode == 0)
+        except OSError:
+            supports_prefix_map = False
+        _ccache_probe_cache[cache_key] = supports_prefix_map
+    extra = ""
+    if supports_prefix_map and repo_jittor_path:
+        root = os.path.dirname(core_root(repo_jittor_path))
+        extra = f'-ffile-prefix-map="{root}=/jittor-src" '
+    return f'"{launcher}" ', extra
+
+
+def cuda_arch_flags(archs, include_ptx=True):
     """``-gencode`` for each architecture, keeping PTX for the newest one.
 
     The old form was ``-arch=compute_<min>`` followed by one ``-code=sm_X`` per
@@ -557,8 +615,9 @@ def cuda_arch_flags(archs):
     # patterns survive today, but nothing here needs to depend on that.
     parts = [f" --generate-code=arch=compute_{arch},code=sm_{arch} "
              for arch in archs]
-    top = archs[-1]
-    parts.append(f" --generate-code=arch=compute_{top},code=compute_{top} ")
+    if include_ptx:
+        top = archs[-1]
+        parts.append(f" --generate-code=arch=compute_{top},code=compute_{top} ")
     return "".join(parts)
 
 
@@ -1585,9 +1644,177 @@ if has_cuda and is_cuda:
         elif nvcc_version < [11,1]:
             max_arch = 80
     if len(flags.cuda_archs):
-        archs = select_cuda_archs(flags.cuda_archs, max_arch)
+        raw_archs = [int(a) for a in flags.cuda_archs]
+        needs_ptx = any(a > max_arch for a in raw_archs)
+        archs = select_cuda_archs(raw_archs, max_arch)
         flags.cuda_archs = archs
-        nvcc_flags += cuda_arch_flags(archs)
+        nvcc_flags += cuda_arch_flags(
+            archs, include_ptx=(not fast_dev_enabled()) or needs_ptx)
+
+
+_HEADER_EXTENSIONS = (".h", ".hpp", ".cuh", ".inc")
+
+
+def _normalize_abi_flags(text):
+    """Strip checkout- and JITTOR_HOME-specific paths from compiler flags."""
+    parent_cache = os.path.dirname(os.path.normpath(cache_path))
+    repo_root = os.path.dirname(core_root(jittor_path))
+    pairs = [
+        (os.path.normpath(cache_path), "<CACHE_PATH>"),
+        (parent_cache, "<PARENT_CACHE_PATH>"),
+        (os.path.normpath(jittor_path), "<JITTOR_PATH>"),
+        (repo_root, "<REPO_ROOT>"),
+    ]
+    pairs.sort(key=lambda item: len(item[0]), reverse=True)
+    out = text
+    for old, new in pairs:
+        if old:
+            out = out.replace(old, new)
+    return out
+
+
+def core_abi_fingerprint():
+    """Content-addressed SHA-256 fingerprint of the core/backend ABI.
+
+    Independent of worktree path and JITTOR_HOME so identical source trees
+    with identical toolchains/flags produce the same fingerprint, while any
+    edit to any core/backend header or ABI-affecting build flag immediately
+    produces a different fingerprint.
+    """
+    header_entries = []
+    roots = [("src", core_root(jittor_path))]
+    for backend in ("cpu", "cuda", "acl", "rocm", "corex", "comm"):
+        try:
+            roots.append(("backends/" + backend, backend_root(jittor_path, backend)))
+        except FileNotFoundError:
+            continue
+    stat_sig = {}
+    for top, root_dir in roots:
+        for directory, _, names in os.walk(root_dir):
+            for name in names:
+                if not name.endswith(_HEADER_EXTENSIONS):
+                    continue
+                path = os.path.join(directory, name)
+                rel = os.path.join(top, os.path.relpath(path, root_dir)).replace("\\", "/")
+                try:
+                    info = os.stat(path)
+                except OSError:
+                    continue
+                stat_sig[rel] = [info.st_mtime_ns, info.st_size]
+                header_entries.append((rel, path))
+    for gen_name in ("jit_flags.h", "jit_op_maker.h"):
+        gen_path = os.path.join(cache_path, "gen", gen_name)
+        try:
+            info = os.stat(gen_path)
+            rel = "gen/" + gen_name
+            stat_sig[rel] = [info.st_mtime_ns, info.st_size]
+            header_entries.append((rel, gen_path))
+        except OSError:
+            pass
+    header_entries.sort(key=lambda item: item[0])
+
+    gen_sig = core_generator_signature()
+    gen_hashes = {
+        rel: (rec["sha256"] if isinstance(rec, dict) else None)
+        for rel, rec in sorted(gen_sig.get("files", {}).items())
+    }
+    abi_config = {
+        "abi_version": 2,
+        "cc_type": cc_type,
+        "cc_version": jit_utils.get_version(cc_path),
+        "target_arch": jit_utils.target_arch_key(),
+        "extension_suffix": extension_suffix,
+        "has_cuda": int(bool(has_cuda)),
+        "is_cuda": int(bool(is_cuda)),
+        "nvcc_version": jit_utils.get_version(nvcc_path) if nvcc_path else "",
+        "cuda_archs": list(flags.cuda_archs) if hasattr(flags, "cuda_archs") else [],
+        "core_cc_flags": _normalize_abi_flags(core_cc_flags),
+        "opt_flags": opt_flags,
+        "lto_flags": lto_flags,
+        "nvcc_flags": build_env("nvcc_flags", ""),
+        "save_mem": jit_utils.save_mem_build_flags(),
+        "graph_build_profile": int(
+            (os.environ.get("JT_GRAPH_BUILD_PROFILE") or "").strip() not in ("", "0")),
+        "fast_dev": int(fast_dev_enabled()),
+        "generators": gen_hashes,
+    }
+    config_digest = hashlib.sha256(
+        json.dumps(abi_config, sort_keys=True, separators=(",", ":")).encode("utf8")
+    ).hexdigest()
+
+    cache_file = os.path.join(cache_path, "core_abi.json")
+    try:
+        with open(cache_file, "r", encoding="utf8") as handle:
+            cached = json.load(handle)
+        if (isinstance(cached, dict)
+                and cached.get("config_digest") == config_digest
+                and cached.get("stat_sig") == stat_sig
+                and isinstance(cached.get("fingerprint"), str)
+                and len(cached["fingerprint"]) == 64):
+            return cached["fingerprint"]
+    except (OSError, ValueError):
+        pass
+
+    hasher = hashlib.sha256()
+    hasher.update(config_digest.encode("utf8"))
+    hasher.update(b"\n")
+    for rel, path in header_entries:
+        hasher.update(rel.encode("utf8"))
+        hasher.update(b"\0")
+        try:
+            if rel.startswith("gen/"):
+                # Generated headers like gen/jit_op_maker.h embed cache_path and
+                # repo_root paths; strip checkout/home paths so identical source
+                # trees across worktrees or JITTOR_HOMEs share one ABI fingerprint.
+                with open(path, "r", encoding="utf8", errors="replace") as handle:
+                    text = _normalize_abi_flags(handle.read())
+                hasher.update(text.encode("utf8"))
+            else:
+                with open(path, "rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        hasher.update(chunk)
+        except OSError:
+            hasher.update(b"<missing>")
+        hasher.update(b"\0")
+    fingerprint = hasher.hexdigest()
+
+    tmp_file = cache_file + ".tmp." + str(os.getpid())
+    try:
+        with open(tmp_file, "w", encoding="utf8") as handle:
+            json.dump({
+                "config_digest": config_digest,
+                "stat_sig": stat_sig,
+                "fingerprint": fingerprint,
+            }, handle)
+        os.replace(tmp_file, cache_file)
+    except OSError:
+        try:
+            os.remove(tmp_file)
+        except OSError:
+            pass
+    return fingerprint
+
+
+def _configure_shared_cache_abi():
+    shared = (os.environ.get("JITTOR_SHARED_CACHE") or "").strip()
+    stamp_path = os.path.join(cache_path, "core_abi.stamp")
+    if not shared and not os.path.isfile(stamp_path):
+        return
+    fingerprint = core_abi_fingerprint()
+    core.set_core_abi_fingerprint(fingerprint)
+    try:
+        existing = None
+        if os.path.isfile(stamp_path):
+            with open(stamp_path, "r", encoding="utf8") as handle:
+                existing = handle.read().strip()
+        if existing != fingerprint:
+            tmp_stamp = stamp_path + ".tmp." + str(os.getpid())
+            with open(tmp_stamp, "w", encoding="utf8") as handle:
+                handle.write(fingerprint + "\n")
+            os.replace(tmp_stamp, stamp_path)
+    except OSError:
+        pass
+
 
 flags.cc_path = cc_path
 flags.cc_type = cc_type
@@ -1600,6 +1827,7 @@ flags.jittor_path = jittor_path
 flags.gdb_path = gdb_path
 flags.addr2line_path = addr2line_path
 flags.has_pybt = has_pybt
+_configure_shared_cache_abi()
 
 build_config = build_config.evolve(
     cc_flags=cc_flags, nvcc_flags=nvcc_flags, is_cuda=bool(is_cuda),

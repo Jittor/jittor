@@ -83,7 +83,9 @@ def compile(compiler, flags, inputs, output, combind_build=False, cuda_flags="",
             else:
                 continue
         else:
-            cmd = f"\"{cc}\" {cmd}"
+            prefix, map_flags_str = _compiler_state.ccache_compile_prefix(
+                cc, _compiler_state.jittor_path)
+            cmd = f"{prefix}\"{cc}\" {map_flags_str}{cmd}"
             cmd = _compiler_state.fix_cl_flags(cmd)
         if "nan_checker" in input:
             # nan checker needs to disable fast_math: a NaN check compiled under

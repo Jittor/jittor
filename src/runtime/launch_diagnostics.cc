@@ -14,15 +14,20 @@ namespace jittor {
 namespace {
 // All-ones means no override. Zero is an explicit unavailable source and must
 // not be replaced with a later synchronization/backward caller's location.
-thread_local uint64 active_origin = ~uint64(0);
-// The origin captured in the innermost native entry, 0 until its first
-// capture; see enter_launch_origin_entry.
-thread_local bool entry_active = false;
-thread_local uint64 entry_origin = 0;
-thread_local const LaunchRecord* active_launch = nullptr;
-thread_local Device error_device{BackendId::Cuda, -1};
-thread_local uintptr_t error_stream = 0;
-thread_local bool error_stream_known = false;
+// Grouped into one TLS struct so hot entries perform one lookup instead of
+// several __tls_get_addr calls.
+struct LaunchDiagThreadState {
+    uint64 active_origin = ~uint64(0);
+    // The origin captured in the innermost native entry, 0 until its first
+    // capture; see enter_launch_origin_entry.
+    bool entry_active = false;
+    uint64 entry_origin = 0;
+    const LaunchRecord* active_launch = nullptr;
+    Device error_device{BackendId::Cuda, -1};
+    uintptr_t error_stream = 0;
+    bool error_stream_known = false;
+};
+thread_local LaunchDiagThreadState launch_tls;
 std::atomic<LaunchOriginCapture> origin_capture{nullptr};
 std::atomic<DeviceIndexFaultAllocator> index_fault_allocator{nullptr};
 // Set once the record exists, so reporting an error never allocates one.
@@ -151,9 +156,19 @@ void LaunchHistory::record(const LaunchRecord& record, Device device, uintptr_t 
     auto& ring = *lease.slot;
     std::lock_guard<std::mutex> guard(ring.mutex);
     auto& slot = ring.records[ring.written++ % capacity];
-    slot = record;
+    slot.origin = record.origin;
     slot.device = device;
     slot.stream = stream;
+    slot.op_id = record.op_id;
+    slot.fused_count = record.fused_count;
+    size_t nlen = 0;
+    while (nlen < sizeof(slot.name) - 1 && record.name[nlen]) ++nlen;
+    std::memcpy(slot.name, record.name, nlen);
+    slot.name[nlen] = '\0';
+    if (record.fused_count) {
+        const size_t fc = std::min<size_t>(record.fused_count, 8);
+        std::memcpy(slot.fused_ids, record.fused_ids, fc * sizeof(uint32));
+    }
     slot.sequence = ++impl->sequence;
 }
 
@@ -209,29 +224,42 @@ string LaunchHistory::report(Device device, bool exact_stream, uintptr_t stream)
 
 void set_launch_origin_capture(LaunchOriginCapture capture) { origin_capture.store(capture); }
 uint64 capture_launch_origin() {
-    if (active_origin != ~uint64(0)) return active_origin;
-    if (entry_origin) return entry_origin;
-    auto capture = origin_capture.load();
+    auto& tls = launch_tls;
+    if (tls.active_origin != ~uint64(0)) return tls.active_origin;
+    if (tls.entry_origin) return tls.entry_origin;
+    auto capture = origin_capture.load(std::memory_order_relaxed);
     uint64 origin = capture ? capture() : 0;
-    if (entry_active) entry_origin = origin;
+    if (tls.entry_active) tls.entry_origin = origin;
     return origin;
 }
 void enter_launch_origin_entry(bool& outer_active, uint64& outer_origin) {
-    outer_active = entry_active;
-    outer_origin = entry_origin;
-    entry_active = true;
-    entry_origin = 0;
+    auto& tls = launch_tls;
+    outer_active = tls.entry_active;
+    outer_origin = tls.entry_origin;
+    tls.entry_active = true;
+    tls.entry_origin = 0;
 }
 void leave_launch_origin_entry(bool outer_active, uint64 outer_origin) {
-    entry_active = outer_active;
-    entry_origin = outer_origin;
+    auto& tls = launch_tls;
+    tls.entry_active = outer_active;
+    tls.entry_origin = outer_origin;
 }
-LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(active_origin) { active_origin = origin; }
-LaunchOriginScope::~LaunchOriginScope() { active_origin = previous; }
-LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previous(active_launch) {
-    active_launch = &record;
+LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(launch_tls.active_origin) { launch_tls.active_origin = origin; }
+LaunchOriginScope::~LaunchOriginScope() { launch_tls.active_origin = previous; }
+LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record)
+    : previous(launch_tls.active_launch), active(true) {
+    launch_tls.active_launch = &record;
 }
-LaunchOperationScope::~LaunchOperationScope() { active_launch = previous; }
+LaunchOperationScope::LaunchOperationScope(const LaunchRecord* record)
+    : previous(nullptr), active(record != nullptr) {
+    if (active) {
+        previous = launch_tls.active_launch;
+        launch_tls.active_launch = record;
+    }
+}
+LaunchOperationScope::~LaunchOperationScope() {
+    if (active) launch_tls.active_launch = previous;
+}
 namespace {
 // Trivial process-lifetime storage: teardown may consult it after runtime owners
 // are destroyed. Every backend has its own mask; no device suppresses another.
@@ -252,7 +280,8 @@ uint64 devices_launched_after_loss(BackendId backend) {
     return launched_after_loss[unsigned(backend)].load(std::memory_order_relaxed);
 }
 Device launch_error_device(Device current) {
-    if (error_device.index >= 0) return error_device;
+    auto& tls = launch_tls;
+    if (tls.error_device.index >= 0) return tls.error_device;
     if (current.index < 0) current.index = runtime_device_state().current_device;
     return current;
 }
@@ -277,26 +306,30 @@ void record_active_launch(BackendStream stream) {
             launched_after_loss[unsigned(stream.device.backend)].fetch_or(
                 bit, std::memory_order_relaxed);
     }
-    if (!active_launch) return;
-    runtime_launch_history().record(*active_launch, stream.device,
+    auto* launch = launch_tls.active_launch;
+    if (!launch) return;
+    runtime_launch_history().record(*launch, stream.device,
                                     reinterpret_cast<uintptr_t>(stream.handle));
 }
 
 LaunchErrorScope::LaunchErrorScope(Device device, bool exact_stream, uintptr_t stream)
-    : previous_device(error_device), previous_stream(error_stream), previous_known(error_stream_known) {
-    error_device = device;
-    error_stream = stream;
-    error_stream_known = exact_stream;
+    : previous_device(launch_tls.error_device), previous_stream(launch_tls.error_stream), previous_known(launch_tls.error_stream_known) {
+    auto& tls = launch_tls;
+    tls.error_device = device;
+    tls.error_stream = stream;
+    tls.error_stream_known = exact_stream;
 }
 LaunchErrorScope::~LaunchErrorScope() {
-    error_device = previous_device;
-    error_stream = previous_stream;
-    error_stream_known = previous_known;
+    auto& tls = launch_tls;
+    tls.error_device = previous_device;
+    tls.error_stream = previous_stream;
+    tls.error_stream_known = previous_known;
 }
 string cuda_launch_error_context() {
-    Device device = error_device;
+    auto& tls = launch_tls;
+    Device device = tls.error_device;
     if (device.index < 0) device.index = runtime_device_state().current_device;
-    return runtime_launch_history().report(device, error_stream_known, error_stream);
+    return runtime_launch_history().report(device, tls.error_stream_known, tls.error_stream);
 }
 string async_launch_history(const string& backend, int device, int64 stream) {
     if (device < 0) throw UserError("async_launch_history: device must be non-negative");

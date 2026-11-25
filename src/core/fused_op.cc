@@ -62,130 +62,92 @@ void FusedOp::update_jit_key() {
     do_jit_prepare(jk);
 }
 
-FusedOp::Snapshot<Var*> FusedOp::snapshot_outputs(Op* op) const {
-    Snapshot<Var*> out;
-    if (batch_plan && op->batch_stamp == batch_stamp_wanted) {
-        int idx = op->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && idx + 1 < (int)batch_plan->op_outputs_begin.size()) {
-            out.first = batch_plan->op_outputs.data() + batch_plan->op_outputs_begin[idx];
-            out.last = batch_plan->op_outputs.data() + batch_plan->op_outputs_begin[idx + 1];
-            return out;
-        }
-    }
-    for (Var* o : op->outputs()) out.own.push_back(o);
-    out.first = out.own.data();
-    out.last = out.own.data() + out.own.size();
-    return out;
+FusedOp::Snapshot<Var*> FusedOp::snapshot_outputs_slow(Op* op) const {
+    unique_ptr<vector<Var*>> owned(new vector<Var*>());
+    for (Var* o : op->outputs()) owned->push_back(o);
+    return Snapshot<Var*>(move(owned));
 }
 
-FusedOp::Snapshot<pair<Var*, int>> FusedOp::snapshot_inputs(Op* op) const {
-    Snapshot<pair<Var*, int>> in;
-    if (batch_plan && op->batch_stamp == batch_stamp_wanted) {
-        int idx = op->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && idx + 1 < (int)batch_plan->op_inputs_begin.size()) {
-            in.first = batch_plan->op_inputs.data() + batch_plan->op_inputs_begin[idx];
-            in.last = batch_plan->op_inputs.data() + batch_plan->op_inputs_begin[idx + 1];
-            return in;
-        }
-    }
-    for (auto ve : op->_inputs) in.own.emplace_back(ve.node->var(), ve.reverse().index);
-    in.first = in.own.data();
-    in.last = in.own.data() + in.own.size();
-    return in;
+FusedOp::Snapshot<pair<Var*, int>> FusedOp::snapshot_inputs_slow(Op* op) const {
+    unique_ptr<vector<pair<Var*, int>>> owned(new vector<pair<Var*, int>>());
+    for (auto ve : op->_inputs) owned->emplace_back(ve.node->var(), ve.reverse().index);
+    return Snapshot<pair<Var*, int>>(move(owned));
 }
 
-pair<Op*, int> FusedOp::snapshot_producer(Var* v) const {
-    if (batch_plan && v->batch_stamp == batch_stamp_wanted) {
-        int idx = v->batch_index_at(batch_stamp_wanted);
-        if (idx >= 0 && idx < (int)batch_plan->var_producer.size()
-                && batch_plan->all_vars[idx] == v)
-            return batch_plan->var_producer[idx];
-    }
+pair<Op*, int> FusedOp::snapshot_producer_slow(Var* v) const {
     int slot = 0;
     if (!v->_inputs.empty()) slot = v->_inputs.front().reverse().index;
     return {v->input(), slot};
 }
 
-void FusedOp::update_ops() {
-    if (!ops.empty()) float32_precision = ops.back()->float32_precision;
-    if (!ops.empty()) launch_origin = ops.back()->launch_origin;
-    loop_options_merged.clear();
-    loop_options_tuned.clear();
-    loop_options = loop_options_origin = nullptr;
-    streamed_inputs = 0;
+static void update_ops_impl(FusedOp& fop, bool build_edges) {
+    const uint n_ops = fop.ops.size();
+    if (n_ops) {
+        fop.float32_precision = fop.ops.back()->float32_precision;
+        fop.launch_origin = fop.ops.back()->launch_origin;
+    }
+    if (!fop.loop_options_merged.empty()) fop.loop_options_merged.clear();
+    if (!fop.loop_options_tuned.empty()) fop.loop_options_tuned.clear();
+    fop.loop_options = fop.loop_options_origin = nullptr;
+    fop.streamed_inputs = 0;
 
-    _inputs.clear();
-    _outputs.clear();
-    vars.clear();
-    op_index.reset(ops.size());
-    for (uint i=0; i<ops.size(); i++)
-        op_index[ops[i]] = i;
+    fop._inputs.clear();
+    fop._outputs.clear();
+    fop.vars.clear();
+    fop.op_index.reset(n_ops);
     // Every var indexed below is an edge of one of these ops, so the edge
     // count bounds them.
     size_t var_bound = 0;
-    for (Op* op : ops) {
-        auto ins = snapshot_inputs(op);
+    for (uint i = 0; i < n_ops; i++) {
+        Op* op = fop.ops[i];
+        fop.op_index[op] = i;
+        auto ins = fop.snapshot_inputs(op);
         var_bound += ins.end() - ins.begin();
-        auto outs = snapshot_outputs(op);
+        auto outs = fop.snapshot_outputs(op);
         var_bound += outs.end() - outs.begin();
         for (Var* o : outs) {
             if (o->loop_options) {
-                if (loop_options_origin == nullptr)
-                    loop_options_origin = &o->loop_options.data();
-                else if (loop_options_origin != &o->loop_options.data()) {
+                if (fop.loop_options_origin == nullptr)
+                    fop.loop_options_origin = &o->loop_options.data();
+                else if (fop.loop_options_origin != &o->loop_options.data()) {
                     // merge loop options
                     for (auto& kv : o->loop_options.data())
-                        loop_options_merged[kv.first] = kv.second;
+                        fop.loop_options_merged[kv.first] = kv.second;
                 }
             }
             // A var that has to stay in memory is an output of the fused op.
             // The verdict comes from the batch now; it used to be bit 0 of
             // o->custom_data, written there by the executor.
-            if (var_stays_in_memory((Node*)o))
-                _outputs.emplace_back((Node*)o, 0);
+            if (fop.var_stays_in_memory((Node*)o))
+                fop._outputs.emplace_back((Node*)o, 0);
         }
     }
 
-    if (loop_options_origin) {
-        if (loop_options_merged.size()) {
+    if (fop.loop_options_origin) {
+        if (fop.loop_options_merged.size()) {
             // merge loop_options_origin into loop_options_merged
-            for (auto& kv : *loop_options_origin)
-                loop_options_merged.emplace(kv);
+            for (auto& kv : *fop.loop_options_origin)
+                fop.loop_options_merged.emplace(kv);
         }
     } else {
-        loop_options_origin = &loop_options_merged;
+        fop.loop_options_origin = &fop.loop_options_merged;
     }
-    loop_options = loop_options_origin;
+    fop.loop_options = fop.loop_options_origin;
 
-    if (outputs().size() == 0) {
+    if (PREDICT_BRANCH_NOT_TAKEN(fop.outputs().size() == 0)) {
         // This segment was classified with no output that has to stay in
         // memory, so the assertion below is about to fire. Dump the batch
         // verdict and the marks the planner read it out of: an op or var whose
         // tflag is not this batch's stamp means the traversal that built the
         // verdict was looking at a different one.
-        //
-        // No longer behind `H3_FUSE_DUMP`. The condition is already "we are
-        // about to abort", so this costs nothing on any run that works, while
-        // requiring the variable cost two things: the failure had to be
-        // reproduced twice, and the same variable also turns on the
-        // per-edge `erase_output` logging in node.cc, which is heavy enough to
-        // change the timing -- 30 runs with it on produced no assert at all,
-        // against 6 in 15 with it off. A diagnostic that only runs on the
-        // failure path should not need to be asked for, least of all through a
-        // switch that suppresses the failure.
         auto& tstate = runtime_traversal_state();
         std::ostringstream os;
-        os << "fused segment with no in-memory output: ops=" << ops.size()
-           << " batch_stamp_wanted=" << batch_stamp_wanted
-           << " batch_var_fused=" << (batch_var_fused ? "set" : "null")
+        os << "fused segment with no in-memory output: ops=" << fop.ops.size()
+           << " batch_stamp_wanted=" << fop.batch_stamp_wanted
+           << " batch_var_fused=" << (fop.batch_var_fused ? "set" : "null")
            << " stamp_count=" << tstate.stamp_count()
            << " active_epochs=" << tstate.active_epochs();
-        for (Op* op : ops) {
-            // `addr` is what the H3FUSE erase-output log prints for its
-            // producer, so the two lines can be matched up; `holder` is the
-            // op's strong list of its own outputs. Zero `outputs` with a
-            // non-empty `holder` means the edge was erased while the var is
-            // still alive -- somebody detached the producer, not the var.
+        for (Op* op : fop.ops) {
             os << "\n  op " << op->name() << " addr=" << (void*)op
                << " tflag=" << op->tflag
                << " batch_stamp=" << op->batch_stamp
@@ -195,40 +157,64 @@ void FusedOp::update_ops() {
             for (Var* o : op->outputs()) {
                 os << "\n     out tflag=" << o->tflag
                    << " batch_stamp=" << o->batch_stamp
-                   << " stays=" << (int)var_stays_in_memory((Node*)o);
-                if (batch_var_fused && o->batch_stamp == batch_stamp_wanted) {
-                    int idx = o->batch_index_at(batch_stamp_wanted);
+                   << " stays=" << (int)fop.var_stays_in_memory((Node*)o);
+                if (fop.batch_var_fused && o->batch_stamp == fop.batch_stamp_wanted) {
+                    int idx = o->batch_index_at(fop.batch_stamp_wanted);
                     os << " batch_index=" << idx;
-                    if (idx >= 0 && (uint)idx < batch_var_fused->size())
-                        os << " var_fused=" << (*batch_var_fused)[idx];
+                    if (idx >= 0 && (uint)idx < fop.batch_var_fused->size())
+                        os << " var_fused=" << (*fop.batch_var_fused)[idx];
                 }
             }
         }
         LOGw << os.str();
     }
-    ASSERT(outputs().size());
-    LOGvvvv << "set fused output" << outputs();
-    
-    var_index.reset(var_bound);
-    for (Op* opi : ops) {
-        for (auto& in : snapshot_inputs(opi)) {
+    ASSERT(fop.outputs().size());
+    LOGvvvv << "set fused output" << fop.outputs();
+
+    fop.var_index.reset(var_bound);
+    for (uint fid1 = 0; fid1 < n_ops; fid1++) {
+        Op* opi = fop.ops[fid1];
+        int iid = 0;
+        for (auto& in : fop.snapshot_inputs(opi)) {
             Var* i = in.first;
-            if (!var_index.has(i)) {
-                var_index[i] = vars.size();
-                vars.push_back({i, 0});
-                _inputs.emplace_back((Node*)i);
+            auto inserted = fop.var_index.try_emplace(i, (int32)fop.vars.size());
+            if (inserted.second) {
+                fop.vars.push_back({i, 0});
+                fop._inputs.emplace_back((Node*)i);
+            }
+            if (build_edges && in.second >= 0) {
+                int iop_id;
+                int iv_id;
+                int producer_id = -1;
+                pair<Op*, int> producer{nullptr, 0};
+                if (n_ops > 1) {
+                    producer = fop.snapshot_producer(i);
+                    if (producer.first) producer_id = fop.op_index.get(producer.first);
+                }
+                if (producer_id >= 0) {
+                    iop_id = producer_id;
+                    iv_id = producer.second;
+                } else {
+                    iv_id = inserted.first;
+                    // add iv_id, prevent iv_id jit key overflow
+                    iop_id = n_ops + iv_id;
+                }
+                fop.edges.emplace_back(iop_id, iv_id, fid1, iid++);
             }
         }
-        for (Var* o : snapshot_outputs(opi)) {
-            if (!var_index.has(o)) {
-                var_index[o] = vars.size();
+        for (Var* o : fop.snapshot_outputs(opi)) {
+            auto inserted = fop.var_index.try_emplace(o, (int32)fop.vars.size());
+            if (inserted.second) {
                 // intermediate(can fuse) or output
-                vars.push_back({o, var_stays_in_memory((Node*)o) ? 2 : 1});
+                fop.vars.push_back({o, fop.var_stays_in_memory((Node*)o) ? 2 : 1});
             }
         }
     }
-    LOGvvvv << "Var info" << vars;
+    LOGvvvv << "Var info" << fop.vars;
 }
+
+void FusedOp::update_ops() { update_ops_impl(*this, false); }
+void FusedOp::update_ops_and_edges() { update_ops_impl(*this, true); }
 
 
 FusedOp::FusedOp() {
@@ -316,11 +302,12 @@ void FusedOp::prepare_fused_key(JK& jk) {
         ? execution_backend_for(requested) != BackendId::Cpu : executes_on_accelerator();
     // SharedReducePass reads the thread split's `rangeN` names, which compiled
     // shapes replace with numbers; a kernel it will rewrite keeps its ranges.
-    const int shared_reduce = get_loop_option("use_shared_reduce", 1);
+    const bool has_loop_options = !loop_options->empty();
+    const int shared_reduce = has_loop_options ? get_loop_option("use_shared_reduce", 1) : 1;
     const bool shared_reduce_runs = shared_reduce != 0
         && (para_opt_level >= 4 || shared_reduce == 2);
     if (on_accelerator && auto_compile_shapes_rank > 0 && !shared_reduce_runs
-            && !get_loop_option("compile_shapes")) {
+            && !(has_loop_options && get_loop_option("compile_shapes"))) {
         bool high_rank_strided = false;
         for (auto& vi : vars)
             if (vi.type == 0 && (int)vi.var->shape.size() >= auto_compile_shapes_rank
@@ -377,7 +364,8 @@ void FusedOp::prepare_fused_key(JK& jk) {
         // Rank can exceed one hex digit, so each entry is delimited.
         jk << JK::hex(vi.type) << JK::hex(vi.var->shape.size()) << ',';
         if (vi.type != 1 && (vi.var->num >= std::numeric_limits<int32_t>::max()
-                || vi.var->storage_span_bytes() / vi.var->dsize() >= std::numeric_limits<int32_t>::max()))
+                || (vi.var->storage_strides.size() && vi.var->num
+                    && vi.var->storage_span_bytes() / vi.var->dsize() >= std::numeric_limits<int32_t>::max())))
             use_int64_t = true;
     }
     if (use_int64_t)
@@ -417,27 +405,32 @@ void FusedOp::prepare_fused_key(JK& jk) {
 void FusedOp::execute_fused_prepared(JK& jk) {
     if (PREDICT_BRANCH_NOT_TAKEN(jit_tier_mode() == 0) && tier0_try_execute_fused(this, jk))
         return;
-    // Keep the cache lookup independent from JK's reusable thread-local
-    // buffer; preparation of the next op may overwrite it immediately.
-    string jit_key = jk.to_string();
-    if (jit_fused_ops.find_copy(jit_key, context_owner)) {
+    if (jit_fused_ops.find_copy(jk.to_cstring(), (size_t)jk.size, context_owner)) {
         // Take a reference under the cache lock, not a bare pointer: the cache
         // is bounded, and concurrent inserts or relay compiles may rehash or
         // evict entries.
         context = context_owner.get();
-        LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)context;
+        if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
+            // Own the key before running: relay ops may overwrite `jk`.
+            string jit_key = jk.to_string();
+            LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)context;
+            Profiler::record_and_run(context->entry, this, jit_key.c_str());
+            return;
+        }
+        LOGvvv <<  "Jit fused op key found:" << jk.to_cstring() << "jit op entry:" << (void*)context;
         // This used to also do `context->vrm.fop = this`, repointing the
         // cached context at the current stack FusedOp on every hit. That was
         // the only thing keeping that field from being read stale, and it
         // dangled again the moment run_sync returned. Nothing needs it: the
         // relay manager takes the FusedOp as an argument now.
-        Profiler::record_and_run(context->entry, this, jit_key.c_str());
+        context->entry(this);
         return;
     }
     if (tier0_try_execute_fused(this, jk))
         return;
     if (nvrtc_try_compile_and_run(this, jk))
         return;
+    string jit_key = jk.to_string();
     LOGvv << "Jit op key not found:" << jit_key;
     // compile JIT op
     context_owner = std::make_shared<FusedOpContext>();

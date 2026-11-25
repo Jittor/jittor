@@ -788,7 +788,7 @@ def _pack_scalar(sig, v):
     """ctypes value object whose bytes are the kernel arg (width per ``sig``)."""
     if sig in ("i64", "u64"):
         return ctypes.c_int64(int(v))
-    if sig in ("i32", "u32", "i16", "u16", "i8", "u8", "i1"):
+    if sig in ("i32", "u32", "i16", "u16", "i8", "u8", "i1", "u1"):
         return ctypes.c_int32(int(v))
     if sig == "fp32":
         return ctypes.c_float(float(v))
@@ -1145,6 +1145,9 @@ def _compile(jitfn, signature, constants, options=None, device=0, aligned=()):
             "profile_scratch_align": int(
                 getattr(md, "profile_scratch_align", 1) or 1),
             "has_profile_scratch": hasattr(md, "profile_scratch_size"),
+            "launch_cooperative_grid": bool(getattr(md, "launch_cooperative_grid", False)),
+            "launch_pdl": bool(getattr(md, "launch_pdl", False)),
+            "has_tensordesc": bool(getattr(md, "tensordesc_meta", None)),
             "n_ptx_params": _ptx_param_count(ptx, name),
         }
         _COMPILE_CACHE[key] = info
@@ -1227,7 +1230,7 @@ def _scalar_bits(sig, v):
     import struct as _struct
     if sig in ("i64", "u64"):
         return int(v) & 0xFFFFFFFFFFFFFFFF
-    if sig in ("i32", "u32", "i16", "u16", "i8", "u8", "i1"):
+    if sig in ("i32", "u32", "i16", "u16", "i8", "u8", "i1", "u1"):
         return int(v) & 0xFFFFFFFF
     if sig == "fp32":
         return _struct.unpack("<I", _struct.pack("<f", float(v)))[0]

@@ -518,31 +518,36 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
     int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
     cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
         : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
-    cublasLtMatmulDesc_t op = nullptr;
-    cublasLtMatmulDescCreate(&op, compute, CUDA_R_32F);
-    cublasOperation_t ta = {ta}, tb = {tb};
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
-    cublasLtEpilogue_t ep = {epilogue};
-    cublasLtMatmulDescSetAttribute(op, CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    int slot = tier < 0 || tier > 2 ? 0 : tier;
+    static cublasLtMatmulDesc_t ops[3] = {{}};
+    if (!ops[slot]) {{
+        cublasLtMatmulDescCreate(&ops[slot], compute, CUDA_R_32F);
+        cublasOperation_t ta = {ta}, tb = {tb};
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_TRANSA, &ta, sizeof(ta));
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_TRANSB, &tb, sizeof(tb));
+        cublasLtEpilogue_t ep = {epilogue};
+        cublasLtMatmulDescSetAttribute(ops[slot], CUBLASLT_MATMUL_DESC_EPILOGUE, &ep, sizeof(ep));
+    }}
+    cublasLtMatmulDesc_t op = ops[slot];
     {bias_pointer}
-    cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
-    cublasLtMatrixLayoutCreate(&la, {ct}, {a_rows}, {a_cols}, {lda});
-    cublasLtMatrixLayoutCreate(&lb, {ct}, {b_rows}, {b_cols}, {ldb});
-    cublasLtMatrixLayoutCreate(&lc, {ct}, {m}, {n}, {ldc});
-
-    JtLtWorkspace workspace({workspace});
-    void* ws = workspace.ptr;
-    size_t wsize = ws ? (size_t){workspace} : 0;
-    auto once = [&](const cublasLtMatmulAlgo_t* algo) {{
-        return cublasLtMatmul(lt, op, &alpha, {a}, la, {b}, lb, &beta,
-                              out0_p, lc, out0_p, lc, algo, ws, wsize, cudaStreamPerThread);
-    }};
+    static cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
+    if (!la) {{
+        cublasLtMatrixLayoutCreate(&la, {ct}, {a_rows}, {a_cols}, {lda});
+        cublasLtMatrixLayoutCreate(&lb, {ct}, {b_rows}, {b_cols}, {ldb});
+        cublasLtMatrixLayoutCreate(&lc, {ct}, {m}, {n}, {ldc});
+    }}
 
     static JtLtChoice choices[3];
-    JtLtChoice& choice = choices[tier < 0 || tier > 2 ? 0 : tier];
+    JtLtChoice& choice = choices[slot];
     if (!choice.ready) {{
         choice.ready = true;
+        JtLtWorkspace probe({workspace});
+        void* ws = probe.ptr;
+        size_t wsize = ws ? (size_t){workspace} : 0;
+        auto probe_once = [&](const cublasLtMatmulAlgo_t* algo) {{
+            return cublasLtMatmul(lt, op, &alpha, {a}, la, {b}, lb, &beta,
+                                  out0_p, lc, out0_p, lc, algo, ws, wsize, cudaStreamPerThread);
+        }};
         cublasLtMatmulPreference_t pref = nullptr;
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
@@ -559,10 +564,10 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
         for (int pass = 0; pass < {passes}; pass++) {{
         float best = 1e30f;
         for (int c = 0; c < found; c++) {{
-            if (once(&cand[c].algo) != CUBLAS_STATUS_SUCCESS) continue;
+            if (probe_once(&cand[c].algo) != CUBLAS_STATUS_SUCCESS) continue;
             cudaDeviceSynchronize();
             cudaEventRecord(beg, cudaStreamPerThread);
-            for (int r = 0; r < {repeats}; r++) once(&cand[c].algo);
+            for (int r = 0; r < {repeats}; r++) probe_once(&cand[c].algo);
             cudaEventRecord(end, cudaStreamPerThread);
             if (cudaEventSynchronize(end) != cudaSuccess) continue;
             float ms = 0.0f;
@@ -570,6 +575,7 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
             if (ms > 0.0f && ms < best) {{
                 best = ms;
                 choice.algo = cand[c].algo;
+                choice.workspace = cand[c].workspaceSize;
                 choice.usable = true;
             }}
         }}
@@ -579,7 +585,11 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
     }}
 
     if (choice.usable) {{
-        once(&choice.algo);
+        JtLtWorkspace workspace(choice.workspace);
+        cublasLtMatmul(lt, op, &alpha, {a}, la, {b}, lb, &beta,
+                       out0_p, lc, out0_p, lc, &choice.algo,
+                       workspace.ptr, workspace.ptr ? choice.workspace : 0,
+                       cudaStreamPerThread);
     }} else {{
         cublasHandle_t h = jt_blas_handle();
         cublasGemmEx(h, {ta}, {tb}, {m}, {n}, {k}, &alpha,
@@ -588,11 +598,6 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
         {column_sum}
         {fallback_bias}
     }}
-
-    cublasLtMatrixLayoutDestroy(la);
-    cublasLtMatrixLayoutDestroy(lb);
-    cublasLtMatrixLayoutDestroy(lc);
-    cublasLtMatmulDescDestroy(op);
     """
 
 
@@ -711,6 +716,25 @@ def _supports_training(x, weight, bias, *, transposed_weight=False):
         return False
     if bias is not None and not isinstance(bias, jt.Var):
         return False
+    w_shape = weight.shape
+    x_shape = x.shape
+    if len(w_shape) != 2 or len(x_shape) < 2:
+        return False
+    cin, cout = ((int(w_shape[0]), int(w_shape[1])) if transposed_weight else
+                 (int(w_shape[1]), int(w_shape[0])))
+    if int(x_shape[-1]) != cin:
+        return False
+    rows = _rows_of(x)
+    product = rows * cin * cout
+    # Fast floor rejection before device/dtype/contiguity queries:
+    # eager accepts (rows >= _MIN_ROWS and product >= _MIN_PRODUCT),
+    # step_capture FP32 accepts (rows >= 64 and product >= 2^26).
+    if rows < _MIN_ROWS or product < _MIN_PRODUCT:
+        if rows < 64 or product < (1 << 26):
+            return False
+        from jittor._runtime import step_capture
+        if not step_capture.active():
+            return False
     if not _on_the_device(*(x, weight) if bias is None else (x, weight, bias)):
         return False
     # A frozen weight leaves only the input gradient, which the portable path
@@ -721,17 +745,11 @@ def _supports_training(x, weight, bias, *, transposed_weight=False):
     dtype = _jittor_dtype_name(x.dtype)
     if dtype not in _LT_TYPES or _jittor_dtype_name(weight.dtype) != dtype:
         return False
-    if len(weight.shape) != 2 or len(x.shape) < 2:
-        return False
-    cin, cout = ((int(weight.shape[0]), int(weight.shape[1])) if transposed_weight else
-                 (int(weight.shape[1]), int(weight.shape[0])))
     if bias is not None and (_jittor_dtype_name(bias.dtype) != dtype or len(bias.shape) != 1
                              or int(bias.shape[0]) != cout):
         return False
-    if (int(x.shape[-1]) != cin or not x._storage_is_contiguous()
-            or not weight._storage_is_contiguous()):
+    if not x._storage_is_contiguous() or not weight._storage_is_contiguous():
         return False
-    rows = _rows_of(x)
     # The route costs a Function call -- tapes, a context, a second operator
     # in the backward -- about 70 us of host time a layer, forward and
     # backward together. A product too small for a better GEMM or for its
@@ -739,7 +757,6 @@ def _supports_training(x, weight, bias, *, transposed_weight=False):
     # 16-row time-embedding projections made its eager step 64.0 -> 68.3 ms
     # at an unchanged device time.
     minimum_product = max(_MIN_PRODUCT, _MIN_PRODUCT_FP32) if dtype == "float32" else _MIN_PRODUCT
-    product = rows * cin * cout
     if rows >= _MIN_ROWS and product >= minimum_product:
         return True
     if dtype == "float32" and rows >= 64 and product >= (1 << 26):

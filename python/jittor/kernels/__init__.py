@@ -21,13 +21,13 @@ class TensorSpec:
         shape = tuple(self.shape)
         if any(isinstance(n, bool) or not isinstance(n, Integral) or n < 0 for n in shape):
             raise ValueError("TensorSpec requires concrete nonnegative dimensions")
-        object.__setattr__(self, "shape", shape)
+        object.__setattr__(self, "shape", tuple(int(n) for n in shape))
         object.__setattr__(self, "dtype", str(self.dtype))
 
 
 @dataclass(frozen=True)
 class BoundOutput:
-    """Existing contiguous CUDA storage written by an inference Triton kernel."""
+    """Existing contiguous CUDA storage written by an inference kernel."""
 
     buffer: jt.Var
 
@@ -59,7 +59,11 @@ class _Buffer:
             raise BufferError("consume kernel buffers on the supplied Jittor stream")
         if self._capsule is None:
             raise BufferError("kernel buffer DLPack capsule has already been consumed")
-        capsule, self._capsule = self._capsule, None
+        capsule = self._capsule
+        self._capsule = None
+        if isinstance(capsule, tuple):
+            scope_capsule, is_output, index = capsule
+            return jt.core._kernel_buffer_dlpack(scope_capsule, bool(is_output), index)
         return capsule
 
 
@@ -75,16 +79,16 @@ def call(launch, *inputs, outputs, backend="cuda"):
     """Schedule ``launch(context)`` as a native graph node.
 
     ``context.inputs`` are read-only and ``context.outputs`` must all be written.
-    Both contain pointer/shape/stride/dtype and DLPack views of executor-owned
-    memory. Enqueue work on ``context.stream`` only; do not retain these views,
-    reenter Jittor, or mutate inputs. In-place/alias outputs are not supported.
-    Use ``jt.Function`` to supply the mathematical backward; missing derivatives
-    raise an error instead of silently returning zero.
+    Both contain pointer/shape/stride/dtype and lazy DLPack views of
+    executor-owned memory. Enqueue work on ``context.stream`` only; do not retain
+    these views, reenter Jittor, or mutate inputs. In-place/alias outputs are not
+    supported. Use ``jt.Function`` to supply the mathematical backward; missing
+    derivatives raise an error instead of silently returning zero.
     """
     if not callable(launch):
         raise TypeError("launch must be callable")
-    if not inputs or not all(isinstance(x, jt.Var) for x in inputs):
-        raise TypeError("kernel inputs must be one or more Jittor Vars")
+    if not all(isinstance(x, jt.Var) for x in inputs):
+        raise TypeError("kernel inputs must be Jittor Vars")
     single = isinstance(outputs, TensorSpec)
     specs = (outputs,) if single else tuple(outputs)
     if not specs or not all(isinstance(x, TensorSpec) for x in specs):
@@ -125,45 +129,46 @@ def _arguments(args):
     return inputs, outputs, bind
 
 
+_triton_dispatcher = None
+_tilelang_dispatcher = None
+
+
 def triton_call(kernel, *args, grid, **kwargs):
-    """Call an upstream ``@triton.jit`` function with explicit output slots.
+    """Call an upstream ``@triton.jit`` or ``@triton.autotune`` kernel natively.
 
     Positional arguments describe the kernel ABI; keyword arguments contain
     constexpr values and Triton compiler options. Upstream specialization and
-    persistent compilation caching are preserved. Autotuners are not accepted:
-    choose a configuration explicitly so tuning cannot mutate user inputs.
+    persistent compilation caching are preserved without requiring PyTorch.
+    Launches execute directly in C++ via ``cuLaunchKernel`` on Jittor's compute
+    stream, enabling ``async_execution``, CUDA Graph capture/replay
+    (``jt.graph_replay`` / ``jt.capture_step``), and global scratch workspaces.
 
-    TensorSpec allocates a fresh output. BoundOutput enables a prepared CUDA
-    launch that orders writes to existing storage in inference mode. It
-    requires ready nonempty contiguous buffers and positive grid dimensions.
-    The kernel owns alias safety within a launch.
+    ``TensorSpec`` allocates a fresh output (works for both training inside
+    ``jt.Function`` and inference). ``BoundOutput`` updates existing contiguous
+    CUDA storage in inference mode with reader-ordered writes.
     """
-    from .triton import launch as triton_launch
-    from triton.runtime.jit import JITFunction
-    if not isinstance(kernel, JITFunction):
-        raise TypeError("triton_call requires a @triton.jit function, not an autotuner/interpreter")
-    if any(isinstance(value, (jt.Var, TensorSpec, BoundOutput)) for value in kwargs.values()):
-        raise TypeError("tensor arguments must be positional")
-    if any(isinstance(arg, BoundOutput) for arg in args):
-        from .triton import _prepared_call
-
-        return _prepared_call(kernel, *args, grid=grid, **kwargs)
-    inputs, outputs, bind = _arguments(args)
-    return call(lambda context: triton_launch(kernel, bind(context), grid, kwargs, context),
-                *inputs, outputs=outputs[0] if len(outputs) == 1 else outputs)
+    global _triton_dispatcher
+    fn = _triton_dispatcher
+    if fn is None:
+        from .triton import _native_triton_call as fn
+        _triton_dispatcher = fn
+    return fn(kernel, args, grid, kwargs)
 
 
 def tilelang_call(kernel, *args):
-    """Call a compiled TileLang TVM-FFI kernel, with explicit TensorSpec outputs.
+    """Call a compiled TileLang TVM-FFI kernel natively with explicit outputs.
 
     Compile with ``execution_backend='tvm_ffi'`` and ``out_idx=[]`` so Jittor,
-    rather than the compiler's Torch wrapper, allocates the output buffers.
+    rather than the compiler's Torch wrapper, owns output buffer allocation.
+    Executes directly via TVM-FFI's C ABI on Jittor's compute stream, enabling
+    ``async_execution`` and CUDA Graph capture/replay.
     """
-    from .tilelang import executable_for, launch as tilelang_launch
-    executable = executable_for(kernel)
-    inputs, outputs, bind = _arguments(args)
-    return call(lambda context: tilelang_launch(executable, bind(context), context),
-                *inputs, outputs=outputs[0] if len(outputs) == 1 else outputs)
+    global _tilelang_dispatcher
+    fn = _tilelang_dispatcher
+    if fn is None:
+        from .tilelang import _native_tilelang_call as fn
+        _tilelang_dispatcher = fn
+    return fn(kernel, args)
 
 
 def batch_triton_launches(kernels, *, allow_strided=False):

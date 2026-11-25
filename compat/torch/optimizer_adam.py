@@ -8,12 +8,75 @@ import jittor as jt
 from types import GetSetDescriptorType
 from jittor.optim.algorithms.adam import adam_update
 from jittor.optim.base import _update_preserve_dtype
+from jittor._runtime import dispatch as _dispatch
 from .context import get_install_context
+from . import tensor_object_state as _tensor_object_state
 from .installers.tensor.method_api import (
     _optimizer_write_scope, _optimizer_update, _optimizer_update_many,
 )
-from .installers.tensor.autograd_api import _rg_get
+from .installers.tensor.autograd_api import _grad_set, _rg_get
+from .tensor_state import get_tensor_state
 from ..diagnostics import EXPECTED, swallowed
+
+_TENSOR_OBJECT_STATE = _tensor_object_state.TensorObjectState
+_ORIG_GRAD_SLOT = _tensor_object_state._GRAD_PUBLICATION_PROTOCOL[1]
+_ORIG_GRAD_FGET_CODE = _tensor_object_state._GRAD_PUBLICATION_PROTOCOL[2]
+_ORIG_GRAD_FGET_CLOSURE = _tensor_object_state._GRAD_PUBLICATION_PROTOCOL[3]
+_ORIG_GRAD_FSET_CODE = _tensor_object_state._GRAD_PUBLICATION_PROTOCOL[4]
+_ORIG_GET_STATE = _tensor_object_state._GRAD_PUBLICATION_PROTOCOL[6]
+
+
+def _grad_slot_protocol_intact(frontend, *, check_grad_setter=False):
+    """True when Tensor/Parameter gradient accessors have not been patched."""
+    if (_tensor_object_state.TensorObjectState.grad is not _ORIG_GRAD_SLOT
+            or _tensor_object_state.get_tensor_object_state is not _ORIG_GET_STATE):
+        return False
+    for cls in (frontend.Tensor, frontend.nn.Parameter):
+        prop = getattr(cls, "_torch_grad", None)
+        if not isinstance(prop, property) or prop.fget is None or prop.fset is None:
+            return False
+        if (prop.fget.__code__ is not _ORIG_GRAD_FGET_CODE
+                or prop.fset.__code__ is not _ORIG_GRAD_FSET_CODE):
+            return False
+        fget_closure = prop.fget.__closure__
+        if (not fget_closure
+                or tuple(cell.cell_contents for cell in fget_closure) != _ORIG_GRAD_FGET_CLOSURE):
+            return False
+        if check_grad_setter:
+            gprop = getattr(cls, "grad", None)
+            if not isinstance(gprop, property) or gprop.fset is not _grad_set:
+                return False
+    return True
+
+
+def _can_fast_clear_grads(opt, frontend):
+    for ref in get_tensor_state(jt).active_optimizers:
+        other = ref() if callable(ref) else ref
+        if other is not None and other is not opt:
+            return ()
+    if _grad_slot_protocol_intact(frontend, check_grad_setter=True):
+        return (frontend.Tensor, frontend.nn.Parameter)
+    return ()
+
+
+def _fast_clear_param_grads(params, canonical_types):
+    for param in params:
+        if type(param) in canonical_types:
+            pdict = param.__dict__
+            if "_jittor_fsdp2_entry" not in pdict:
+                state = pdict.get("_torch_object_state")
+                if type(state) is _TENSOR_OBJECT_STATE:
+                    state.grad = None
+                    continue
+                if state is None and "_torch_grad" not in pdict:
+                    continue
+        if not isinstance(param, jt.Var):
+            continue
+        try:
+            param.grad = None
+        except (AttributeError, TypeError) as exc:
+            swallowed("torch/optimizers.py _zero_grad_compat: _p.grad = _value", exc)
+            object.__setattr__(param, "_torch_grad", None)
 
 
 _NATIVE_SHAPE = jt.core.Var.__dict__["shape"]
@@ -306,8 +369,28 @@ _BATCH_UPDATE_PROTOCOL = (
 )
 
 
+_CACHED_OPT_API = None
+_CACHED_STEP_CAPTURE = None
+
+
+def _get_opt_api():
+    global _CACHED_OPT_API
+    if _CACHED_OPT_API is None:
+        from . import optimizer_api as _mod
+        _CACHED_OPT_API = _mod
+    return _CACHED_OPT_API
+
+
+def _get_step_capture():
+    global _CACHED_STEP_CAPTURE
+    if _CACHED_STEP_CAPTURE is None:
+        from jittor._runtime import step_capture as _mod
+        _CACHED_STEP_CAPTURE = _mod
+    return _CACHED_STEP_CAPTURE
+
+
 def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay):
-    from . import optimizer_api as _api
+    _api = _get_opt_api()
     for group in self.param_groups:
         _api._validate_adam_execution_options(group)
         _api._sync_adam_group_params(group, validate_shapes=True)
@@ -343,20 +426,38 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                     self, "_torch_backward_advanced_n_step", False)
             return native_fsdp_loss if native_fsdp_loss is not None else loss
         _fsdp2_step.clear_fsdp_optimizer_grads(self)
-    self.pre_step(None if closure is not None and _api._optimizer_has_ready_grads(self) else loss, retain_graph)
+    pre_step_loss = None if closure is not None and _api._optimizer_has_ready_grads(self) else loss
+    self.pre_step(pre_step_loss, retain_graph)
     if loss is None or closure is not None:
         # ZeRO-3 sets a flat parameter's grad before temporarily rebinding its
         # optimizer group. The tensor owns the current grad; an old group slot
         # can be empty or refer to the preceding subgroup/step.
+        need_recheck = closure is not None or pre_step_loss is not None or _fsdp2_step is not None
+        frontend = get_install_context(jt).target_namespace
+        fast_grad_read = (_fsdp2_step is None and _grad_slot_protocol_intact(frontend))
+        canonical_types = (frontend.Tensor, frontend.nn.Parameter) if fast_grad_read else ()
+        state_cls = _TENSOR_OBJECT_STATE
         for pg in self.param_groups:
-            _api._validate_adam_execution_options(pg)
-            _api._sync_adam_group_params(pg, validate_shapes=True)
-            pg["grads"] = [
-                None if (_fsdp2_step is not None
-                         and _fsdp2_step.is_fsdp_managed_param(param))
-                else getattr(param, "_torch_grad", None)
-                for param in pg.get("params", ())
-            ]
+            if need_recheck:
+                _api._validate_adam_execution_options(pg)
+                _api._sync_adam_group_params(pg, validate_shapes=True)
+            if fast_grad_read:
+                resolved_grads = []
+                for param in pg.get("params", ()):
+                    if type(param) in canonical_types:
+                        st = param.__dict__.get("_torch_object_state")
+                        if type(st) is state_cls:
+                            resolved_grads.append(st.grad)
+                            continue
+                    resolved_grads.append(getattr(param, "_torch_grad", None))
+                pg["grads"] = resolved_grads
+            else:
+                pg["grads"] = [
+                    None if (_fsdp2_step is not None
+                             and _fsdp2_step.is_fsdp_managed_param(param))
+                    else getattr(param, "_torch_grad", None)
+                    for param in pg.get("params", ())
+                ]
     if not _api._optimizer_has_ready_grads(self):
         if native_fsdp_loss is not None:
             self.post_step()
@@ -365,7 +466,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
             object.__setattr__(
                 self, "_torch_backward_advanced_n_step", False)
         return native_fsdp_loss if native_fsdp_loss is not None else loss
-    from jittor._runtime import step_capture
+    step_capture = _get_step_capture()
     if not getattr(self, "_torch_backward_advanced_n_step", False):
         self.n_step = int(getattr(self, "n_step", 0)) + 1
         step_capture.on_replay(lambda: setattr(self, "n_step", int(self.n_step) + 1))
@@ -404,15 +505,14 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 for i, (p, g, v, m) in enumerate(zip(
                         pg["params"], grads, pg["values"], pg["m"])):
                     if not p.requires_grad or not isinstance(g, jt.Var) \
-                            or list(g.shape) != list(p.shape):
+                            or g.shape != p.shape:
                         continue
                     active.append((p, m, v, g, int(param_steps[i])))
             if active:
-                from jittor._runtime.dispatch import dispatch_context, select_kernel
                 # With zero decay Adam and AdamW have the same update. The
                 # CUDA provider also accepts Adam's live step/LR accounting.
-                if decoupled_weight_decay or dispatch_context(active[0][0]).backend == "cuda":
-                    fused_impl = select_kernel("optim.adamw_fused", active)
+                if decoupled_weight_decay or _dispatch.dispatch_context(active[0][0]).backend == "cuda":
+                    fused_impl = _dispatch.select_kernel("optim.adamw_fused", active)
         if fused_impl is not None:
             # Provider selection is an observable callback boundary: rebuild
             # eligibility and read counters after it, independently of active.
@@ -422,7 +522,7 @@ def _adam_step(self, loss, retain_graph, closure, kwargs, decoupled_weight_decay
                 for i, (p, g, v, m) in enumerate(zip(
                         pg["params"], grads, pg["values"], pg["m"])):
                     if not p.requires_grad or not isinstance(g, jt.Var) \
-                            or list(g.shape) != list(p.shape):
+                            or g.shape != p.shape:
                         continue
                     param_steps[i] = int(param_steps[i]) + 1
                     stepped.append(i)
