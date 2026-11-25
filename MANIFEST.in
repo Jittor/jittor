@@ -705,6 +705,7 @@ include src/core/memory_profiler.cc
 include src/core/memory_profiler.h
 include src/core/node.cc
 include src/core/node.h
+include src/core/node_pool.h
 include src/core/numpy_func.h
 include src/core/op.cc
 include src/core/op.h

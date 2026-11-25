@@ -1272,6 +1272,6 @@ void UnaryOp::jit_prepare(JK& jk) {
     if (strided) jk << "«XSMASK=" << JK::hex(x->stride_pattern());
 }
 
-
+JT_DEFINE_NODE_POOL(UnaryOp)
 
 } // jittor

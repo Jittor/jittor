@@ -582,6 +582,10 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
     if (graph_capture_active() || !PyList_CheckExact(groups)
             || !PyDict_CheckExact(gradients) || Py_TYPE(filled) != &PySet_Type
             || PySet_Size(filled) != 0) return false;
+    static PyObject* k_grad = PyUnicode_InternFromString("grad");
+    static PyObject* k_params = PyUnicode_InternFromString("params");
+    static PyObject* k_grads = PyUnicode_InternFromString("grads");
+    static PyObject* k_state = PyUnicode_InternFromString("_torch_object_state");
     // Allocate the only tracked container before checking live metadata.
     // The remaining validation and slot writes invoke no Python callbacks or
     // GC-triggering allocations, and never release the GIL.
@@ -599,8 +603,8 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
     for (Py_ssize_t j = 0; j < PyList_GET_SIZE(groups); ++j) {
         auto* group = PyList_GET_ITEM(groups, j);
         if (!optimizer_string_keys(group)) return false;
-        auto* params = PyDict_GetItemString(group, "params");
-        auto* slots = PyDict_GetItemString(group, "grads");
+        auto* params = PyDict_GetItem(group, k_params);
+        auto* slots = PyDict_GetItem(group, k_grads);
         if (!params || !PyList_CheckExact(params) || !slots || !PyList_CheckExact(slots)
                 || PyList_GET_SIZE(params) != PyList_GET_SIZE(slots)) return false;
         for (Py_ssize_t i = 0; i < PyList_GET_SIZE(params); ++i) {
@@ -621,9 +625,9 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
                     || holder->var->dtype() != gradient->var->dtype()) return false;
             auto** attrs = _PyObject_GetDictPtr(p);
             if (!attrs || !*attrs || !optimizer_string_keys(*attrs)) return false;
-            auto* state = PyDict_GetItemString(*attrs, "_torch_object_state");
+            auto* state = PyDict_GetItem(*attrs, k_state);
             if (!state || (PyObject*)Py_TYPE(state) != PyTuple_GET_ITEM(state_protocol, 0)) return false;
-            PyObjHolder previous(PyObject_GetAttrString(state, "grad"));
+            PyObjHolder previous(PyObject_GetAttr(state, k_grad));
             if (!previous.obj) {
                 if (!PyErr_ExceptionMatches(PyExc_AttributeError))
                     throw std::runtime_error("could not inspect gradient slot");
@@ -640,7 +644,7 @@ bool try_publish_fresh_gradients(PyObject* groups, PyObject* gradients,
         GET_RAW_PTR(VarHolder, row.gradient)->stop_grad();
         Py_INCREF(row.gradient);
         if (PyList_SetItem(row.slots, row.index, row.gradient) < 0
-                || PyObject_SetAttrString(row.state, "grad", row.gradient) < 0
+                || PyObject_SetAttr(row.state, k_grad, row.gradient) < 0
                 || PySet_Add(filled, row.key) < 0)
             throw std::runtime_error("could not publish fresh gradient");
     }
@@ -1734,10 +1738,14 @@ bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
         consumes_target = consumes_target || input == a;
     if (!consumes_target) return false;
     // An unexecuted native view has no physical share ring yet. Future reads
-    // through that alias would not depend on the replacement holder.
-    for (Op* reader : a->outputs())
+    // through that alias would not depend on the replacement holder. Also
+    // decline if any live producer/consumer recorded a lazy saved storage version.
+    if (a->input() && !a->input()->saved_storage_versions.empty()) return false;
+    for (Op* reader : a->outputs()) {
+        if (!reader->saved_storage_versions.empty()) return false;
         for (Var* output : reader->outputs())
             if (output->share_src == a) return false;
+    }
     auto version = a->peek_storage_version();
     if (version && (version.use_count() != 2
             || version->externally_visible.load(std::memory_order_relaxed))) return false;
@@ -1783,14 +1791,15 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
     // These providers allocate a fresh result, rather than a view or an
     // output aliased with an input. Broader producers retain the store path.
     Op* producer = a->input();
-    if (!producer) return false;
+    if (!producer || !producer->saved_storage_versions.empty()) return false;
     bool dtype_cast = fresh_result && producer->is_op(op_ids::unary()) && producer->ns == ns_cast;
     if (!dtype_cast && !((has_op("cublas_matmul")
                 && producer->is_op(get_op_id("cublas_matmul")))
             || (has_op("cublas_batched_matmul")
                 && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
     Op* update = b->input();
-    if (!update || !update->is_op(op_ids::binary())) return false;
+    if (!update || !update->is_op(op_ids::binary())
+            || !update->saved_storage_versions.empty()) return false;
     int readers = 0;
     for (auto* consumer : a->outputs())
         if (consumer != update || ++readers > 1) return false;
@@ -1808,7 +1817,7 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
         VarHolder copied(make_copy(b));
         target->assign(&copied);
     }
-    std::atomic_store(&target->var->storage_mutation_version, version);
+    target->var->set_storage_version(move(version));
     return true;
 }
 

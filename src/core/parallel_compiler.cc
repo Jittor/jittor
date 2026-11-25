@@ -239,11 +239,11 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         op->prepare_execution_on(jkl, op->execution_backend_for(requested_backend));
         if (jkl.empty()) continue;
 
-        // Copy the key before consulting caches; JK is reusable scratch
-        // storage and must not escape this preparation step.
-        string jit_key = jkl.to_string();
-        if (jit_key_mapper.find(jit_key)) continue;
+        if (jit_key_mapper.contains(jkl.to_cstring(), (size_t)jkl.size)) continue;
 
+        // Copy the key only on cache miss; JK is reusable scratch storage
+        // and must not escape this preparation step.
+        string jit_key = jkl.to_string();
         if (!seen_jit_keys.emplace(jit_key).second) continue;
 
         int task_rid;
@@ -373,7 +373,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                         bool needs_compile;
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            needs_compile = !jit_ops.find(relay_jit_key)
+                            needs_compile = !jit_ops.contains(relay_jit_key)
                                 && relay_keys_compiling.emplace(relay_jit_key).second;
                         }
                         if (!needs_compile) continue;

@@ -75,10 +75,10 @@ def adam_update(param, grad, value, momentum, *, lr, eps, weight_decay,
         correction = (1 - b1 ** float(step)) ** 0.5
         scalar = (jt.array(correction, dtype="float32" if dtype_name(value.dtype) == "bfloat16"
                            else value.dtype).cast(value.dtype).stop_grad()
-                  if torch_math else jt.sqrt(1 - b1 ** float(step)))
+                  if torch_math else correction)
         denom = jt.sqrt(value) / scalar + eps
         return param - momentum * (lr / (1 - b0 ** float(step))) / denom
-    step_size = lr * jt.sqrt(1 - b1 ** float(step)) / (1 - b0 ** float(step))
+    step_size = lr * ((1 - b1 ** float(step)) ** 0.5) / (1 - b0 ** float(step))
     return param - momentum * step_size / (jt.sqrt(value) + eps)
 
 
