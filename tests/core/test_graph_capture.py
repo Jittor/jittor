@@ -75,6 +75,42 @@ class TestGraphCapture(unittest.TestCase):
     def test_supported_on_cuda(self):
         self.assertTrue(jt.graph_capture_supported())
 
+    def test_capture_between_worker_batches_preserves_stream_order(self):
+        from _helpers.child_process import run_child_script
+
+        result = run_child_script(r"""
+import numpy as np
+import jittor as jt
+
+with jt.flag_scope(use_cuda=1, async_execution=1, auto_graph_replay=0,
+                   auto_flush_ops=1, async_flush_ops=1, async_min_caller_us=0), jt.no_grad():
+    x = jt.ones((128, 128))
+    x.sync()
+    before = jt.core.async_exec_batches()
+    inputs = [jt.matmul(x, x) for _ in range(4)]
+    jt.sync_all(True)
+    assert jt.core.async_exec_batches() > before
+
+    with jt.flag_scope(auto_flush_ops=0):
+        y = jt.matmul(inputs[-1], x)
+        assert jt.core.graph_capture_begin()
+        try:
+            jt.sync([y], False, False)
+        finally:
+            graph = jt.core.graph_capture_end()
+    assert graph
+    try:
+        jt.core.graph_launch(graph)
+        before = jt.core.async_exec_batches()
+        outputs = [jt.matmul(y, x) for _ in range(4)]
+        jt.sync_all(True)
+        assert jt.core.async_exec_batches() > before
+        np.testing.assert_array_equal(outputs[-1].numpy(), np.full((128, 128), 128**3))
+    finally:
+        jt.core.graph_release(graph)
+""", timeout=120, text=True, merge_stderr=True, without_torch_mode=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_a_recorded_replay_answers_exactly_like_eager(self):
         replay = graph_replay(self.model)
         for x in self.feed:
