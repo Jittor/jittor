@@ -370,6 +370,34 @@ def _integer_scaled_size(x, scale_factor, mode):
     return tuple(int(size) * int(factor) for size, factor in zip(x.shape[-2:], factors))
 
 
+def _nearest_interpolate_1d(x, size, scale_factor):
+    if (size is None) == (scale_factor is None):
+        raise ValueError("Specify either size or scale_factor for interpolation")
+    width = x.shape[-1]
+    if width <= 0:
+        raise RuntimeError("input length must be positive")
+    if size is not None:
+        if isinstance(size, (tuple, list)):
+            size, = size
+        output_width = index(size)
+        scale = width / output_width if output_width > 0 else 0.0
+    else:
+        if isinstance(scale_factor, (tuple, list)):
+            scale_factor, = scale_factor
+        factor = float(scale_factor)
+        if not math.isfinite(factor) or factor <= 0:
+            raise ValueError("scale_factor must be finite and positive")
+        output_width = math.floor(width * factor)
+        scale = 1.0 / factor
+    if output_width <= 0:
+        raise RuntimeError("output length must be positive")
+    if width == output_width:
+        return x.clone()
+    with device_scope_like(x, prefer_reference=True):
+        positions = (jt.arange(output_width, dtype="float32") * scale).int64()
+        return jt.index_select(x, 2, positions.minimum(width - 1))
+
+
 def interpolate(
     X,
     size=None,
@@ -378,6 +406,8 @@ def interpolate(
     align_corners=False,
     tf_mode=False,
 ):
+    if X.ndim == 3 and mode == "nearest":
+        return _nearest_interpolate_1d(X, size, scale_factor)
     if mode == "nearest-exact" and scale_factor is not None:
         size = _integer_scaled_size(X, scale_factor, mode)
         return jt.nn.resize(X, size, mode, align_corners, tf_mode)
