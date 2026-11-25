@@ -304,9 +304,13 @@ def gelu(x, approximate='none'):
     fast = try_dispatch("nn.gelu", x, approximate=approximate)
     if fast is not None:
         return fast
+    input_dtype = _jittor_dtype_name(x.dtype)
+    low_precision = input_dtype in ('float16', 'bfloat16')
+    compute_x = x.float32() if low_precision else x
     if approximate == 'tanh':
-        _sqrt_2_over_pi = 0.7978845608028654
-        return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))
+        sqrt_2_over_pi = 0.7978845608028654
+        cubic = compute_x * compute_x * compute_x
+        result = 0.5 * compute_x * (1 + jt.tanh(sqrt_2_over_pi * (compute_x + 0.044715 * cubic)))
     elif approximate == 'none':
         # Keep the exact GELU kernel in the tensor's compute dtype. Dividing a
         # float32 Var by a Python float intentionally uses a float64 intermediate
@@ -319,14 +323,11 @@ def gelu(x, approximate='none'):
         # twice on the *string* its own first call returned. The three typed
         # constants were rebuilt per call too; they depend on nothing but the
         # compute dtype, so there are exactly two sets of them.
-        input_dtype = _jittor_dtype_name(x.dtype)
-        low_precision = input_dtype in ('float16', 'bfloat16')
-        compute_x = x.float32() if low_precision else x
         half, one, inv_sqrt2 = _GELU_CONSTANTS[input_dtype == 'float64']
         result = half * compute_x * (one + jt.erf(compute_x * inv_sqrt2))
-        return result.cast(input_dtype) if low_precision else result
     else:
         raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
+    return result.cast(input_dtype) if low_precision else result
 
 
 def sigmoid(x):
