@@ -526,4 +526,3 @@ def test_tilelang_async_worker_execution():
         actual = x.numpy()
         assert jt.core.async_exec_batches() > before
         np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
-
