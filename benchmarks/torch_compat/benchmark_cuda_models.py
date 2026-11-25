@@ -170,7 +170,9 @@ def parse_args():
     parser.add_argument("--stock-size", choices=("full", "tiny"), default="full")
     parser.add_argument("--stock-mode", choices=("both", "reduce-overhead", "eager"), default="both",
                         help="Jittor execution mode for stock inference workloads")
-    parser.add_argument("--training-tools", type=Path, help="directory containing bench_cv.py and bench_nlp.py")
+    parser.add_argument("--training-tools", type=Path,
+                        default=REPO / "benchmarks/torch_compat/training_tools",
+                        help="directory containing bench_cv.py and bench_nlp.py")
     parser.add_argument("--accelerate-checkout", type=Path, help="the upstream Accelerate checkout")
     parser.add_argument("--training-fixtures", type=Path, help="local training snapshots by model name")
     parser.add_argument("--cv-data", type=Path, help="Oxford-IIIT Pet image directory")
