@@ -873,10 +873,15 @@ def run_model(job, directory, torch, jt, np):
     residency = {"inputs": [cuda_residency(torch, jt, tensor) for tensor in inputs],
                  "weight": cuda_residency(torch, jt, next(model.parameters()))}
     if job["mode"] == "reduce-overhead":
-        if jt is None and MODEL_CASES[job["case"]].loader == "recurrent":
-            from torch._dynamo import config
+        if jt is None:
+            # Materialize any lazily cached module buffers (e.g. detector anchors/strides)
+            # in eager memory before torch.compile so CUDAGraph replay does not overwrite them.
+            forward()
+            sync([])
+            if MODEL_CASES[job["case"]].loader == "recurrent":
+                from torch._dynamo import config
 
-            config.allow_rnn = True
+                config.allow_rnn = True
         forward = torch.compile(forward, mode="reduce-overhead", dynamic=False)
     sync([])
     setup_s = perf_counter() - start
