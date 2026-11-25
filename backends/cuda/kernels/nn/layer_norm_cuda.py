@@ -446,101 +446,6 @@ def _nchw_physical(x):
 
 
 @functools.lru_cache(maxsize=256)
-def _nchw_tile_source(hidden):
-    """Fused NCHW -> NHWC affine LayerNorm using a 32-spatial warp tile.
-
-    Each warp processes 32 consecutive spatial positions ``hw0..hw0+31`` with
-    coalesced NCHW reads and coalesced NHWC writes via a 32x33 shared tile.
-    """
-    return f"""
-        __global__ static void kernel_nchw_tile(
-                const in0_type* __restrict__ x,
-                const in1_type* __restrict__ weight,
-                const in2_type* __restrict__ bias,
-                out0_type* __restrict__ y,
-                long long spatial, long long tiles_per_n, double eps) {{
-            long long tile_id = blockIdx.x;
-            long long n = tile_id / tiles_per_n;
-            long long hw0 = (tile_id - n * tiles_per_n) * 32;
-            int lane = threadIdx.x;
-            long long hw = hw0 + lane;
-            bool valid = hw < spatial;
-            long long base = n * {hidden}LL * spatial;
-            float sum = 0.0f;
-            if (valid) {{
-                for (int j = 0; j < {hidden}; ++j)
-                    sum += static_cast<float>(x[base + (long long)j * spatial + hw]);
-            }}
-            bool use_double = valid && !isfinite(sum);
-            float mean = sum / {hidden};
-            float inv_std = 0.0f;
-            if (valid && !use_double) {{
-                float var = 0.0f;
-                for (int j = 0; j < {hidden}; ++j) {{
-                    float d = static_cast<float>(x[base + (long long)j * spatial + hw]) - mean;
-                    var += d * d;
-                }}
-                use_double = !isfinite(var);
-                if (!use_double)
-                    inv_std = rsqrtf(var / {hidden} + static_cast<float>(eps));
-            }}
-            if (__any_sync(0xffffffffu, use_double)) {{
-                if (valid) {{
-                    double dsum = 0.0;
-                    for (int j = 0; j < {hidden}; ++j)
-                        dsum += static_cast<double>(x[base + (long long)j * spatial + hw]);
-                    double dmean = dsum / {hidden};
-                    double dvar = 0.0;
-                    for (int j = 0; j < {hidden}; ++j) {{
-                        double d = static_cast<double>(x[base + (long long)j * spatial + hw]) - dmean;
-                        dvar += d * d;
-                    }}
-                    double dinv = 1.0 / sqrt(dvar / {hidden} + eps);
-                    out0_type* yr = y + (n * spatial + hw) * {hidden};
-                    for (int j = 0; j < {hidden}; ++j) {{
-                        double sc = static_cast<double>(weight[j]);
-                        double of = static_cast<double>(bias[j]);
-                        yr[j] = out0_type((static_cast<double>(x[base + (long long)j * spatial + hw]) - dmean) * dinv * sc + of);
-                    }}
-                }}
-                return;
-            }}
-            __shared__ float tile[32][33];
-            for (int j0 = 0; j0 < {hidden}; j0 += 32) {{
-                if (valid) {{
-                    #pragma unroll 4
-                    for (int k = 0; k < 32; ++k) {{
-                        int j = j0 + k;
-                        if (j < {hidden}) {{
-                            float xv = static_cast<float>(x[base + (long long)j * spatial + hw]);
-                            tile[lane][k] = (xv - mean) * inv_std * static_cast<float>(weight[j]) + static_cast<float>(bias[j]);
-                        }}
-                    }}
-                }}
-                __syncwarp();
-                int j_out = j0 + lane;
-                if (j_out < {hidden}) {{
-                    #pragma unroll 4
-                    for (int t = 0; t < 32; ++t) {{
-                        long long hw_out = hw0 + t;
-                        if (hw_out < spatial)
-                            y[(n * spatial + hw_out) * {hidden} + j_out] = out0_type(tile[t][lane]);
-                    }}
-                }}
-                __syncwarp();
-            }}
-        }}
-        double eps = data["eps"];
-        long long n = in0->shape[0];
-        long long spatial = (long long)in0->shape[2] * in0->shape[3];
-        long long tiles_per_n = (spatial + 31) / 32;
-        long long grid = n * tiles_per_n;
-        if (grid > 0)
-            kernel_nchw_tile<<<(unsigned)grid, 32>>>(in0_p, in1_p, in2_p, out0_p, spatial, tiles_per_n, eps);
-    """
-
-
-@functools.lru_cache(maxsize=256)
 def _nchw_block_rows_source(hidden):
     """Fused NCHW -> NHWC affine LayerNorm using one 128-thread block per spatial row."""
     return f"""
@@ -718,10 +623,8 @@ def _layer_norm_no_grad_cuda(
     if nchw_src is not None:
         spatial = int(nchw_src.shape[2]) * int(nchw_src.shape[3])
         if spatial > 0:
-            src_code = (_nchw_tile_source(hidden) if spatial >= 256
-                        else _nchw_block_rows_source(hidden))
             y = jt.code(x.shape, x.dtype, [nchw_src, weight, bias],
-                        cuda_src=src_code, data={"eps": eps_value})
+                        cuda_src=_nchw_block_rows_source(hidden), data={"eps": eps_value})
             return _stop_grad_outputs(y)
     y = jt.code(x.shape, x.dtype, [x, weight, bias],
                 cuda_src=_affine_source(hidden, _warp_rows(x, hidden)),
