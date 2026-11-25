@@ -39,7 +39,7 @@ namespace fe = cudnn_frontend;
 namespace {
 
 enum { DTYPE_HALF = 0, DTYPE_BF16 = 1 };
-enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4 };
+enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4, LAYOUT_PACKED_QKV = 8 };
 
 using Key = std::tuple<int, int, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
                        int, uint32_t, int64_t, int64_t, cudnnHandle_t>;
@@ -66,8 +66,11 @@ fe::DataType_t io_type(int dtype) {
 
 std::vector<int64_t> dims(int64_t b, int64_t h, int64_t s, int64_t d) { return {b, h, s, d}; }
 std::vector<int64_t> dense(int64_t h, int64_t s, int64_t d) { return {h * s * d, s * d, d, 1}; }
-// Strides of a [b, h, s, d] tensor stored as [b, s, h, d] when `seq_major`.
-std::vector<int64_t> strides(bool seq_major, int64_t h, int64_t s, int64_t d) {
+// Strides of a [b, h, s, d] tensor stored as [b, s, h, d] when `seq_major`,
+// or as one slice of a packed [b, s, 3, h, d] QKV tensor when `packed_qkv`.
+std::vector<int64_t> strides(bool seq_major, int64_t h, int64_t s, int64_t d,
+                             bool packed_qkv = false) {
+    if (packed_qkv) return {3 * s * h * d, d, 3 * h * d, 1};
     if (seq_major) return {s * h * d, d, h * d, 1};
     return dense(h, s, d);
 }
@@ -79,9 +82,10 @@ uint32_t bits(float value) {
 }
 
 std::shared_ptr<fe::graph::Tensor_attributes> input(fe::graph::Graph& graph, const char* name,
-        int64_t b, int64_t h, int64_t s, int64_t d, bool seq_major) {
+        int64_t b, int64_t h, int64_t s, int64_t d, bool seq_major, bool packed_qkv = false) {
     return graph.tensor(fe::graph::Tensor_attributes()
-        .set_name(name).set_dim(dims(b, h, s, d)).set_stride(strides(seq_major, h, s, d)));
+        .set_name(name).set_dim(dims(b, h, s, d))
+        .set_stride(strides(seq_major, h, s, d, packed_qkv)));
 }
 
 std::shared_ptr<fe::graph::Tensor_attributes> stats_input(fe::graph::Graph& graph,
@@ -115,9 +119,10 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     graph.set_io_data_type(io_type(dtype))
         .set_intermediate_data_type(fe::DataType_t::FLOAT)
         .set_compute_data_type(fe::DataType_t::FLOAT);
-    entry->q = input(graph, "q", b, h, sq, d, layout & LAYOUT_Q);
-    entry->k = input(graph, "k", b, hk, skv, d, layout & LAYOUT_K);
-    entry->v = input(graph, "v", b, hk, skv, d, layout & LAYOUT_V);
+    const bool packed_qkv = (layout & LAYOUT_PACKED_QKV) != 0;
+    entry->q = input(graph, "q", b, h, sq, d, (layout & LAYOUT_Q) != 0, packed_qkv);
+    entry->k = input(graph, "k", b, hk, skv, d, (layout & LAYOUT_K) != 0, packed_qkv);
+    entry->v = input(graph, "v", b, hk, skv, d, (layout & LAYOUT_V) != 0, packed_qkv);
     auto options = fe::graph::SDPA_attributes().set_name("sdpa")
         .set_generate_stats(training != 0).set_attn_scale(scale);
     if (causal) options.set_causal_mask(true);
@@ -131,7 +136,7 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     auto outputs = graph.sdpa(entry->q, entry->k, entry->v, options);
     entry->o = outputs[0];
     entry->o->set_output(true).set_dim(dims(b, h, sq, d))
-        .set_stride(strides(layout & LAYOUT_Q, h, sq, d));
+        .set_stride(strides(((layout & LAYOUT_Q) != 0) || packed_qkv, h, sq, d));
     if (training) {
         entry->stats = outputs[1];
         entry->stats->set_output(true).set_data_type(fe::DataType_t::FLOAT)
