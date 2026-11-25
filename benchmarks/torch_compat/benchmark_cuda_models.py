@@ -98,6 +98,8 @@ WAN_CASES = {
 }
 VIDEO = "ti2v-video"
 CUDA_DEVICE_ORDINAL = 9
+TRAINING_LOSS_ATOL = 0.02
+TRAINING_LOSS_RTOL = 0.03
 CV_MODELS = {
     16: (
         "convnext_xlarge.fb_in22k_ft_in1k", "convnextv2_huge.fcmae_ft_in1k",
@@ -797,7 +799,8 @@ def run_stock(job, directory, torch, jt, np):
     return dict(execution=execution, measured_replay=replay, replay_refused=refusal,
                 setup_s=setup_s, warmups=warmups, measurements=measurements,
                 config=workload.config(), dtype=task.default_dtype, observed_output=residency,
-                settings=settings, stochastic=task.stochastic, checked_output_batches=checked_batches)
+                settings=settings, workload_mode=task.mode, stochastic=task.stochastic,
+                checked_output_batches=checked_batches)
 
 
 def output_tensors(torch, result, prefix="output"):
@@ -1080,7 +1083,8 @@ def compare_training(np, reference, candidate):
             continue
         reference_loss = np.array([row["loss"] for row in left["records"]])
         candidate_loss = np.array([row["loss"] for row in right["records"]])
-        failed = np.flatnonzero(~np.isclose(reference_loss, candidate_loss, atol=0.02, rtol=0.03))
+        failed = np.flatnonzero(~np.isclose(reference_loss, candidate_loss,
+                                           atol=TRAINING_LOSS_ATOL, rtol=TRAINING_LOSS_RTOL))
         if failed.size:
             first = failed[0]
             errors.append(dict(rank=rank, first_step=expected_steps[first], steps_outside_tolerance=int(failed.size),
@@ -1088,6 +1092,23 @@ def compare_training(np, reference, candidate):
                                max_abs=float(np.abs(reference_loss - candidate_loss).max())))
     return dict(same_inputs=inputs_match, parity=not errors, comparable=inputs_match and not errors,
                 loss_errors=errors)
+
+
+def compare_stock_losses(np, reference, candidate):
+    # Compiled and eager workers may settle after a different number of warmup
+    # steps. Compare their common prefix from the same initial state.
+    def losses(row):
+        samples = row["warmups"] + row["measurements"]
+        return np.array([sample["value"] for sample in samples], dtype=np.float64)
+
+    expected, actual = losses(reference), losses(candidate)
+    steps = min(expected.size, actual.size)
+    if not steps:
+        return dict(parity=False, parity_error="No matching training loss steps")
+    errors = compare_arrays(np, expected[:steps], actual[:steps],
+                            TRAINING_LOSS_ATOL, TRAINING_LOSS_RTOL)
+    return dict(parity=errors["parity"], loss_steps=steps, output_errors={"loss": errors},
+                atol=TRAINING_LOSS_ATOL, rtol=TRAINING_LOSS_RTOL)
 
 
 def compare_pair(reference, candidate):
@@ -1124,6 +1145,10 @@ def compare_pair(reference, candidate):
                   comparable=dependencies_match and inputs_match)
     if reference.get("checked_output_batches") and candidate.get("checked_output_batches"):
         result.update(compare_model_outputs(np, reference, candidate))
+    elif (reference.get("workload_mode") == candidate.get("workload_mode") == "train"
+          and not (reference["stochastic"] or candidate["stochastic"])):
+        result.update(compare_stock_losses(np, reference, candidate))
+    if "parity" in result:
         result["comparable"] = result["comparable"] and result["parity"]
     return result
 
