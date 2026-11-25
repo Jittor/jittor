@@ -9,6 +9,7 @@
 #include "runtime/tensor_placement.h"
 #include "core/common.h"
 #include "core/node.h"
+#include "core/node_pool.h"
 #include "core/storage_version.h"
 #include "utils/cstr.h"
 #include "utils/fast_shared_ptr.h"
@@ -48,7 +49,8 @@ struct AutogradAliasState {
     }
 };
 
-struct Var : Node {
+struct Var final : Node {
+    JT_DECLARE_NODE_POOL()
     NanoVector shape;
     // Element strides; empty means the canonical dense layout. Offset remains
     // represented by mem_ptr relative to the shared allocation's base.
@@ -265,6 +267,157 @@ struct VarPtr {
     }
 
     void set_stop_grad(bool stop_grad);
+};
+
+// RAII owner for a batch of Vars: takes graph_mutation_mutex() once per bulk
+// own or bulk release instead of once per VarPtr. Individual slots may be
+// released early (and nulled) via release_indices / release_index; clear() and
+// destruction batch-release all remaining non-null pointers and preserve
+// vector capacity for BatchState reuse.
+struct VarPtrBatch {
+    SmallVector<Var*, 4> vars;
+
+    VarPtrBatch() = default;
+    ~VarPtrBatch() { clear(); }
+    VarPtrBatch(const VarPtrBatch&) = delete;
+    VarPtrBatch& operator=(const VarPtrBatch&) = delete;
+    VarPtrBatch(VarPtrBatch&& other) noexcept : vars(move(other.vars)) {
+        other.vars.clear();
+    }
+    VarPtrBatch& operator=(VarPtrBatch&& other) noexcept {
+        if (this != &other) {
+            clear();
+            vars = move(other.vars);
+            other.vars.clear();
+        }
+        return *this;
+    }
+
+    inline bool empty() const { return vars.empty(); }
+    inline size_t size() const { return vars.size(); }
+    inline void reserve(size_t n) { vars.reserve(n); }
+    inline Var* operator[](size_t i) const { return vars[i]; }
+
+    inline void own_all(const vector<Var*>& src) {
+        const size_t n = src.size();
+        if (n == 0) return;
+        vars.reserve(vars.size() + n);
+        own_both_liveness_batch(src.data(), n);
+        for (size_t i = 0; i < n; ++i) vars.push_back(src[i]);
+    }
+
+    inline void own_all_locked(const vector<Var*>& src) {
+        const size_t n = src.size();
+        if (n == 0) return;
+        vars.reserve(vars.size() + n);
+        own_both_liveness_batch_locked(src.data(), n);
+        for (size_t i = 0; i < n; ++i) vars.push_back(src[i]);
+    }
+
+    inline void push(Var* v) {
+        if (!v) {
+            vars.push_back(nullptr);
+            return;
+        }
+        vars.reserve(vars.size() + 1);
+        v->own_both_liveness();
+        vars.push_back(v);
+    }
+
+    inline void release_index(int idx) {
+        Var* v = vars[idx];
+        if (!v) return;
+        vars[idx] = nullptr;
+        v->release_both_liveness();
+    }
+
+    inline void release_indices(const vector<int>& indices) {
+        const size_t m = indices.size();
+        if (m == 0) return;
+        if (m == 1) {
+            release_index(indices[0]);
+            return;
+        }
+        if (m <= 64) {
+            Var* buf[64];
+            size_t count = 0;
+            for (size_t i = 0; i < m; ++i) {
+                int idx = indices[i];
+                Var* v = vars[idx];
+                if (v) {
+                    vars[idx] = nullptr;
+                    buf[count++] = v;
+                }
+            }
+            if (count) release_both_liveness_batch(buf, count);
+            return;
+        }
+        vector<Var*> buf;
+        buf.reserve(m);
+        for (int idx : indices) {
+            Var* v = vars[idx];
+            if (v) {
+                vars[idx] = nullptr;
+                buf.push_back(v);
+            }
+        }
+        if (!buf.empty()) release_both_liveness_batch(buf.data(), buf.size());
+    }
+
+    inline void release_indices_locked(const vector<int>& indices) {
+        const size_t m = indices.size();
+        if (m == 0) return;
+        if (m == 1) {
+            Var* v = vars[indices[0]];
+            if (v) {
+                vars[indices[0]] = nullptr;
+                release_both_liveness_batch_locked(&v, 1);
+            }
+            return;
+        }
+        if (m <= 64) {
+            Var* buf[64];
+            size_t count = 0;
+            for (size_t i = 0; i < m; ++i) {
+                int idx = indices[i];
+                Var* v = vars[idx];
+                if (v) {
+                    vars[idx] = nullptr;
+                    buf[count++] = v;
+                }
+            }
+            if (count) release_both_liveness_batch_locked(buf, count);
+            return;
+        }
+        vector<Var*> buf;
+        buf.reserve(m);
+        for (int idx : indices) {
+            Var* v = vars[idx];
+            if (v) {
+                vars[idx] = nullptr;
+                buf.push_back(v);
+            }
+        }
+        if (!buf.empty()) release_both_liveness_batch_locked(buf.data(), buf.size());
+    }
+
+    inline void clear() {
+        if (vars.empty()) return;
+        struct ClearOnExit {
+            SmallVector<Var*, 4>& v;
+            ~ClearOnExit() { v.clear(); }
+        } guard{vars};
+        release_both_liveness_batch(vars.begin(), vars.size());
+    }
+
+    inline void clear_locked() {
+        if (vars.empty()) return;
+        struct ClearOnExit {
+            SmallVector<Var*, 4>& v;
+            ~ClearOnExit() { v.clear(); }
+        } guard{vars};
+        release_both_liveness_batch_locked(vars.begin(), vars.size());
+    }
 };
 
 // Some constructors only decide to forward: from their arguments alone they

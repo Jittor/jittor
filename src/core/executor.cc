@@ -485,7 +485,8 @@ static void schedule_hold_release(ExecPlan& plan) {
 // recycled -- it is an op, built afresh for every batch as it always was.
 struct BatchState {
     ExecPlan plan;
-    vector<VarPtr> batch_hold;
+    VarPtrBatch planning_hold;
+    VarPtrBatch batch_hold;
     unique_ptr<FusedOp> fused_op;
     vector<Var*> vars;
 };
@@ -514,6 +515,7 @@ void recycle_batch_state(BatchState* state) {
     state->fused_op.reset();
     state->vars.clear();
     state->batch_hold.clear();
+    state->planning_hold.clear();
     bool keep = state->plan.ops.capacity() <= BatchStatePool::pooled_ops_limit
         && state->plan.all_vars.capacity() <= 2 * BatchStatePool::pooled_ops_limit;
     if (keep) {
@@ -586,9 +588,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // Their saved tensors may be roots collected by sync_all, so own those
     // roots before draining callbacks or releasing the graph lock. The batch
     // hold below starts only after planning, too late to protect this window.
-    vector<VarPtr> root_hold;
-    root_hold.reserve(vars.size());
-    for (Var* var : vars) root_hold.emplace_back(var);
+    VarPtrBatch root_hold;
+    root_hold.own_all(vars);
     // The batch on the worker, if one is in flight, comes first: this one may
     // need what it produces, and only one runs at a time.
     async_exec_wait();
@@ -636,9 +637,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // Planning and graph optimization use raw node pointers. Own the roots
     // immediately, then let the planner extend this hold to every Var it
     // reaches before any graph rewrite can release their producer Ops.
-    vector<VarPtr> planning_hold;
-    planning_hold.reserve(vars.size());
-    for (Var* v : vars) planning_hold.emplace_back(v);
+    VarPtrBatch& planning_hold = state->planning_hold;
+    planning_hold.own_all(vars);
     build_exec_plan(vars, weak_sync, plan, planning_hold);
     trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
@@ -663,13 +663,15 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // use. The edge snapshot stays because a *live* var can still have its
     // edges released (`release_inputs`, which the shim uses to park tensors),
     // and the planner reads them.
-    vector<VarPtr>& batch_hold = state->batch_hold;
-    batch_hold.reserve(plan.all_vars.size());
-    for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
-    // The final batch hold now owns every pointer the plan keeps. Releasing
-    // traversal-only holds may discard superseded nodes from earlier graph
-    // optimization passes, but cannot invalidate this plan.
-    planning_hold.clear();
+    VarPtrBatch& batch_hold = state->batch_hold;
+    {
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+        batch_hold.own_all_locked(plan.all_vars);
+        // The final batch hold now owns every pointer the plan keeps. Releasing
+        // traversal-only holds may discard superseded nodes from earlier graph
+        // optimization passes, but cannot invalidate this plan.
+        planning_hold.clear_locked();
+    }
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
     plan.batch_hold_per_var = 1;
     schedule_hold_release(plan);

@@ -19,6 +19,7 @@
 namespace jittor {
 
 std::atomic<int64> Var::number_of_lived_vars{0};
+JT_DEFINE_NODE_POOL(Var)
 
 StorageMutationVersion::StorageMutationVersion(int64 origin_var_id)
     : origin_var_id(origin_var_id) {

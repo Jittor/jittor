@@ -553,6 +553,13 @@ struct Node {
     void set_stop_grad();
 };
 
+// Batch liveness ownership helpers: acquire graph_mutation_mutex() once for
+// the whole span and fast-path nodes whose counters stay strictly above zero.
+void own_both_liveness_batch(Var* const* vars, size_t n);
+void own_both_liveness_batch_locked(Var* const* vars, size_t n);
+void release_both_liveness_batch(Var* const* vars, size_t n);
+void release_both_liveness_batch_locked(Var* const* vars, size_t n);
+
 inline Node::output_t& Node::input_t::reverse() {
     return node->_outputs[back_index];
 }

@@ -742,8 +742,7 @@ struct DeferredGraphWork {
         while (front < items.size()) {
             Item& item = items[front++];
             if (item.released_segment >= 0) {
-                for (int index : plan.release_after[item.released_segment])
-                    (*plan.batch_hold)[index].free_liveness();
+                plan.batch_hold->release_indices_locked(plan.release_after[item.released_segment]);
             } else if (item.op) {
                 finish_unfused(item.op, outputs_bk);
             } else {
@@ -859,9 +858,18 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // dropped with the hold itself.
         if (rid && plan.batch_hold) {
             if (on_worker) deferred.release(rid - 1);
-            else for (int index : plan.release_after[rid - 1]) {
-                if (kept_state) release_kept_storage(plan.all_vars[index], kept_state->released, kept_state->pinned, kept_state->waiting);
-                (*plan.batch_hold)[index].free_liveness();
+            else {
+                const auto& rel = plan.release_after[rid - 1];
+                if (!rel.empty()) {
+                    if (PREDICT_BRANCH_NOT_TAKEN((bool)kept_state)) {
+                        for (int index : rel) {
+                            release_kept_storage(plan.all_vars[index], kept_state->released, kept_state->pinned, kept_state->waiting);
+                            plan.batch_hold->release_index(index);
+                        }
+                    } else {
+                        plan.batch_hold->release_indices(rel);
+                    }
+                }
             }
         }
         // Every input a segment took over has been released by now.

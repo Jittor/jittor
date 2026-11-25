@@ -10,8 +10,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <sstream>
+#include <type_traits>
 #include "utils/log.h"
 #include <thread>
 #include "mem/allocator/sfrl_allocator.h"
@@ -29,55 +31,14 @@ namespace {
 // which report device -1.
 constexpr int kPeakDevices = 64;
 constexpr int kSlots = kPeakDevices + 1;
-std::atomic<int64> device_live[kSlots];
-std::atomic<int64> device_peak[kSlots];
-std::atomic<int64> device_allocated[kSlots];
-std::atomic<int64> device_reserved[kSlots];
-std::atomic<int64> device_reserved_peak[kSlots];
-// A second high-water mark that a caller restarts for one measurement -- what a
-// call holds at its most -- without touching the one `max_memory_allocated`
-// reports.
-std::atomic<int64> device_window_peak[kSlots];
 
 inline int slot(int device) {
     if (device < 0) return kPeakDevices;
     return device < kPeakDevices ? device : -1;
 }
 
-// PyTorch's caching-allocator statistics (`torch.cuda.memory_stats`), per
-// device and per pool: each has a current value, its high-water mark, and the
-// totals ever added and taken away. A block's pool is its segment's: a small
-// segment is the SMALL_BLOCK_SIZE one a request of at most that size gets.
-struct PoolStat {
-    std::atomic<int64> current{0}, peak{0}, allocated{0}, freed{0};
-};
-PoolStat pool_stats[kSlots][sfrl_stat_count][3];
-std::atomic<int64> pool_counters[kSlots][sfrl_counter_count];
-
 inline int pool_of(const CachingBlock* block) {
     return block->origin_size <= SFRLAllocator::SMALL_BLOCK_SIZE ? sfrl_pool_small : sfrl_pool_large;
-}
-
-void note_stat(int device, int stat, int pool, int64 delta) {
-    int s = slot(device);
-    if (s < 0 || !delta) return;
-    for (int p : {(int)sfrl_pool_all, pool}) {
-        auto& st = pool_stats[s][stat][p];
-        int64 now = st.current.fetch_add(delta, std::memory_order_relaxed) + delta;
-        if (delta > 0) {
-            st.allocated.fetch_add(delta, std::memory_order_relaxed);
-            int64 seen = st.peak.load(std::memory_order_relaxed);
-            while (now > seen && !st.peak.compare_exchange_weak(
-                    seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
-        } else {
-            st.freed.fetch_add(-delta, std::memory_order_relaxed);
-        }
-    }
-}
-
-void note_counter(int device, int counter) {
-    int s = slot(device);
-    if (s >= 0) pool_counters[s][counter].fetch_add(1, std::memory_order_relaxed);
 }
 
 // A free block that shares its segment with others: memory PyTorch calls
@@ -85,123 +46,309 @@ void note_counter(int device, int counter) {
 inline bool inactive_split(const CachingBlock* b) {
     return b && !b->occupied && (b->prev || b->next);
 }
-void note_inactive_split(int device, const CachingBlock* b, int sign) {
-    if (!inactive_split(b)) return;
-    note_stat(device, sfrl_stat_inactive_split, pool_of(b), sign);
-    note_stat(device, sfrl_stat_inactive_split_bytes, pool_of(b), sign * (int64)b->size);
+
+// PyTorch's caching-allocator statistics (`torch.cuda.memory_stats`), per
+// device and per pool: each has a current value, its high-water mark, and the
+// totals ever added and taken away. A block's pool is its segment's: a small
+// segment is the SMALL_BLOCK_SIZE one a request of at most that size gets.
+struct PoolStat {
+    int64 current = 0, peak = 0, allocated = 0, freed = 0;
+};
+
+// One cache-line-aligned telemetry block per device slot (plus host). Guarded
+// by a single leaf spinlock so alloc()/free() update all device and pool stats
+// with plain non-atomic arithmetic in one lock acquisition instead of 30-60
+// atomic RMWs. The lock never calls external code (deadlock-free) and the
+// struct is trivially destructible (safe during static exit teardown).
+struct alignas(64) SlotTelemetry {
+    std::atomic<uint8_t> lock{0};
+    int64 live = 0;
+    int64 peak = 0;
+    int64 allocated = 0;
+    int64 reserved = 0;
+    int64 reserved_peak = 0;
+    // A second high-water mark that a caller restarts for one measurement --
+    // what a call holds at its most -- without touching the one
+    // `max_memory_allocated` reports.
+    int64 window_peak = 0;
+    PoolStat stats[sfrl_stat_count][3];
+    int64 counters[sfrl_counter_count] = {};
+
+    inline void add_stat_pos(int stat, int pool, int64 delta) noexcept {
+        PoolStat& all = stats[stat][sfrl_pool_all];
+        PoolStat& sub = stats[stat][pool];
+        int64 now_all = all.current + delta;
+        all.current = now_all;
+        all.allocated += delta;
+        if (now_all > all.peak) all.peak = now_all;
+        int64 now_sub = sub.current + delta;
+        sub.current = now_sub;
+        sub.allocated += delta;
+        if (now_sub > sub.peak) sub.peak = now_sub;
+    }
+
+    inline void add_stat_neg(int stat, int pool, int64 mag) noexcept {
+        PoolStat& all = stats[stat][sfrl_pool_all];
+        PoolStat& sub = stats[stat][pool];
+        all.current -= mag;
+        all.freed += mag;
+        sub.current -= mag;
+        sub.freed += mag;
+    }
+
+    inline void add_counter(int counter) noexcept {
+        counters[counter] += 1;
+    }
+
+    inline void add_inactive_split_pos(int pool, int64 size) noexcept {
+        add_stat_pos(sfrl_stat_inactive_split, pool, 1);
+        if (size) add_stat_pos(sfrl_stat_inactive_split_bytes, pool, size);
+    }
+
+    inline void add_inactive_split_neg(int pool, int64 size) noexcept {
+        add_stat_neg(sfrl_stat_inactive_split, pool, 1);
+        if (size) add_stat_neg(sfrl_stat_inactive_split_bytes, pool, size);
+    }
+
+    inline void add_block_pos(int pool, int64 size, int64 requested) noexcept {
+        add_stat_pos(sfrl_stat_allocation, pool, 1);
+        add_stat_pos(sfrl_stat_active, pool, 1);
+        if (size) {
+            add_stat_pos(sfrl_stat_allocated_bytes, pool, size);
+            add_stat_pos(sfrl_stat_active_bytes, pool, size);
+        }
+        if (requested) add_stat_pos(sfrl_stat_requested_bytes, pool, requested);
+    }
+
+    inline void add_block_neg(int pool, int64 size, int64 requested) noexcept {
+        add_stat_neg(sfrl_stat_allocation, pool, 1);
+        add_stat_neg(sfrl_stat_active, pool, 1);
+        if (size) {
+            add_stat_neg(sfrl_stat_allocated_bytes, pool, size);
+            add_stat_neg(sfrl_stat_active_bytes, pool, size);
+        }
+        if (requested) add_stat_neg(sfrl_stat_requested_bytes, pool, requested);
+    }
+
+    inline void add_device_alloc(int64 bytes) noexcept {
+        allocated += bytes;
+        int64 now = (live += bytes);
+        if (now > peak) peak = now;
+        if (now > window_peak) window_peak = now;
+    }
+
+    inline void add_device_free(int64 bytes) noexcept {
+        live -= bytes;
+    }
+
+    inline void add_device_reserve(int64 bytes) noexcept {
+        int64 now = (reserved += bytes);
+        if (now > reserved_peak) reserved_peak = now;
+    }
+};
+
+static_assert(std::is_trivially_destructible<SlotTelemetry>::value,
+              "SlotTelemetry must be trivially destructible");
+
+SlotTelemetry telemetry[kSlots];
+
+struct SlotGuard {
+    SlotTelemetry& slot_ref;
+    explicit inline SlotGuard(SlotTelemetry& s) noexcept : slot_ref(s) {
+        if (PREDICT_BRANCH_NOT_TAKEN(slot_ref.lock.exchange(1, std::memory_order_acquire))) {
+            int spins = 0;
+            do {
+                while (slot_ref.lock.load(std::memory_order_relaxed)) {
+                    #if defined(__x86_64__) || defined(_M_X64)
+                    __builtin_ia32_pause();
+                    #elif defined(__aarch64__)
+                    asm volatile("yield" ::: "memory");
+                    #endif
+                    if (++spins > 64) {
+                        std::this_thread::yield();
+                        spins = 0;
+                    }
+                }
+            } while (slot_ref.lock.exchange(1, std::memory_order_acquire));
+        }
+    }
+    inline ~SlotGuard() noexcept {
+        slot_ref.lock.store(0, std::memory_order_release);
+    }
+    SlotGuard(const SlotGuard&) = delete;
+    SlotGuard& operator=(const SlotGuard&) = delete;
+};
+
+void note_counter(int device, int counter) {
+    int s = slot(device);
+    if (s < 0) return;
+    SlotGuard guard(telemetry[s]);
+    telemetry[s].add_counter(counter);
 }
 
-void note_block(int device, const CachingBlock* block, int sign) {
-    int pool = pool_of(block);
-    note_stat(device, sfrl_stat_allocation, pool, sign);
-    note_stat(device, sfrl_stat_active, pool, sign);
-    note_stat(device, sfrl_stat_allocated_bytes, pool, sign * (int64)block->size);
-    note_stat(device, sfrl_stat_active_bytes, pool, sign * (int64)block->size);
-    note_stat(device, sfrl_stat_requested_bytes, pool, sign * (int64)block->requested);
+void note_segment_allocated(int device, int pool, int64 bytes) {
+    int s = slot(device);
+    if (s < 0) return;
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    st.add_device_reserve(bytes);
+    st.add_counter(sfrl_counter_device_alloc);
+    st.add_stat_pos(sfrl_stat_segment, pool, 1);
+    if (bytes) st.add_stat_pos(sfrl_stat_reserved_bytes, pool, bytes);
 }
 
 void note_segment_released(int device, const CachingBlock* segment) {
-    note_counter(device, sfrl_counter_device_free);
-    note_stat(device, sfrl_stat_segment, pool_of(segment), -1);
-    note_stat(device, sfrl_stat_reserved_bytes, pool_of(segment), -(int64)segment->size);
-}
-
-void note_device_alloc(int device, int64 bytes) {
     int s = slot(device);
     if (s < 0) return;
-    device_allocated[s].fetch_add(bytes, std::memory_order_relaxed);
-    int64 now = device_live[s].fetch_add(bytes, std::memory_order_relaxed) + bytes;
-    int64 seen = device_peak[s].load(std::memory_order_relaxed);
-    while (now > seen && !device_peak[s].compare_exchange_weak(
-            seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
-    seen = device_window_peak[s].load(std::memory_order_relaxed);
-    while (now > seen && !device_window_peak[s].compare_exchange_weak(
-            seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
-}
-
-void note_device_free(int device, int64 bytes) {
-    int s = slot(device);
-    if (s >= 0) device_live[s].fetch_sub(bytes, std::memory_order_relaxed);
+    int pool = pool_of(segment);
+    int64 bytes = (int64)segment->size;
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    st.add_counter(sfrl_counter_device_free);
+    st.add_stat_neg(sfrl_stat_segment, pool, 1);
+    if (bytes) st.add_stat_neg(sfrl_stat_reserved_bytes, pool, bytes);
 }
 
 void note_device_reserve(int device, int64 bytes) {
     int s = slot(device);
     if (s < 0) return;
-    int64 now = device_reserved[s].fetch_add(bytes, std::memory_order_relaxed) + bytes;
-    int64 seen = device_reserved_peak[s].load(std::memory_order_relaxed);
-    while (now > seen && !device_reserved_peak[s].compare_exchange_weak(
-            seen, now, std::memory_order_relaxed, std::memory_order_relaxed)) {}
+    SlotGuard guard(telemetry[s]);
+    telemetry[s].add_device_reserve(bytes);
+}
+
+inline void record_block_alloc(
+    int device, int pool, int64 blk_size, int64 blk_requested,
+    int64 popped_split_size, int64 rest_split_size
+) {
+    int s = slot(device);
+    if (s < 0) return;
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    if (popped_split_size >= 0) st.add_inactive_split_neg(pool, popped_split_size);
+    if (rest_split_size >= 0) st.add_inactive_split_pos(pool, rest_split_size);
+    st.add_block_pos(pool, blk_size, blk_requested);
+    st.add_device_alloc(blk_size);
+}
+
+inline void record_block_free(
+    int device, int pool, int64 blk_size, int64 blk_requested,
+    int64 prev_split_size, int64 next_split_size, int64 merged_split_size
+) {
+    int s = slot(device);
+    if (s < 0) return;
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    st.add_device_free(blk_size);
+    st.add_block_neg(pool, blk_size, blk_requested);
+    if (prev_split_size >= 0) st.add_inactive_split_neg(pool, prev_split_size);
+    if (next_split_size >= 0) st.add_inactive_split_neg(pool, next_split_size);
+    if (merged_split_size >= 0) st.add_inactive_split_pos(pool, merged_split_size);
+}
+
+inline void record_fence_carve(
+    int device, int pool, int64 blk_size,
+    int64 old_split_size, int64 left_split_size, int64 right_split_size
+) {
+    int s = slot(device);
+    if (s < 0) return;
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    if (old_split_size >= 0) st.add_inactive_split_neg(pool, old_split_size);
+    if (left_split_size >= 0) st.add_inactive_split_pos(pool, left_split_size);
+    if (right_split_size >= 0) st.add_inactive_split_pos(pool, right_split_size);
+    st.add_block_pos(pool, blk_size, blk_size);
+    st.add_device_alloc(blk_size);
 }
 } // namespace
 
 int64 sfrl_device_live_bytes(int device) {
     int s = slot(device);
-    return s >= 0 ? device_live[s].load() : 0;
+    if (s < 0) return 0;
+    SlotGuard guard(telemetry[s]);
+    return telemetry[s].live;
 }
 
 int64 sfrl_device_peak_bytes(int device) {
     int s = slot(device);
-    return s >= 0 ? device_peak[s].load() : 0;
+    if (s < 0) return 0;
+    SlotGuard guard(telemetry[s]);
+    return telemetry[s].peak;
 }
 
 void sfrl_reset_device_peak(int device) {
     int s = slot(device);
     if (s < 0) return;
-    device_peak[s].store(device_live[s].load());
-    device_reserved_peak[s].store(device_reserved[s].load());
-    for (auto& stat : pool_stats[s])
-        for (auto& p : stat) p.peak.store(p.current.load());
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    st.peak = st.live;
+    st.reserved_peak = st.reserved;
+    for (auto& stat : st.stats)
+        for (auto& p : stat) p.peak = p.current;
 }
 
 void sfrl_reset_device_accumulated(int device) {
     int s = slot(device);
     if (s < 0) return;
-    for (auto& stat : pool_stats[s])
-        for (auto& p : stat) { p.allocated.store(0); p.freed.store(0); }
-    for (auto& c : pool_counters[s]) c.store(0);
+    SlotGuard guard(telemetry[s]);
+    auto& st = telemetry[s];
+    for (auto& stat : st.stats)
+        for (auto& p : stat) { p.allocated = 0; p.freed = 0; }
+    for (auto& c : st.counters) c = 0;
 }
 
 vector<int64> sfrl_device_memory_stats(int device) {
     vector<int64> out;
     int s = slot(device);
     if (s < 0) return out;
-    for (auto& stat : pool_stats[s])
-        for (auto& p : stat) {
-            out.push_back(p.current.load());
-            out.push_back(p.peak.load());
-            out.push_back(p.allocated.load());
-            out.push_back(p.freed.load());
+    out.reserve(sfrl_stat_count * 3 * 4 + sfrl_counter_count);
+    SlotGuard guard(telemetry[s]);
+    const auto& st = telemetry[s];
+    for (const auto& stat : st.stats)
+        for (const auto& p : stat) {
+            out.push_back(p.current);
+            out.push_back(p.peak);
+            out.push_back(p.allocated);
+            out.push_back(p.freed);
         }
-    for (auto& c : pool_counters[s]) out.push_back(c.load());
+    for (int64 c : st.counters) out.push_back(c);
     return out;
 }
 
 int64 sfrl_device_reserved_bytes(int device) {
     int s = slot(device);
-    return s >= 0 ? device_reserved[s].load() : 0;
+    if (s < 0) return 0;
+    SlotGuard guard(telemetry[s]);
+    return telemetry[s].reserved;
 }
 
 int64 sfrl_device_reserved_peak_bytes(int device) {
     int s = slot(device);
-    return s >= 0 ? device_reserved_peak[s].load() : 0;
+    if (s < 0) return 0;
+    SlotGuard guard(telemetry[s]);
+    return telemetry[s].reserved_peak;
 }
 
 int64 sfrl_device_window_start(int device) {
     int s = slot(device);
     if (s < 0) return 0;
-    int64 live = device_live[s].load();
-    device_window_peak[s].store(live);
+    SlotGuard guard(telemetry[s]);
+    int64 live = telemetry[s].live;
+    telemetry[s].window_peak = live;
     return live;
 }
 
 int64 sfrl_device_window_peak(int device) {
     int s = slot(device);
-    return s >= 0 ? device_window_peak[s].load() : 0;
+    if (s < 0) return 0;
+    SlotGuard guard(telemetry[s]);
+    return telemetry[s].window_peak;
 }
 
 int64 sfrl_device_allocated_bytes(int device) {
     int s = slot(device);
-    return s >= 0 ? device_allocated[s].load() : 0;
+    if (s < 0) return 0;
+    SlotGuard guard(telemetry[s]);
+    return telemetry[s].allocated;
 }
 DEFINE_FLAG(int64, sfrl_large_block_size_device, 20971520, "The segment a device request up to half this size is carved from; larger requests get a segment of their own, rounded to 2 MB. PyTorch packs 1-10 MB requests into 20 MB segments; at 5 MB each mid-sized tensor took a segment of its own and left a tail only something smaller could use: the SD1.5 UNet's 686 half-precision weights reserved 1818 MB for 1640 MB of data (PyTorch 1702), and its sampling process peaked 2.76 GB against 2.52 at 20 MB. Only affects devices.");
 constexpr int64 sfrl_large_block_size_cpu=5242880;
@@ -587,6 +734,7 @@ size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size
 
 void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     std::unique_lock<std::recursive_mutex> lock(mutex);
+    const int dev = device();
     size_t padding = cached_allocation_padding;
     #ifdef HAS_ACCELERATOR
     if (PREDICT_BRANCH_NOT_TAKEN(!padding_cached)) {
@@ -601,6 +749,7 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     CachingBlockPool* blocks = get_blocks(size);
     //search cached block
     CachingBlock* block = blocks->pop_block(size);
+    int64 popped_split_size = -1;
     //alloc from GPU
     if (block == nullptr) {
         try_free_this_allocator();
@@ -611,32 +760,30 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         try {
             ptr = underlying->alloc(alloc_size, under_allocation);
         } catch (...) {
-            note_counter(device(), sfrl_counter_alloc_retries);
+            note_counter(dev, sfrl_counter_alloc_retries);
             release_cached(large_blocks);
             release_cached(small_blocks);
             gc_all();
             try {
                 ptr = underlying->alloc(alloc_size, under_allocation);
             } catch (...) {
-                note_counter(device(), sfrl_counter_ooms);
+                note_counter(dev, sfrl_counter_ooms);
                 if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode)) note_history_oom(requested);
                 throw;
             }
         }
         if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
-            memory_history_segment(mha_segment_alloc, device(), ptr, alloc_size);
-        note_device_reserve(device(), alloc_size);
-        step_trace_mem(stm_reserve, device(), alloc_size, this, 0);
+            memory_history_segment(mha_segment_alloc, dev, ptr, alloc_size);
         held_high = std::max(held_high, used_memory + unused_memory + (int64)alloc_size);
         block = new_block(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
-        note_counter(device(), sfrl_counter_device_alloc);
-        note_stat(device(), sfrl_stat_segment, pool_of(block), 1);
-        note_stat(device(), sfrl_stat_reserved_bytes, pool_of(block), alloc_size);
+        note_segment_allocated(dev, pool_of(block), (int64)alloc_size);
+        step_trace_mem(stm_reserve, dev, alloc_size, this, 0);
     } else {
         unused_memory -= block->size;
-        note_inactive_split(device(), block, -1);
+        if (inactive_split(block)) popped_split_size = (int64)block->size;
     }
+    int64 rest_split_size = -1;
     if (should_split(block, size)) {
         CachingBlock* rest = new_block(block->size - size, block->origin_size,
             get_blocks(block->size - size), static_cast<char*>(block->memory_ptr) + size);
@@ -651,17 +798,17 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
         block->next = rest;
         rest->blocks->insert(rest);
         unused_memory += rest->size;
-        note_inactive_split(device(), rest, 1);
+        if (inactive_split(rest)) rest_split_size = (int64)rest->size;
     }
     block->occupied = true;
     block->requested = requested;
-    note_block(device(), block, 1);
     allocation = blocks->insert_occupied(block);
     used_memory += block->size;
-    note_device_alloc(device(), block->size);
-    step_trace_mem(stm_pool, device(), block->size, this, allocation);
+    record_block_alloc(dev, pool_of(block), (int64)block->size, (int64)requested,
+                       popped_split_size, rest_split_size);
+    step_trace_mem(stm_pool, dev, block->size, this, allocation);
     if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
-        memory_history_block(mha_alloc, device(), block->memory_ptr, requested, block->size);
+        memory_history_block(mha_alloc, dev, block->memory_ptr, requested, block->size);
     if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
         note_capture_touch(block);
     return block->memory_ptr;
@@ -684,21 +831,26 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
             note_capture_touch(block);
         id_space.erase_occupied(allocation);
+        const int dev = device();
+        const int blk_pool = pool_of(block);
+        const int64 blk_size = (int64)block->size;
+        const int64 blk_requested = (int64)block->requested;
+        void* const orig_mem_ptr = block->memory_ptr;
         used_memory -= block->size;
-        note_device_free(device(), block->size);
-        step_trace_mem(stm_pool, device(), -(int64)block->size, this, allocation);
-        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
-            memory_history_block(mha_free_requested, device(), block->memory_ptr, 0, block->size);
         unused_memory += block->size;
-        note_block(device(), block, -1);
         block->occupied = false;
         // The free neighbours it absorbs stop being separate inactive splits;
         // what remains is one, unless it is now the whole segment.
-        note_inactive_split(device(), block->prev, -1);
-        note_inactive_split(device(), block->next, -1);
+        const int64 prev_split_size = inactive_split(block->prev) ? (int64)block->prev->size : -1;
+        const int64 next_split_size = inactive_split(block->next) ? (int64)block->next->size : -1;
         try_merge_two_blocks(block, block->prev);
         try_merge_two_blocks(block, block->next);
-        note_inactive_split(device(), block, 1);
+        const int64 merged_split_size = inactive_split(block) ? (int64)block->size : -1;
+        record_block_free(dev, blk_pool, blk_size, blk_requested,
+                          prev_split_size, next_split_size, merged_split_size);
+        step_trace_mem(stm_pool, dev, -blk_size, this, allocation);
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+            memory_history_block(mha_free_requested, dev, orig_mem_ptr, 0, (size_t)blk_size);
         block->freed_at = alloc_count;
         block->blocks = get_blocks(block->size);
         block->blocks->insert(block);
@@ -784,24 +936,25 @@ void SFRLAllocator::fence_capture(vector<Allocation>& held) {
     vector<CachingBlock*> free_blocks;
     for (auto* pool : {&small_blocks, &large_blocks})
         for (auto& kv : pool->blocks) free_blocks.push_back(kv.second);
+    const int dev = device();
     for (auto* block : free_blocks) {
         char* begin = (char*)block->memory_ptr;
         auto range = touched(begin, begin + block->size);
         if (!range.first) continue;
         // The statistics see the free block go and, out of it, a held block
         // and whatever free remainders the carving split off.
-        note_inactive_split(device(), block, -1);
+        const int64 old_split_size = inactive_split(block) ? (int64)block->size : -1;
         CachingBlock* left = block;
         CachingBlock* right = block->next;
         block = carve_free(block, range.first, range.second);
         block->occupied = true;
-        if (left != block) note_inactive_split(device(), left, 1);
-        if (block->next != right) note_inactive_split(device(), block->next, 1);
+        const int64 left_split_size = (left != block && inactive_split(left)) ? (int64)left->size : -1;
+        const int64 right_split_size = (block->next != right && inactive_split(block->next)) ? (int64)block->next->size : -1;
         block->requested = block->size;
-        note_block(device(), block, 1);
+        record_fence_carve(dev, pool_of(block), (int64)block->size,
+                           old_split_size, left_split_size, right_split_size);
         size_t id = block->blocks->insert_occupied(block);
         used_memory += block->size;
-        note_device_alloc(device(), block->size);
         held.emplace_back(block->memory_ptr, id, block->size, this);
     }
     spans.clear();

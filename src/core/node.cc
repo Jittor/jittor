@@ -536,6 +536,91 @@ void Node::release_both_liveness() {
     run_liveness_queue_locked("release_both_liveness");
 }
 
+void own_both_liveness_batch_locked(Var* const* vars, size_t n) {
+    if (n == 0) return;
+    const bool queue_was_empty = liveness_queue.empty();
+    bool queued = false;
+    for (size_t i = 0; i < n; ++i) {
+        Var* v = vars[i];
+        if (!v) continue;
+        CHECK_NODE_EXIST(v);
+        if (queue_was_empty && ((v->liveness.forward.active()
+                && v->liveness.backward.active() && v->liveness.pending.active())
+                || (v->_inputs.empty() && v->_outputs.empty()))) {
+            v->liveness.forward.own();
+            v->liveness.backward.own();
+            v->liveness.pending.own();
+        } else {
+            enqueue_liveness(v, LivenessStep::own_forward);
+            enqueue_liveness(v, LivenessStep::own_backward);
+            enqueue_liveness(v, LivenessStep::own_pending);
+            queued = true;
+        }
+    }
+    if (PREDICT_BRANCH_NOT_TAKEN(queued))
+        run_liveness_queue_locked("own_both_liveness_batch");
+}
+
+void own_both_liveness_batch(Var* const* vars, size_t n) {
+    if (n == 0) return;
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+    own_both_liveness_batch_locked(vars, n);
+}
+
+void release_both_liveness_batch_locked(Var* const* vars, size_t n) {
+    if (n == 0) return;
+    const bool outer_setup = (free_buffer_depth > 0);
+    bool entered_buffer = false;
+    bool free_buf_ok = outer_setup || free_buffer().empty();
+    struct BatchFreeCleanup {
+        bool& entered;
+        bool outer;
+        ~BatchFreeCleanup() {
+            if (entered) {
+                if (!outer && !free_buffer().empty()) {
+                    auto& buf = free_buffer();
+                    for (size_t i = 0; i < buf.size(); ++i)
+                        delete buf[i];
+                    buf.clear();
+                }
+                --free_buffer_depth;
+            }
+        }
+    } cleanup{entered_buffer, outer_setup};
+
+    for (size_t i = 0; i < n; ++i) {
+        Var* v = vars[i];
+        if (!v) continue;
+        CHECK_NODE_EXIST(v);
+        if (liveness_queue.empty()
+                && free_buf_ok
+                && !v->flags.get(NodeFlags::_queued_for_free)
+                && v->liveness.forward.count() > 1
+                && v->liveness.backward.count() > 1
+                && v->liveness.pending.count() > 1) {
+            v->liveness.forward.release();
+            v->liveness.backward.release();
+            v->liveness.pending.release();
+            continue;
+        }
+        if (!entered_buffer) {
+            ++free_buffer_depth;
+            entered_buffer = true;
+            free_buf_ok = true;
+        }
+        enqueue_liveness(v, LivenessStep::release_forward);
+        enqueue_liveness(v, LivenessStep::release_backward);
+        enqueue_liveness(v, LivenessStep::release_pending);
+        run_liveness_queue_locked("release_both_liveness_batch");
+    }
+}
+
+void release_both_liveness_batch(Var* const* vars, size_t n) {
+    if (n == 0) return;
+    std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+    release_both_liveness_batch_locked(vars, n);
+}
+
 void Node::finish_pending_liveness() {
     CHECK_EXIST;
     if (is_finished()) return;
