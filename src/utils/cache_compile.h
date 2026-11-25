@@ -12,6 +12,9 @@ namespace jit_compiler {
 
 string read_all(const string& fname);
 void write(const string& fname, const string& src);
+void write_atomically(const string& fname, const string& content);
+void install_file(const string& temporary, const string& destination);
+vector<string> read_depfile_paths(const string& dependency_name);
 bool file_exist(const string& fname);
 string join(string a, string b);
 bool cache_compile(string cmd, const string& cache_path="", const string& jittor_path="");

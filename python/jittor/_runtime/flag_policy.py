@@ -28,7 +28,7 @@ RUNTIME_FLAGS = frozenset((
     "cuda_device_allocator_managed_fallback", "profile_memory_enable",
     "profiler_enable", "profiler_warmup", "profiler_rerun", "profiler_record_peek",
     "profiler_record_shape", "profiler_hide_relay", "enable_tuner", "exclude_pass",
-    "log_op_hash", "para_opt_level", "l1_cache_size", "rewrite_op",
+    "log_op_hash", "para_opt_level", "l1_cache_size", "rewrite_op", "use_jit_pch",
     "jit_search_kernel", "jit_search_warmup", "jit_search_rerun",
     "jit_search_timeout", "jit_search_max_candidates", "jit_key_max_size",
     "jit_cache_size", "gdb_path", "addr2line_path",

@@ -6,6 +6,8 @@
 // ***************************************************************
 #include <fstream>
 #include <streambuf>
+#include <atomic>
+#include <cstdint>
 #ifdef _WIN32
 #include <filesystem>
 #include <process.h>
@@ -149,6 +151,19 @@ void find_names(string cmd, vector<string>& input_names, string& output_name, ma
                 i = k;
                 extra["I"].push_back(inc);
                 continue;
+            } else if (i+8<=cmd.size() && cmd.compare(i, 8, "-include") == 0 && (i+8 == cmd.size() || cmd[i+8] == ' ')) {
+                // -include "header.h" or -include header.h
+                size_t j = i + 8;
+                while (j < cmd.size() && cmd[j] == ' ') j++;
+                size_t k = j;
+                pass(k);
+                USER_CHECK(j < k)
+                    << "compiler command has an include flag ('-include') with no "
+                    << "file: " << cmd;
+                auto inc_file = substr(j, k);
+                extra["include"].push_back(inc_file);
+                i = k;
+                continue;
             } else if (i+2<cmd.size() && cmd[i+1]=='x') {
                 // option with space and arg
                 size_t j=i+2;
@@ -215,6 +230,7 @@ static vector<string> parse_make_dependencies(const string& source) {
     return dependencies;
 }
 
+#if defined(_MSC_VER) || defined(TEST)
 static vector<string> parse_show_includes(const string& source) {
     vector<string> dependencies;
     size_t line_start = 0;
@@ -244,6 +260,7 @@ static vector<string> parse_show_includes(const string& source) {
     }
     return dependencies;
 }
+#endif
 
 static inline void check_win_file(const string& name) {
 #ifdef _WIN32
@@ -260,13 +277,16 @@ static inline void check_win_file(const string& name) {
 #endif
 }
 
+static std::atomic<uint64_t> g_cache_tmp_seq{0};
+
 static string temporary_name(const string& name) {
 #ifdef _WIN32
     auto pid = _getpid();
 #else
     auto pid = getpid();
 #endif
-    return name + ".tmp." + std::to_string(pid);
+    uint64_t seq = g_cache_tmp_seq.fetch_add(1, std::memory_order_relaxed);
+    return name + ".tmp." + std::to_string(pid) + "." + std::to_string(seq);
 }
 
 static string add_dependency_flags(const string& cmd, const string& output_name,
@@ -342,6 +362,10 @@ static vector<string> read_dependencies(const string& dependency_name) {
 #endif
 }
 
+vector<string> read_depfile_paths(const string& dependency_name) {
+    return read_dependencies(dependency_name);
+}
+
 // `in_memory_name` (when non-empty) is an input the caller has in a string
 // rather than on disk; it is hashed from `in_memory_content`. Hashing the
 // string and hashing the file that string is about to be written to give the
@@ -349,10 +373,24 @@ static vector<string> read_dependencies(const string& dependency_name) {
 // needed?" before performing the write that a build would start with.
 static string build_cache_key(const string& cmd, vector<string> input_names,
                               const string& dependency_name,
+                              const map<string,vector<string>>& extra,
                               const string& in_memory_name = "",
                               const string& in_memory_content = "") {
     auto dependencies = read_dependencies(dependency_name);
     input_names.insert(input_names.end(), dependencies.begin(), dependencies.end());
+    auto inc_it = extra.find("include");
+    if (inc_it != extra.end()) {
+        for (const auto& inc_file : inc_it->second) {
+            input_names.push_back(inc_file);
+            // When GCC consumes a precompiled header (.gch), its -MD depfile
+            // omits transitive headers inside the .gch. Tracking <inc>.gch.key
+            // (which records SHA-256 of every transitive header in the PCH)
+            // ensures any header edit invalidates all PCH-built consumers.
+            string pch_key = inc_file + ".gch.key";
+            if (file_exist(pch_key))
+                input_names.push_back(pch_key);
+        }
+    }
     unordered_set<string> processed;
     string cache_key = cmd + "\n";
     for (const auto& name : input_names) {
@@ -383,7 +421,7 @@ static bool expects_dependency_file(const vector<string>& input_names) {
     return false;
 }
 
-static void install_file(const string& temporary, const string& destination) {
+void install_file(const string& temporary, const string& destination) {
 #ifdef _WIN32
     if (!MoveFileExA(temporary.c_str(), destination.c_str(),
                      MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
@@ -402,7 +440,7 @@ static void install_file(const string& temporary, const string& destination) {
 #endif
 }
 
-static void write_atomically(const string& name, const string& content) {
+void write_atomically(const string& name, const string& content) {
 #ifdef TEST
     write(name, content);
 #else
@@ -503,7 +541,7 @@ CacheProbe cache_compile_probe(string cmd,
     if (file_exist(probe.output_name))
         recorded_key = read_all(probe.key_name);
     probe.cache_key = build_cache_key(cmd, input_names, probe.output_name + ".d",
-                                      in_memory_name, in_memory_input_content);
+                                      extra, in_memory_name, in_memory_input_content);
     probe.up_to_date = !recorded_key.empty() && recorded_key == probe.cache_key;
     return probe;
 }
@@ -515,7 +553,7 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
     string jittor_path = _to_winstr(jittor_path_);
     #else
     const string& cache_path = cache_path_;
-    const string& jittor_path = jittor_path_;
+    (void)jittor_path_;
     #endif
     vector<string> input_names;
     map<string,vector<string>> extra;
@@ -527,7 +565,7 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
         output_cache_key = read_all(output_name+".key");
     string dependency_name = output_name + ".d";
     string dependency_temporary = temporary_name(dependency_name);
-    string cache_key = build_cache_key(cmd, input_names, dependency_name);
+    string cache_key = build_cache_key(cmd, input_names, dependency_name, extra);
     string tmp_dir = join(cache_path, "obj_files");
     if (output_cache_key != cache_key) {
         if (output_cache_key.empty())
@@ -547,7 +585,7 @@ bool cache_compile(string cmd, const string& cache_path_, const string& jittor_p
                         dependency_temporary, dependency_name,
                         expects_dependency_file(input_names));
         ran = true;
-        cache_key = build_cache_key(cmd, input_names, dependency_name);
+        cache_key = build_cache_key(cmd, input_names, dependency_name, extra);
     }
     if (output_cache_key != cache_key) {
         LOGvvvv << "Prev cache key" << output_cache_key;

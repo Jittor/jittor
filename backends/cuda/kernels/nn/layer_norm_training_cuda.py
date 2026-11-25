@@ -29,7 +29,7 @@ def _warp_warps_per_block(rows, hidden, backward):
     return 8
 
 
-def _warp_kernels(hidden, eps, backward, wpb=8):
+def _warp_kernels(hidden, backward, wpb=8):
     """The forward and the fused backward with a warp per row.
 
     A block per row is mostly idle at these widths and pays its barriers for
@@ -51,7 +51,8 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
     __global__ static void layer_norm_forward_warp(
             const in0_type* __restrict__ x, const in1_type* __restrict__ weight,
             const in2_type* __restrict__ bias, out0_type* __restrict__ y,
-            out1_type* __restrict__ mean, out2_type* __restrict__ rstd, long long rows) {{
+            out1_type* __restrict__ mean, out2_type* __restrict__ rstd,
+            long long rows, float eps) {{
         long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
         int lane = threadIdx.x & 31;
         if (row >= rows) return;
@@ -94,7 +95,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
             float dm = jt_ln_allsum(sum_d) / {hidden}.0f;
             m += dm;
             float v_mean = jt_ln_allsum(var) / {hidden}.0f - dm * dm;
-            float r = rsqrtf((v_mean > 0.0f ? v_mean : 0.0f) + {eps:.9g}f);
+            float r = rsqrtf((v_mean > 0.0f ? v_mean : 0.0f) + eps);
             if (lane == 0) {{
                 mean[row] = out1_type(m);
                 rstd[row] = out2_type(r);
@@ -151,7 +152,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
         float dm = jt_ln_allsum(sum_d) / {hidden}.0f;
         m += dm;
         float v_mean = jt_ln_allsum(var) / {hidden}.0f - dm * dm;
-        float r = rsqrtf((v_mean > 0.0f ? v_mean : 0.0f) + {eps:.9g}f);
+        float r = rsqrtf((v_mean > 0.0f ? v_mean : 0.0f) + eps);
         if (lane == 0) {{
             mean[row] = out1_type(m);
             rstd[row] = out2_type(r);
@@ -349,7 +350,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
 
 
 @lru_cache(maxsize=256)
-def _layer_norm_cuda_sources(hidden, eps, warp, blocks, fwd_wpb=8, bwd_wpb=8):
+def _layer_norm_cuda_sources(hidden, warp, blocks, fwd_wpb=8, bwd_wpb=8):
     """Cache immutable programs; each call still builds fresh operators.
 
     CodeOp's grouped VJP receives x, weight, bias, dout, and the three saved
@@ -358,13 +359,14 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks, fwd_wpb=8, bwd_wpb=8):
     """
     if warp:
         header = '#include "core/executor.h"'
-        forward = _warp_kernels(hidden, eps, False, fwd_wpb) + f"""
+        forward = _warp_kernels(hidden, False, fwd_wpb) + f"""
+        float eps = static_cast<float>(data["eps"]);
         long long rows = in0->num / {hidden};
         layer_norm_forward_warp<<<(unsigned)((rows + {fwd_wpb - 1}) / {fwd_wpb}), {fwd_wpb * 32}>>>(
-            in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows);
+            in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows, eps);
         CHECK(0 == cudaGetLastError());
         """
-        backward = _warp_kernels(hidden, eps, True, bwd_wpb) + f"""
+        backward = _warp_kernels(hidden, True, bwd_wpb) + f"""
         auto scratch = runtime_executor().alloc_temp(sizeof(float) * {2 * blocks * hidden});
         float* partial = static_cast<float*>(scratch.ptr);
         long long rows = in3->num / {hidden};
@@ -395,7 +397,7 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks, fwd_wpb=8, bwd_wpb=8):
     __global__ static void layer_norm_forward(
             const in0_type* x, const in1_type* weight,
             const in2_type* bias, out0_type* y,
-            out1_type* mean, out2_type* rstd, int rows) {{
+            out1_type* mean, out2_type* rstd, int rows, float eps) {{
         typedef cub::BlockReduce<float, {threads}> BlockReduce;
         __shared__ typename BlockReduce::TempStorage storage;
         __shared__ float mean_shared;
@@ -442,7 +444,7 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks, fwd_wpb=8, bwd_wpb=8):
         reduced = BlockReduce(storage).Sum(local);
         if (threadIdx.x == 0) {{
             rstd_shared = rsqrtf(
-                reduced / {hidden}.0f + {eps:.9g}f);
+                reduced / {hidden}.0f + eps);
             rstd[row] = out2_type(rstd_shared);
         }}
         __syncthreads();
@@ -458,9 +460,10 @@ def _layer_norm_cuda_sources(hidden, eps, warp, blocks, fwd_wpb=8, bwd_wpb=8):
                 + static_cast<float>(bias[j]));
         }}
     }}
+    float eps = static_cast<float>(data["eps"]);
     int rows = in0->num / {hidden};
     layer_norm_forward<<<rows, {threads}>>>(
-        in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows);
+        in0_p, in1_p, in2_p, out0_p, out1_p, out2_p, rows, eps);
     CHECK(0 == cudaGetLastError());
     """
     backward = f"""
@@ -620,9 +623,9 @@ def _layer_norm_cuda(x, normalized_shape, weight, bias, eps):
     bwd_wpb = _warp_warps_per_block(rows, hidden, True) if warp else 8
     blocks = min(_FUSED_BLOCKS, -(-rows // bwd_wpb)) if warp else 0
     header, forward, backward = _layer_norm_cuda_sources(
-        hidden, float(eps), warp, blocks, fwd_wpb, bwd_wpb)
+        hidden, warp, blocks, fwd_wpb, bwd_wpb)
     y, _, _ = jt.code(
         [shape, (rows,), (rows,)], [x.dtype, "float32", "float32"],
         [x, weight, bias], cuda_header=header, cuda_src=forward,
-        cuda_grad_src=[backward], data={"multi_grad": 1})
+        cuda_grad_src=[backward], data={"multi_grad": 1, "eps": float(eps)})
     return y

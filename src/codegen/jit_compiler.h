@@ -17,6 +17,12 @@ void configure_accelerator_compiler(const string& path, const string& flags,
     const string& language, const string& source_suffix,
     const vector<string>& remove_flags, bool device_link);
 
+// Startup ABI fingerprint computed from core/backend headers and build flags,
+// used to key JITTOR_SHARED_CACHE entries so ABI-mismatched libraries are
+// never reused across worktrees or configurations.
+// @pyjt(set_core_abi_fingerprint)
+void set_core_abi_fingerprint(const string& fingerprint);
+
 namespace jit_compiler {
 
 jit_op_entry_t compile(

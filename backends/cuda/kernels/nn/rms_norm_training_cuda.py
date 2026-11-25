@@ -26,7 +26,7 @@ _WARP_ROWS_MIN = 64
 _FUSED_BLOCKS = 256
 
 
-def _warp_kernels(hidden, eps, backward, wpb=8):
+def _warp_kernels(hidden, backward, wpb=8):
     """The forward, or the fused backward, with a warp per row; see
     `layer_norm_training_cuda._warp_kernels`. (No comments inside the source:
     `jt.code` lifts the kernels out by their text.)"""
@@ -46,7 +46,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
     __global__ static void rms_norm_forward_warp(
             const in0_type* __restrict__ x, const in1_type* __restrict__ gamma,
             out0_type* __restrict__ y, out1_type* __restrict__ rstd,
-            long long rows) {{
+            long long rows, float eps) {{
         long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
         int lane = threadIdx.x & 31;
         if (row >= rows) return;
@@ -69,7 +69,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
                     sq += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
                 }}
             }}
-            float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + {eps:.9g}f);
+            float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + eps);
             if (lane == 0) rstd[row] = out1_type(r);
             #pragma unroll
             for (int i = 0; i < {vec4_per}; i++) {{
@@ -113,7 +113,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
                     }}
                 }}
             }}
-            float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + {eps:.9g}f);
+            float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + eps);
             if (lane == 0) rstd[row] = out1_type(r);
             #pragma unroll
             for (int i = 0; i < {vec8_per}; i++) {{
@@ -152,7 +152,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
             cache[i] = j < {hidden} ? static_cast<float>(xr[j]) : 0.0f;
             sq += cache[i] * cache[i];
         }}
-        float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + {eps:.9g}f);
+        float r = rsqrtf(jt_rms_allsum(sq) / {hidden}.0f + eps);
         if (lane == 0) rstd[row] = out1_type(r);
         #pragma unroll
         for (int i = 0; i < {per}; i++) {{
@@ -292,7 +292,7 @@ def _warp_kernels(hidden, eps, backward, wpb=8):
     return allsum + (backward_src if backward else forward)
 
 
-def _block_kernels(hidden, eps, threads, backward):
+def _block_kernels(hidden, threads, backward):
     """Block-per-row forward and grid-stride fused backward for wide rows
     (hidden > 1024) or tiny row counts (rows < 64)."""
     warps = threads // 32
@@ -312,7 +312,8 @@ def _block_kernels(hidden, eps, threads, backward):
         return helpers + f"""
         __global__ static void rms_norm_forward_block(
                 const in0_type* __restrict__ x, const in1_type* __restrict__ gamma,
-                out0_type* __restrict__ y, out1_type* __restrict__ rstd, long long rows) {{
+                out0_type* __restrict__ y, out1_type* __restrict__ rstd,
+                long long rows, float eps) {{
             __shared__ float warp_buf[{warps}];
             __shared__ float rstd_shared;
             long long row = blockIdx.x;
@@ -354,7 +355,7 @@ def _block_kernels(hidden, eps, threads, backward):
                     float total = lane < {warps} ? warp_buf[lane] : 0.0f;
                     total = jt_rms_blk_warp_sum(total);
                     if (lane == 0) {{
-                        rstd_shared = rsqrtf(total / {hidden}.0f + {eps:.9g}f);
+                        rstd_shared = rsqrtf(total / {hidden}.0f + eps);
                         rstd[row] = out1_type(rstd_shared);
                     }}
                 }}
@@ -439,7 +440,7 @@ def _block_kernels(hidden, eps, threads, backward):
                     float total = lane < {warps} ? warp_buf[lane] : 0.0f;
                     total = jt_rms_blk_warp_sum(total);
                     if (lane == 0) {{
-                        rstd_shared = rsqrtf(total / {hidden}.0f + {eps:.9g}f);
+                        rstd_shared = rsqrtf(total / {hidden}.0f + eps);
                         rstd[row] = out1_type(rstd_shared);
                     }}
                 }}
@@ -516,7 +517,7 @@ def _block_kernels(hidden, eps, threads, backward):
                 float total = lane < {warps} ? warp_buf[lane] : 0.0f;
                 total = jt_rms_blk_warp_sum(total);
                 if (lane == 0) {{
-                    rstd_shared = rsqrtf(total / {hidden}.0f + {eps:.9g}f);
+                    rstd_shared = rsqrtf(total / {hidden}.0f + eps);
                     rstd[row] = out1_type(rstd_shared);
                 }}
             }}
@@ -770,7 +771,7 @@ def _block_kernels(hidden, eps, threads, backward):
 
 
 @lru_cache(maxsize=128)
-def _rms_norm_training_cuda_cls(hidden_size, epsilon):
+def _rms_norm_training_cuda_cls(hidden_size):
     threads = 32
     max_threads = 512 if hidden_size > 2048 else 256
     while threads < min(hidden_size, max_threads):
@@ -779,31 +780,36 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
     can_block_fuse = per <= 16
 
     class RMSNormTrainingCUDA(jt.Function):
-        def execute(self, x, gamma):
+        def execute(self, x, gamma, eps):
             rows = int(x.numel()) // hidden_size
             self.warp = hidden_size <= _WARP_ROW_LIMIT and rows >= _WARP_ROWS_MIN
+            eps_val = float(eps)
             if self.warp:
                 wpb = _warp_warps_per_block(rows, hidden_size, False)
                 y, rstd = jt.code(
                     [x.shape, (rows,)], [x.dtype, "float32"], [x, gamma],
-                    cuda_src=_warp_kernels(hidden_size, epsilon, False, wpb) + f"""
+                    cuda_src=_warp_kernels(hidden_size, False, wpb) + f"""
+                    float eps = static_cast<float>(data["eps"]);
                     long long rows = in0->num / {hidden_size};
                     rms_norm_forward_warp<<<(unsigned)((rows + {wpb - 1}) / {wpb}), {wpb * 32}>>>(
-                        in0_p, in1_p, out0_p, out1_p, rows);
+                        in0_p, in1_p, out0_p, out1_p, rows, eps);
                     CHECK(0 == cudaGetLastError());
-                    """)
+                    """,
+                    data={"eps": eps_val})
                 self.saved = x, rstd, gamma
                 return y
             y, rstd = jt.code(
                 [x.shape, (rows,)],
                 [x.dtype, "float32"],
                 [x, gamma],
-                cuda_src=_block_kernels(hidden_size, epsilon, threads, False) + f"""
+                cuda_src=_block_kernels(hidden_size, threads, False) + f"""
+                float eps = static_cast<float>(data["eps"]);
                 long long rows = in0->num / {hidden_size};
                 rms_norm_forward_block<<<(unsigned)rows, {threads}>>>(
-                    in0_p, in1_p, out0_p, out1_p, rows);
+                    in0_p, in1_p, out0_p, out1_p, rows, eps);
                 CHECK(0 == cudaGetLastError());
                 """,
+                data={"eps": eps_val},
             )
             self.saved = x, rstd, gamma
             return y
@@ -818,7 +824,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                     [x.shape, gamma.shape, (blocks * hidden_size,)],
                     [x.dtype, gamma.dtype, "float32"],
                     [grad_y, x, rstd, gamma],
-                    cuda_src=_warp_kernels(hidden_size, epsilon, True, wpb) + f"""
+                    cuda_src=_warp_kernels(hidden_size, True, wpb) + f"""
                     long long rows = in1->num / {hidden_size};
                     rms_norm_backward_fused<<<{blocks}, {wpb * 32}>>>(
                         in0_p, in1_p, in2_p, in3_p, out0_p, out2_p, rows);
@@ -826,14 +832,14 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                         out2_p, out1_p, {blocks});
                     CHECK(0 == cudaGetLastError());
                     """)
-                return grad_x, grad_gamma
+                return grad_x, grad_gamma, None
             if can_block_fuse:
                 blocks = min(_FUSED_BLOCKS, rows)
                 grad_x, grad_gamma, _ = jt.code(
                     [x.shape, gamma.shape, (blocks * hidden_size,)],
                     [x.dtype, gamma.dtype, "float32"],
                     [grad_y, x, rstd, gamma],
-                    cuda_src=_block_kernels(hidden_size, epsilon, threads, True) + f"""
+                    cuda_src=_block_kernels(hidden_size, threads, True) + f"""
                     long long rows = in1->num / {hidden_size};
                     rms_norm_backward_block_fused<<<{blocks}, {threads}>>>(
                         in0_p, in1_p, in2_p, in3_p, out0_p, out2_p, rows);
@@ -841,7 +847,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                         out2_p, out1_p, {blocks});
                     CHECK(0 == cudaGetLastError());
                     """)
-                return grad_x, grad_gamma
+                return grad_x, grad_gamma, None
             segments = _gamma_segments(hidden_size, rows)
             per_segment = -(-rows // segments)
             warps = threads // 32
@@ -939,7 +945,7 @@ def _rms_norm_training_cuda_cls(hidden_size, epsilon):
                 CHECK(0 == cudaGetLastError());
                 """,
             )
-            return grad_x, grad_gamma
+            return grad_x, grad_gamma, None
 
     return RMSNormTrainingCUDA
 
@@ -978,8 +984,8 @@ def _supports_rms_norm_training(x, gamma, epsilon=1e-6):
                  dtypes=("float32", "float16", "bfloat16"),
                  supports=_supports_rms_norm_training)
 def _rms_norm_training_cuda(x, gamma, epsilon=1e-6):
-    cls = _rms_norm_training_cuda_cls(int(x.shape[-1]), float(epsilon))
-    return cls.apply(x, gamma)
+    cls = _rms_norm_training_cuda_cls(int(x.shape[-1]))
+    return cls.apply(x, gamma, float(epsilon))
 
 
 _FUSABLE_PRODUCERS = ("binary.", "unary.", "ternary", "broadcast_to")

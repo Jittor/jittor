@@ -75,7 +75,8 @@ _RMS_NORM_SOURCE = r"""
     __global__ static void rms_norm(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ gamma,
-            out0_type* __restrict__ y) {
+            out0_type* __restrict__ y,
+            float eps) {
         long long row = blockIdx.x;
         long long row_offset = row * %(hidden_size)dLL;
         int tid = threadIdx.x;
@@ -115,7 +116,7 @@ _RMS_NORM_SOURCE = r"""
                 float total = lane < %(launch_warps)d ? warp_buf[lane] : 0.0f;
                 total = warp_sum(total);
                 if (lane == 0)
-                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + %(epsilon).9gf);
+                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
             }
             __syncthreads();
             float inv = inverse_rms;
@@ -212,7 +213,7 @@ _RMS_NORM_SOURCE = r"""
                 float total = lane < %(launch_warps)d ? warp_buf[lane] : 0.0f;
                 total = warp_sum(total);
                 if (lane == 0)
-                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + %(epsilon).9gf);
+                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
             }
             __syncthreads();
             float inv = inverse_rms;
@@ -308,7 +309,7 @@ _RMS_NORM_SOURCE = r"""
             float total = lane < %(launch_warps)d ? warp_buf[lane] : 0.0f;
             total = warp_sum(total);
             if (lane == 0)
-                inverse_rms = rsqrtf(total / %(hidden_size)d.0f + %(epsilon).9gf);
+                inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
         }
         __syncthreads();
         float inv = inverse_rms;
@@ -333,20 +334,20 @@ _RMS_NORM_SOURCE = r"""
             }
         }
     }
+    float eps = static_cast<float>(data["eps"]);
     long long rows = in0->num / %(hidden_size)d;
-    rms_norm<<<(unsigned)rows, %(launch_threads)d>>>(in0_p, in1_p, out0_p);
+    rms_norm<<<(unsigned)rows, %(launch_threads)d>>>(in0_p, in1_p, out0_p, eps);
     CHECK(0 == cudaGetLastError());
     """
 
 
 @lru_cache(maxsize=256)
-def _format_rms_norm_source(template, hidden_size, threads, warps, epsilon_value,
+def _format_rms_norm_source(template, hidden_size, threads, warps,
                             round_before_weight):
     # Cap block size at 512 threads so SM89 (1536 threads/SM) runs 3 blocks/SM
     # at 100% occupancy instead of 1 block/SM (66.7%) with 1024 threads.
     launch_threads = min(threads, 512)
     return template % {
-        "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
@@ -356,14 +357,17 @@ def _format_rms_norm_source(template, hidden_size, threads, warps, epsilon_value
     }
 
 
-def _rms_norm_source(hidden_size, threads, warps, epsilon_value, round_before_weight=True):
+def _rms_norm_source(hidden_size, threads, warps, epsilon_value=None, round_before_weight=True):
     """The CUDA source of the kernel below for one contract.
 
     Also what the native module call (`src/bindings/pyjt/py_module_call.cc`)
     builds the same operator from, so the two cannot drift apart.
+    ``epsilon_value`` is accepted for caller compatibility; epsilon is passed
+    at runtime via ``CodeOp::data["eps"]`` so different eps values share one
+    compiled kernel.
     """
     return _format_rms_norm_source(
-        _RMS_NORM_SOURCE, hidden_size, threads, warps, epsilon_value, round_before_weight)
+        _RMS_NORM_SOURCE, hidden_size, threads, warps, round_before_weight)
 
 
 @native_rule("rms_norm_inference")
@@ -383,7 +387,7 @@ def _rms_norm_cuda(x, gamma, epsilon=1e-6):
 
 
 _WARP_RMS_NORM_4096 = r"""
-    __global__ static void warp_rms_norm_4096(@ARGS_DEF) {
+    __global__ static void warp_rms_norm_4096(@ARGS_DEF, float eps) {
         @PRECALC
         constexpr int width = 4096;
         const int row = blockIdx.x * blockDim.y + threadIdx.y;
@@ -406,7 +410,7 @@ _WARP_RMS_NORM_4096 = r"""
         for (int offset = 16; offset > 0; offset /= 2)
             sum = __fadd_rn(sum, __shfl_down_sync(0xffffffff, sum, offset));
         const float mean = __shfl_sync(0xffffffff, sum, 0) * (1.0f / width);
-        const float scale = rsqrtf(__fadd_rn(mean, %(epsilon).9gf));
+        const float scale = rsqrtf(__fadd_rn(mean, eps));
         for (int column = lane; column < width; column += 32) {
             const float x = %(load_output)s;
             const float weight = %(weight)s;
@@ -414,13 +418,14 @@ _WARP_RMS_NORM_4096 = r"""
             %(store_residual)s
         }
     }
-    warp_rms_norm_4096<<<(in0_shape0 + 7) / 8, dim3(32, 8)>>>(@ARGS);
+    float eps = static_cast<float>(data["eps"]);
+    warp_rms_norm_4096<<<(in0_shape0 + 7) / 8, dim3(32, 8)>>>(@ARGS, eps);
     CHECK(0 == cudaGetLastError());
     """
 
 
 @lru_cache(maxsize=32)
-def _warp_rms_norm_source(epsilon, residual=False, weight_offset=0.0):
+def _warp_rms_norm_source(residual=False, weight_offset=0.0):
     def load(column):
         x = f"float(@in0(row, {column}))"
         return f"__fadd_rn({x}, float(@in1(row, {column})))" if residual else x
@@ -429,7 +434,6 @@ def _warp_rms_norm_source(epsilon, residual=False, weight_offset=0.0):
     if weight_offset:
         weight = f"__fadd_rn({weight}, static_cast<float>({weight_offset!r}))"
     return _WARP_RMS_NORM_4096 % {
-        "epsilon": epsilon,
         "load_reduction": load("column + item"),
         "load_output": load("column"),
         "weight": weight,
@@ -444,9 +448,10 @@ def _is_wide_bfloat16_row(x):
 @optional_kernel("nn.rms_norm.single_round.inference", "cuda", supports=_rms_norm_supported)
 def _rms_norm_single_round_cuda(x, gamma, epsilon=1e-6):
     if _is_wide_bfloat16_row(x) and _jittor_dtype_name(gamma.dtype) == "float32":
-        source = _warp_rms_norm_source(float(epsilon))
+        source = _warp_rms_norm_source()
         return _stop_grad_outputs(
-            jt.code(x.shape, x.dtype, [x, gamma], cuda_src=source, backend="cuda"))
+            jt.code(x.shape, x.dtype, [x, gamma], cuda_src=source,
+                    data={"eps": float(epsilon)}, backend="cuda"))
     return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=False)
 
 
@@ -457,7 +462,8 @@ def _rms_norm_cuda_code(x, gamma, epsilon, *, round_before_weight):
     hidden_size, threads, warps, epsilon_value = contract
     cuda_src = _rms_norm_source(hidden_size, threads, warps, epsilon_value, round_before_weight)
     return _stop_grad_outputs(
-        jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src))
+        jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src,
+                data={"eps": epsilon_value}))
 
 
 def _add_rms_norm_supported(x, residual, gamma, epsilon=1e-6):
@@ -485,10 +491,10 @@ def _fp32_residual_supported(x, residual, gamma, epsilon=1e-6, weight_offset=0.0
                  supports=_fp32_residual_supported)
 def _fused_add_rms_norm_fp32_residual_cuda(x, residual, gamma, epsilon=1e-6, weight_offset=0.0):
     if _is_wide_bfloat16_row(x):
-        source = _warp_rms_norm_source(float(epsilon), residual=True, weight_offset=float(weight_offset))
+        source = _warp_rms_norm_source(residual=True, weight_offset=float(weight_offset))
         return _stop_grad_outputs(jt.code(
             [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
-            cuda_src=source, backend="cuda"))
+            cuda_src=source, data={"eps": float(epsilon)}, backend="cuda"))
     return _fused_add_rms_norm_cuda_code(
         x, residual, gamma, epsilon, round_before_weight=False,
         fp32_residual=True, weight_offset=weight_offset)
@@ -525,7 +531,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
     __global__ __launch_bounds__(%(launch_threads)d) static void fused_add_rms_norm(
             const in0_type* __restrict__ x, const in1_type* __restrict__ residual,
             const in2_type* __restrict__ gamma, out0_type* __restrict__ y,
-            out1_type* __restrict__ residual_out) {
+            out1_type* __restrict__ residual_out, float eps) {
         long long row = blockIdx.x;
         long long row_offset = row * %(hidden_size)dLL;
         int tid = threadIdx.x;
@@ -575,7 +581,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
                 float total = lane < %(launch_warps)d ? warp_buf[lane] : 0.0f;
                 total = warp_sum(total);
                 if (lane == 0)
-                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + %(epsilon).9gf);
+                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
             }
             __syncthreads();
             float inv = inverse_rms;
@@ -702,7 +708,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
                 float total = lane < %(launch_warps)d ? warp_buf[lane] : 0.0f;
                 total = warp_sum(total);
                 if (lane == 0)
-                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + %(epsilon).9gf);
+                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
             }
             __syncthreads();
             float inv = inverse_rms;
@@ -798,7 +804,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
             float total = lane < %(launch_warps)d ? warp_buf[lane] : 0.0f;
             total = warp_sum(total);
             if (lane == 0)
-                inverse_rms = rsqrtf(total / %(hidden_size)d.0f + %(epsilon).9gf);
+                inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
         }
         __syncthreads();
         float inv = inverse_rms;
@@ -830,12 +836,12 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
             }
         }
     }
+    float eps = static_cast<float>(data["eps"]);
     long long rows = in0->num / %(hidden_size)d;
     fused_add_rms_norm<<<(unsigned)rows, %(launch_threads)d>>>(
-        in0_p, in1_p, in2_p, out0_p, out1_p);
+        in0_p, in1_p, in2_p, out0_p, out1_p, eps);
     CHECK(0 == cudaGetLastError());
     """, {
-        "epsilon": epsilon_value,
         "hidden_size": hidden_size,
         "launch_threads": launch_threads,
         "launch_warps": launch_warps,
@@ -847,6 +853,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
     return _stop_grad_outputs(jt.code(
         [x.shape, x.shape], [x.dtype, x.dtype], [x, residual, gamma],
         cuda_src=cuda_src,
+        data={"eps": epsilon_value},
     ))
 
 
