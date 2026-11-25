@@ -18,7 +18,8 @@ transformer/config.json with one block at 2,240 tokens. These cases use
 deterministic synthetic weights by default and accept shared local Safetensors
 fixtures through --t2v-weights and --i2v-weights.
 
-The reference uses eager PyTorch. The default Jittor mode follows the
+The reference measures eager PyTorch and torch.compile(mode="reduce-overhead").
+The faster validated reference is used for the comparison. The default Jittor mode follows the
 measured presets, with reduce-overhead for short inference and video and
 default execution for ti2v-4400. Set --jittor-mode default for an eager API
 comparison. CUDA graph launches and refusals are recorded in results.json.
@@ -46,9 +47,17 @@ mean step time using the slowest rank per step. Wan and the stock workloads
 report median latency. Results and rank logs are saved outside the checkout.
 A single selection defaults to two process rounds. Stock and training cases
 run once each when selected as a suite. Video uses two samples in one process.
+
+Use --case ecosystem for inference presets spanning CV, NLP, generation,
+audio, graphs and forecasting. --list prints the scope of these presets.
+Synthetic input shapes and deterministic weights are used for architecture
+presets. Supply local snapshots via --model-assets for checkpoint presets.
+Ecosystem eager runs suspend automatic graph replay to provide an eager
+baseline. --model-mode reduce-overhead explicitly measures replay.
 """
 
 import argparse
+from collections.abc import Mapping
 from contextlib import nullcontext
 import ctypes
 from datetime import datetime, timezone
@@ -69,6 +78,7 @@ import tempfile
 from time import monotonic, perf_counter
 
 from run import lab_root, list_workloads
+from model_cases import MODEL_CASES, prepare_model
 from worker import import_torch
 
 
@@ -120,10 +130,13 @@ EAGER_TRAINING = {"bert-large-cased-r2-b4", "roberta-large-r2-b4"}
 def parse_args():
     stock_cases = [case["name"] for case in list_workloads()]
     groups = {"wan": list(WAN_CASES), "stock": stock_cases, "training": list(TRAINING_CASES)}
-    groups["all"] = groups["wan"] + groups["stock"] + groups["training"]
+    groups["ecosystem"] = list(MODEL_CASES)
+    groups["all"] = groups["wan"] + groups["stock"] + groups["training"] + groups["ecosystem"]
+    for name, case in MODEL_CASES.items():
+        groups.setdefault(case.group, []).append(name)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case", action="append", metavar="NAME",
-                        help="a preset or wan, stock, training, all")
+                        help="a preset or group, including wan, stock, training, ecosystem, all")
     parser.add_argument("--list", action="store_true", help="list presets without loading model dependencies")
     parser.add_argument("--checkpoint", type=Path, help="local TI2V-5B Diffusers snapshot")
     for variant in ("t2v", "i2v"):
@@ -137,6 +150,8 @@ def parse_args():
                         help="Jittor checkout used by the candidate worker")
     parser.add_argument("--runtimes", choices=("torch,jittor", "torch", "jittor"),
                         default="torch,jittor")
+    parser.add_argument("--torch-mode", choices=("both", "eager", "compiled"), default="both",
+                        help="native PyTorch reference modes to measure")
     parser.add_argument("--jittor-mode", choices=("preset", "default", "reduce-overhead"),
                         default="preset", help="execution mode for the Wan cases")
     parser.add_argument("--stock-size", choices=("full", "tiny"), default="full")
@@ -145,6 +160,10 @@ def parse_args():
     parser.add_argument("--training-fixtures", type=Path, help="local training snapshots by model name")
     parser.add_argument("--cv-data", type=Path, help="Oxford-IIIT Pet image directory")
     parser.add_argument("--nlp-metric", type=Path, help="local GLUE metric script")
+    parser.add_argument("--model-assets", type=Path, help="directory containing local model assets by preset name")
+    parser.add_argument("--model-mode", choices=("eager", "reduce-overhead"), default="eager",
+                        help="Jittor execution mode for ecosystem presets")
+    parser.add_argument("--profile-model", action="store_true", help="profile a separate ecosystem inference call")
     parser.add_argument("--gpu", help="comma-separated physical CUDA indices or UUIDs")
     parser.add_argument("--warmup", type=int, help="override complete warmup calls per worker")
     parser.add_argument("--samples", type=int, help="override measured calls per worker")
@@ -162,6 +181,11 @@ def parse_args():
         for group in ("wan", "stock", "training"):
             for name in groups[group]:
                 print(f"{group:<9} {name}")
+        for name, case in MODEL_CASES.items():
+            scope = f"{case.scope}, {case.dtype}"
+            if case.checkpoint:
+                scope += f", checkpoint {case.checkpoint}"
+            print(f"{case.group:<9} {name}  [{scope}]")
         parser.exit()
     if any(n is not None and n < 1 for n in (args.warmup, args.samples, args.rounds)):
         parser.error("warmup, samples and rounds must be positive")
@@ -225,6 +249,8 @@ def worker_env(args, output, runtime):
     env.setdefault("HF_HOME", str(output / "hf"))
     env.setdefault("TORCH_HOME", str(output / "torch-home"))
     env.setdefault("CUDA_CACHE_PATH", str(output / "cuda-cache"))
+    env.setdefault("TORCHINDUCTOR_CACHE_DIR", str(output / "inductor"))
+    env.setdefault("TRITON_CACHE_DIR", str(output / "triton"))
     for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
         env.setdefault(key, "4")
     if runtime == "jittor":
@@ -240,14 +266,25 @@ def worker_env(args, output, runtime):
     return env
 
 
-def make_job(args, name, runtime, round_id):
+def make_job(args, name, runtime, round_id, torch_mode=None):
     job = {"case": name, "runtime": runtime, "round": round_id,
-           "source_root": str(args.source_root.resolve())}
+           "source_root": str(args.source_root.resolve()), "torch_mode": torch_mode}
+    reference_mode = "reduce-overhead" if torch_mode == "compiled" else "eager"
     if name in TRAINING_CASES:
         return training_job(args, job)
+    if name in MODEL_CASES:
+        case = MODEL_CASES[name]
+        assets = args.model_assets.resolve() if args.model_assets else None
+        if case.checkpoint and (assets is None or not (assets / name).exists()):
+            raise FileNotFoundError(f"{name} needs {case.checkpoint} at --model-assets/{name}")
+        mode = args.model_mode if runtime == "jittor" else reference_mode
+        return dict(job, kind="model", mode=mode, profile=args.profile_model,
+                    group=case.group, scope=case.scope, model=case.model, model_assets=str(assets) if assets else None,
+                    dtype=case.dtype, warmup=args.warmup or 6, samples=args.samples or 12,
+                    seed=args.seed if args.seed is not None else 0)
     if name in args.stock_cases:
         warmup, samples = (1, 2) if args.stock_size == "tiny" else (6, 12)
-        return dict(job, kind="stock", mode="eager", size=args.stock_size,
+        return dict(job, kind="stock", mode=reference_mode, size=args.stock_size,
                     seed=args.seed if args.seed is not None else 0,
                     warmup=args.warmup or warmup, samples=args.samples or samples)
     shape, warmup, samples = WAN_CASES[name]
@@ -260,7 +297,7 @@ def make_job(args, name, runtime, round_id):
     weights = None if checkpoint else getattr(args, f"{variant}_weights")
     return dict(job, **{
         "kind": "wan",
-        "mode": mode if runtime == "jittor" else "eager",
+        "mode": mode if runtime == "jittor" else reference_mode,
         "checkpoint": str(checkpoint.resolve()) if checkpoint else None,
         "config": str(config.resolve()),
         "weights": str(weights.resolve()) if weights else None,
@@ -286,6 +323,8 @@ def training_job(args, job):
         raise ValueError(f"Missing training checkpoint or state in {fixture}")
     eager = "eager" if family == "cv" else "step-eager"
     mode = "compiled-step" if job["runtime"] == "jittor" and job["case"] not in EAGER_TRAINING else eager
+    if job["torch_mode"] == "compiled":
+        mode = "compiled-step"
     return dict(job, kind="training", family=family, mode=mode, ranks=ranks, batch=batch,
                 model=model if family == "cv" else str(model_path), initial_state=str(initial),
                 training_tools=str(args.training_tools.resolve()), checkout=str(args.accelerate_checkout.resolve()),
@@ -360,7 +399,8 @@ def stop_workers(processes):
 
 def run_one(args, output, job, budget):
     name, runtime = job["case"], job["runtime"]
-    directory = output / f"{name}-{runtime}-{job['round']}"
+    execution_label = "torch-compiled" if job.get("torch_mode") == "compiled" else runtime
+    directory = output / f"{name}-{execution_label}-{job['round']}"
     directory.mkdir()
     if budget <= 0:
         return dict(job, status="measurement-timeout", directory=str(directory), measured_seconds=0)
@@ -404,7 +444,7 @@ def run_one(args, output, job, budget):
         print(f"{name} {runtime} {result['execution']} round {job['round']} "
               f"{elapsed_ms:.3f} ms {statistic}", flush=True)
     else:
-        print(f"{name} {runtime} round {job['round']} {status} ({directory})", flush=True)
+        print(f"{name} {execution_label} round {job['round']} {status} ({directory})", flush=True)
     return result
 
 
@@ -418,6 +458,11 @@ def aggregate_training(job, records):
 
 
 def cuda_residency(torch, jt, tensor):
+    if tensor.numel() == 0:
+        if tensor.device.type != "cuda":
+            raise RuntimeError("Empty tensor is on the wrong device")
+        return {"device": str(tensor.device), "ordinal": None,
+                "shape": list(tensor.shape), "dtype": str(tensor.dtype)}
     if jt is not None:
         tensor.sync()
         if tensor.location() != "device" or jt.core.dispatch_context([tensor])[0] != "cuda":
@@ -475,6 +520,8 @@ def prepare_denoiser(torch, np, job):
 
     def call(index):
         slot = index % len(latents)
+        if job.get("torch_mode") == "compiled":
+            torch.compiler.cudagraph_mark_step_begin()
         start = perf_counter()
         out = model(hidden_states=latents[slot], encoder_hidden_states=encoder_states,
                     timestep=times[slot], return_dict=False)[0]
@@ -512,9 +559,10 @@ def prepare_video(torch, jt, np, job):
     torch.cuda.empty_cache()
     pipe.to("cuda")
     weight = next(pipe.transformer.parameters())
-    cap_workspace = job["mode"] == "reduce-overhead"
-    if cap_workspace:
+    cap_workspace = jt is not None and job["mode"] == "reduce-overhead"
+    if job["mode"] == "reduce-overhead":
         pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead")
+    if cap_workspace:
         jt.cudnn.set_max_workspace_ratio(job["decode_workspace_ratio"])
     height, width, frames, steps = 256, 384, 17, 8
     channels = vae.config.z_dim
@@ -526,6 +574,8 @@ def prepare_video(torch, jt, np, job):
     mean = torch.tensor(vae.config.latents_mean, dtype=torch.float32, device="cuda").view(1, channels, 1, 1, 1)
 
     def call(_):
+        if job.get("torch_mode") == "compiled":
+            torch.compiler.cudagraph_mark_step_begin()
         latents = torch.from_numpy(noise.copy()).to("cuda")
         torch.cuda.synchronize()
         start = perf_counter()
@@ -587,13 +637,33 @@ def warm_up(job, call, settle=None):
     return warmups, index
 
 
+def native_graphs(job):
+    if job.get("torch_mode") != "compiled":
+        return None
+    from torch._dynamo.utils import counters
+
+    return int(counters["stats"]["unique_graphs"])
+
+
+def check_native_compile(job, warm_graphs, final_graphs):
+    if warm_graphs is None:
+        return
+    if warm_graphs == 0:
+        raise RuntimeError("Torch compiled worker produced no Dynamo graphs")
+    if final_graphs != warm_graphs:
+        raise RuntimeError("Torch compiled worker traced new graphs during steady-state timing")
+    job["native_compile"] = {"mode": "reduce-overhead", "graphs": warm_graphs}
+
+
 def timed_calls(directory, job, call, index):
+    warm_graphs = native_graphs(job)
     (directory / "warmup.done").touch()
     measurements = []
     for step in range(index, index + job["samples"]):
         outputs, sample = call(step)
         measurements.append(sample)
     (directory / "measurement.done").touch()
+    check_native_compile(job, warm_graphs, native_graphs(job))
     return outputs, measurements
 
 
@@ -608,18 +678,14 @@ def run_wan(job, directory, torch, jt, np):
                  "weight": cuda_residency(torch, jt, weight)}
     torch.cuda.synchronize()
     setup_s = perf_counter() - start
-    warmups, index = warm_up(job, call)
+    from worker import settled
+
+    warmups, index = warm_up(job, call, settled if job.get("torch_mode") == "compiled" else None)
     replay = model.__dict__.get("_replay") if jt is not None else None
     replay_before = dict(replay.stats) if replay is not None else {}
-    outputs, measurements = timed_calls(directory, job, call, index)
-    for name, tensor in outputs.items():
-        residency[name] = cuda_residency(torch, jt, tensor)
-        value = tensor.detach().float().cpu().numpy()
-        if not np.isfinite(value).all():
-            raise RuntimeError(f"Nonfinite output in {name}")
-        np.save(directory / f"{name}.npy", value, allow_pickle=False)
+    _, measurements = timed_calls(directory, job, call, index)
     execution = job["mode"]
-    if job["mode"] == "reduce-overhead":
+    if jt is not None and job["mode"] == "reduce-overhead":
         counts = {name: replay.stats[name] - before for name, before in replay_before.items()}
         execution = "eager-fallback"
         if counts.get("graph"):
@@ -628,6 +694,13 @@ def run_wan(job, directory, torch, jt, np):
             execution = "executor-replay"
         job.update(measured_replay=counts, replay_refused=replay.refused if replay else None,
                    device_graph_refused=replay._graph_refused if replay else None)
+    outputs, _ = call(0)
+    for name, tensor in outputs.items():
+        residency[name] = cuda_residency(torch, jt, tensor)
+        value = tensor.detach().float().cpu().numpy()
+        if not np.isfinite(value).all():
+            raise RuntimeError(f"Nonfinite output in {name}")
+        np.save(directory / f"{name}.npy", value, allow_pickle=False)
     return dict(metadata, execution=execution, setup_s=setup_s, warmups=warmups,
                 measurements=measurements, residency=residency)
 
@@ -643,6 +716,8 @@ def run_stock(job, directory, torch, jt):
     sync = Synchronizer(torch, job["runtime"], "cuda")
     start = perf_counter()
     workload.setup()
+    if job.get("torch_mode") == "compiled":
+        workload.compile("reduce-overhead")
     sync([])
     setup_s = perf_counter() - start
 
@@ -659,9 +734,85 @@ def run_stock(job, directory, torch, jt):
     warmups, index = warm_up(job, call, settled)
     outputs, measurements = timed_calls(directory, job, call, index)
     residency = cuda_residency(torch, jt, outputs[0])
-    return dict(execution="eager", setup_s=setup_s, warmups=warmups, measurements=measurements,
+    return dict(execution=job["mode"], setup_s=setup_s, warmups=warmups, measurements=measurements,
                 config=workload.config(), observed_output=residency, settings=settings,
                 stochastic=task.stochastic)
+
+
+def output_tensors(torch, result, prefix="output"):
+    if isinstance(result, torch.Tensor):
+        yield prefix, result
+    elif isinstance(result, Mapping):
+        for name, item in result.items():
+            yield from output_tensors(torch, item, f"{prefix}.{name}")
+    elif isinstance(result, (list, tuple)):
+        for index, item in enumerate(result):
+            yield from output_tensors(torch, item, f"{prefix}.{index}")
+
+
+def run_model(job, directory, torch, jt, np):
+    from importlib.metadata import version
+
+    from worker import Synchronizer, configure, settled
+
+    configure(torch, "cuda", False, False, job["runtime"])
+    sync = Synchronizer(torch, job["runtime"], "cuda")
+    start = perf_counter()
+    forward, inputs, model, assets = prepare_model(torch, job["case"], job["model_assets"], job["seed"])
+    residency = {"inputs": [cuda_residency(torch, jt, tensor) for tensor in inputs],
+                 "weight": cuda_residency(torch, jt, next(model.parameters()))}
+    if job["mode"] == "reduce-overhead":
+        forward = torch.compile(forward, mode="reduce-overhead", dynamic=False)
+    sync([])
+    setup_s = perf_counter() - start
+
+    def call(_):
+        if job["mode"] == "reduce-overhead":
+            torch.compiler.cudagraph_mark_step_begin()
+        start = perf_counter()
+        outputs = dict(output_tensors(torch, forward()))
+        if not outputs:
+            raise RuntimeError("Model forward returned no tensors")
+        sync(outputs.values())
+        return outputs, {"total_s": perf_counter() - start}
+
+    warmups, index = warm_up(job, call, settled)
+    replay_before = dict(getattr(forward, "stats", {}))
+    outputs, measurements = timed_calls(directory, job, call, index)
+    residency["outputs"] = {key: cuda_residency(torch, jt, tensor) for key, tensor in outputs.items()}
+    arrays = {}
+    for key, tensor in outputs.items():
+        value = tensor.detach().cpu()
+        if value.dtype in (torch.bfloat16, torch.float16):
+            value = value.float()
+        arrays[key] = value.numpy()
+        if not np.isfinite(arrays[key]).all():
+            raise RuntimeError(f"Nonfinite model output in {key}")
+    np.savez_compressed(directory / "outputs.npz", **arrays)
+    execution = job["mode"]
+    replay = {}
+    if jt is not None and job["mode"] == "reduce-overhead":
+        replay = {name: forward.stats[name] - before for name, before in replay_before.items()}
+        if replay.get("graph"):
+            execution = "cuda-graph"
+        elif replay.get("replayed"):
+            execution = "executor-replay"
+        else:
+            execution = "eager-fallback"
+    if job["profile"]:
+        import cProfile
+        import pstats
+
+        with cProfile.Profile() as profiler:
+            call(index)
+        with (directory / "profile.txt").open("w") as log:
+            pstats.Stats(profiler, stream=log).sort_stats("cumulative").print_stats(70)
+    loader = MODEL_CASES[job["case"]].loader
+    package = {"pyg": "torch-geometric", "chronos": "chronos-forecasting"}.get(loader, loader)
+    dependency = None if loader in ("recurrent", "cosyvoice", "torchvision") else {package: version(package)}
+    return dict(execution=execution, measured_replay=replay, replay_refused=getattr(forward, "refused", None),
+                dependency=dependency, weights=str(assets) if assets else "deterministic initialization",
+                setup_s=setup_s, warmups=warmups, measurements=measurements, residency=residency)
 
 
 def limit_cv_batches(job, steps):
@@ -737,15 +888,21 @@ def run_training_rank(job, directory, jt):
     else:
         input_plan = trace_nlp_inputs(job, steps)
         sys.argv += ["--batches", str(job["ranks"]), "--cycles", str(steps), "--metric", job["metric"]]
+        if job.get("torch_mode") == "compiled":
+            sys.argv.append("--tensor-learning-rate")
 
+    warm_graphs = None
     def print_progress(*values, **kwargs):
+        nonlocal warm_graphs
         if (len(values) == 1 and isinstance(values[0], str)
                 and values[0].startswith("{") and '"step":' in values[0] and '"total":' in values[0]):
             record = json.loads(values[0])
             if record["step"] == job["warmup"] - 1:
+                warm_graphs = native_graphs(job)
                 (directory / "warmup.done").touch()
             if record["step"] == steps - 1:
                 (directory / "measurement.done").touch()
+                check_native_compile(job, warm_graphs, native_graphs(job))
         print(*values, **kwargs)
 
     tool.print = print_progress
@@ -776,67 +933,117 @@ def run_worker(spec):
             result = run_training_rank(job, directory, jt)
         elif job["kind"] == "stock":
             result = run_stock(job, directory, torch, jt)
+        elif job["kind"] == "model":
+            replay_scope = jt.flag_scope(auto_graph_replay=0) if jt is not None else nullcontext()
+            with torch.no_grad(), replay_scope:
+                result = run_model(job, directory, torch, jt, np)
         else:
             with torch.no_grad():
                 result = run_wan(job, directory, torch, jt, np)
     if job["kind"] != "training":
         result["median_s"] = median(sample["total_s"] for sample in result["measurements"])
     packages = versions(torch, job["runtime"])
+    if job.get("torch_mode") == "compiled":
+        if not job.get("native_compile"):
+            raise RuntimeError("Torch compiled worker did not complete timing with a compiled graph")
+        result["execution"] = "compiled"
     job.update(result, gpu=torch.cuda.get_device_name(), python=sys.executable, torch=torch.__version__,
                versions=packages,
                fallback_count=jt.core.backend_fallback_count() - before_fallback if jt is not None else None)
     write_json(directory / "result.json", job)
 
 
-def compare_results(rows):
+def compare_pair(reference, candidate):
     import numpy as np
 
-    comparisons = []
-    candidates = {
-        (row["case"], row["round"]): row for row in rows
-        if row["runtime"] == "jittor" and row["status"] == "ok"
-    }
-    for reference in rows:
-        if reference["runtime"] != "torch" or reference["status"] != "ok":
-            continue
-        candidate = candidates.get((reference["case"], reference["round"]))
-        if candidate is None:
-            continue
-        stat = "mean" if reference["kind"] == "training" else "median"
-        summary = {
-            "case": reference["case"], "round": reference["round"], "statistic": stat,
-            "torch_ms": reference[f"{stat}_s"] * 1000, "jittor_ms": candidate[f"{stat}_s"] * 1000,
-            "jittor_execution": candidate["execution"],
-            "jittor_over_torch": candidate[f"{stat}_s"] / reference[f"{stat}_s"],
-        }
-        if reference["kind"] == "training":
-            keys = ("training_input_sha256", "initial_state_sha256")
-            summary["same_inputs"] = all(
-                left.get(key) is not None and left[key] == right.get(key)
-                for left, right in zip(reference["rank_results"], candidate["rank_results"])
-                for key in keys
-            )
-        else:
-            summary["same_dependencies"] = all(
-                reference["versions"].get(key) == candidate["versions"].get(key)
-                for key in ("diffusers", "transformers")
-            )
-        if reference["kind"] == "wan":
-            relative = {}
-            for tensor in sorted(Path(reference["directory"]).glob("*.npy")):
-                left = np.load(tensor, allow_pickle=False).astype(np.float64)
-                right = np.load(Path(candidate["directory"]) / tensor.name, allow_pickle=False).astype(np.float64)
-                if left.shape != right.shape:
-                    raise RuntimeError(f"Mismatched output shapes for {reference['case']} {tensor.stem}")
-                delta = left - right
-                norm = np.linalg.norm(left.ravel())
-                relative[tensor.stem] = {
-                    "relative_l2": float(np.linalg.norm(delta.ravel()) / norm) if norm else None,
-                    "max_abs": float(np.max(np.abs(delta))),
-                }
-            summary["output_errors"] = relative
-        comparisons.append(summary)
-    return comparisons
+    kind = reference["kind"]
+    if kind == "training":
+        keys = ("training_input_sha256", "initial_state_sha256")
+        rank_pairs = list(zip(reference["rank_results"], candidate["rank_results"]))
+        inputs_match = all(left.get(key) is not None and left[key] == right.get(key)
+                           for left, right in rank_pairs for key in keys)
+        loss_matches = all(np.allclose([row["loss"] for row in left["records"]],
+                                       [row["loss"] for row in right["records"]], atol=0.02, rtol=0.03)
+                           for left, right in rank_pairs)
+        return dict(same_inputs=inputs_match, parity=loss_matches, comparable=inputs_match and loss_matches)
+    dependencies_match = all(reference["versions"].get(key) == candidate["versions"].get(key)
+                             for key in ("diffusers", "transformers"))
+    if kind == "model":
+        output = compare_model_outputs(np, reference, candidate)
+        dependencies_match = dependencies_match and reference["dependency"] == candidate["dependency"]
+        output.update(same_dependencies=dependencies_match,
+                      comparable=output["parity"] and dependencies_match
+                      and reference["weights"] == candidate["weights"])
+        return output
+    if kind == "wan":
+        errors = {}
+        first, second = Path(reference["directory"]), Path(candidate["directory"])
+        names = {p.name for p in first.glob("*.npy")}
+        if not names or names != {p.name for p in second.glob("*.npy")}:
+            return dict(parity=False, comparable=False, parity_error="Output fields differ")
+        for name in sorted(names):
+            a, b = (np.load(directory / name, allow_pickle=False) for directory in (first, second))
+            errors[name] = compare_arrays(np, a, b, 0.02, 0.08)
+        parity = all(item["parity"] for item in errors.values())
+        return dict(parity=parity, comparable=parity and dependencies_match, output_errors=errors,
+                    same_dependencies=dependencies_match)
+    shape_matches = reference["config"] == candidate["config"]
+    return dict(same_dependencies=dependencies_match, same_inputs=shape_matches,
+                comparable=dependencies_match and shape_matches)
+
+
+def compare_results(rows):
+    if not rows:
+        return []
+    modes = {r.get("torch_mode") or ("eager" if r["runtime"] == "torch" else "jittor"): r
+             for r in rows}
+    ok = {mode: row for mode, row in modes.items() if row["status"] == "ok"}
+    case, round_id = rows[0]["case"], rows[0]["round"]
+    statistic = "mean" if any(row.get("kind") == "training" for row in rows) else "median"
+    times = {mode: row[f"{statistic}_s"] * 1000 for mode, row in ok.items()}
+    summary = dict(case=case, round=round_id, statistic=statistic,
+                   torch_eager_ms=times.get("eager"), torch_compiled_ms=times.get("compiled"),
+                   jittor_ms=times.get("jittor"), jittor_execution=ok.get("jittor", {}).get("execution"),
+                   statuses={mode: row["status"] for mode, row in modes.items()})
+    references = [mode for mode in ("eager", "compiled") if mode in ok]
+    if "eager" in ok and "compiled" in ok:
+        compiled_check = compare_pair(ok["eager"], ok["compiled"])
+        summary["torch_compile_check"] = compiled_check
+        if not compiled_check["comparable"]:
+            references.remove("compiled")
+    if not references:
+        return [summary]
+    best = min(references, key=times.__getitem__)
+    summary.update(torch_baseline_mode=best, torch_baseline_ms=times[best], torch_ms=times[best])
+    if "jittor" in ok:
+        summary.update(compare_pair(ok["eager"] if "eager" in ok else ok[best], ok["jittor"]))
+        if summary["comparable"]:
+            summary["jittor_over_torch"] = times["jittor"] / times[best]
+    return [summary]
+
+
+def compare_arrays(np, a, b, atol, rtol):
+    if a.shape != b.shape or a.dtype != b.dtype:
+        return dict(parity=False, reference_shape=a.shape, candidate_shape=b.shape,
+                    reference_dtype=str(a.dtype), candidate_dtype=str(b.dtype))
+    equal = (np.allclose(a, b, atol=atol, rtol=rtol)
+             if np.issubdtype(a.dtype, np.floating) else np.array_equal(a, b))
+    max_abs = float(np.max(np.abs(a.astype(np.float64) - b.astype(np.float64)))) if a.size else 0.0
+    return dict(parity=bool(equal), max_abs=max_abs)
+
+
+def compare_model_outputs(np, reference, candidate):
+    ref = Path(reference["directory"]) / "outputs.npz"
+    actual = Path(candidate["directory"]) / "outputs.npz"
+    atol, rtol = {"float32": (1e-4, 1e-3), "float16": (5e-3, 3e-2),
+                  "bfloat16": (2e-2, 8e-2)}[reference["dtype"]]
+    errors = {}
+    with np.load(ref, allow_pickle=False) as left, np.load(actual, allow_pickle=False) as right:
+        if set(left.files) != set(right.files):
+            return dict(parity=False, parity_error="Output fields differ")
+        for key in left.files:
+            errors[key] = compare_arrays(np, left[key], right[key], atol, rtol)
+    return dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors, atol=atol, rtol=rtol)
 
 
 def main():
@@ -864,25 +1071,47 @@ def main():
 
 def run_matrix(args, output):
     rows = []
+    comparisons = []
+    modes = ("eager", "compiled") if args.torch_mode == "both" else (args.torch_mode,)
+    executions = []
+    for runtime in args.runtimes.split(","):
+        executions.extend((runtime, mode) for mode in (modes if runtime == "torch" else (None,)))
+    meta = {"state": "running", "pid": os.getpid(), "planned": args.case,
+            "started": datetime.now(timezone.utc).isoformat()}
+
+    def publish(current=None):
+        meta["current"] = current
+        write_json(output / "results.json", {"meta": meta, "runs": rows, "comparisons": comparisons})
+
     for name in args.case:
         rounds = args.rounds or (1 if len(args.case) > 1 and name not in WAN_CASES else 2)
         for round_id in range(1, 2 if name == VIDEO else rounds + 1):
             budget = args.measurement_timeout
-            for runtime in args.runtimes.split(","):
+            round_rows = []
+            for runtime, mode in executions:
+                publish(dict(case=name, runtime=runtime, torch_mode=mode, round=round_id))
                 try:
-                    job = make_job(args, name, runtime, round_id)
+                    job = make_job(args, name, runtime, round_id, mode)
                 except (OSError, ValueError) as error:
-                    rows.append(dict(case=name, runtime=runtime, round=round_id,
-                                     status="invalid-input", error=str(error)))
+                    status = "missing-assets" if isinstance(error, FileNotFoundError) else "invalid-input"
+                    row = dict(case=name, runtime=runtime, torch_mode=mode, round=round_id,
+                               status=status, error=str(error))
                     print(f"{name} {runtime}: {error}", flush=True)
                 else:
                     row = run_one(args, output, job, budget)
                     budget -= row["measured_seconds"]
-                    rows.append(row)
-                write_json(output / "results.json", {"runs": rows})
-    comparisons = compare_results(rows)
-    write_json(output / "results.json", {"runs": rows, "comparisons": comparisons})
-    return int(any(row["status"] != "ok" for row in rows))
+                rows.append(row)
+                round_rows.append(row)
+            comparisons.extend(compare_results(round_rows))
+            publish()
+    failed = (any(row["status"] != "ok" for row in rows)
+              or any(not summary.get("comparable", True)
+                     or not summary.get("torch_compile_check", {}).get("comparable", True)
+                     for summary in comparisons))
+    meta.update(state="completed-with-issues" if failed else "completed",
+                finished=datetime.now(timezone.utc).isoformat())
+    publish()
+    return int(failed)
 
 
 if __name__ == "__main__":
