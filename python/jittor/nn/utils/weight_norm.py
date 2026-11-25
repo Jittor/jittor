@@ -29,6 +29,10 @@ def _norm_except_dim(value, dim):
     return jt.sqrt((value * value).sum(axes, keepdims=True))
 
 
+def _normalized_weight(direction, gain, dim):
+    return direction * (gain / _norm_except_dim(direction, dim))
+
+
 def _ensure_reparam_hook(module):
     functions = getattr(module, "_reparam_fns", None)
     if functions is not None:
@@ -72,7 +76,15 @@ class WeightNorm:
     def compute_weight(self, module):
         gain = getattr(module, self.name + "_g")
         direction = getattr(module, self.name + "_v")
-        return direction * (gain / _norm_except_dim(direction, self.dim))
+        return _normalized_weight(direction, gain, self.dim)
+
+    def load_parametrized_checkpoint(self, module, state, prefix, *args):
+        legacy = (prefix + self.name + "_g", prefix + self.name + "_v")
+        stem = prefix + "parametrizations." + self.name
+        parametrized = (stem + ".original0", stem + ".original1")
+        if all(key in state for key in parametrized) and not any(key in state for key in legacy):
+            for old_key, new_key in zip(legacy, parametrized):
+                state[old_key] = state.pop(new_key)
 
     @staticmethod
     def apply(module, name, dim):
@@ -97,14 +109,18 @@ class WeightNorm:
         # whatever the clones happened to hold. `register_parameter` says so
         # explicitly, which is what torch's `weight_norm` does by assigning
         # `nn.Parameter` objects.
-        _set_parameter(module, name + "_g", _norm_except_dim(weight, normalized_dim).clone())
-        _set_parameter(module, name + "_v", weight.clone())
+        gain = _norm_except_dim(weight, normalized_dim).clone().detach().start_grad()
+        direction = weight.clone().detach().start_grad()
+        _set_parameter(module, name + "_g", gain)
+        _set_parameter(module, name + "_v", direction)
+        function.load_hook = module.register_load_state_dict_pre_hook(function.load_parametrized_checkpoint)
         functions.append(function)
         function(module)
         return function
 
     def remove(self, module):
         weight = self.compute_weight(module).clone()
+        self.load_hook.remove()
         weight.persistent = True
         delattr(module, self.name)
         delattr(module, self.name + "_g")

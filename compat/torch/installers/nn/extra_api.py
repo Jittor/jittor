@@ -20,7 +20,13 @@ from ....diagnostics import EXPECTED, swallowed
 from .... import fsdp_hooks as _fsdp_hooks
 from .... import collectives as _collectives
 from .rnn import _rnn_pad_sequence
-from jittor.nn.utils.weight_norm import (_ensure_reparam_hook, weight_norm as _native_weight_norm, remove_weight_norm as _native_remove_weight_norm)
+from jittor.nn.utils.weight_norm import (
+    _ensure_reparam_hook,
+    _norm_except_dim,
+    _normalized_weight,
+    remove_weight_norm as _native_remove_weight_norm,
+    weight_norm as _native_weight_norm,
+)
 
 def _ddp_world_size():
     return _collectives._world_size()
@@ -1013,16 +1019,36 @@ def _api_parametrize_register_parametrization(module, *a, **k):
     return module
 
 
-def _api_parametrize_remove_parametrizations(module, *a, **k):
+def _api_parametrize_remove_parametrizations(module, tensor_name, leave_parametrized=True):
+    if not _api_parametrize_is_parametrized(module, tensor_name):
+        raise ValueError(f"Module does not have a parametrization on {tensor_name}")
+    parameters = module.parametrizations[tensor_name]
+    if not leave_parametrized:
+        raise ValueError("Weight normalization requires leave_parametrized=True")
+    base = _api_parametrize_type_before_parametrizations(module)
+    parameter = get_install_context(jt).target_namespace.nn.Parameter
+    with jt.no_grad():
+        weight = parameter(parameters(), requires_grad=parameters.original1.requires_grad)
+    parameters.load_hook.remove()
+    delattr(type(module), tensor_name)
+    del module.parametrizations[tensor_name]
+    if not module.parametrizations:
+        del module.parametrizations
+        object.__setattr__(module, "__class__", base)
+    module.register_parameter(tensor_name, weight)
     return module
 
 
-def _api_parametrize_is_parametrized(module, *a, **k):
-    return False
+def _api_parametrize_is_parametrized(module, tensor_name=None):
+    if "_jittor_weight_norm_base" not in vars(type(module)):
+        return False
+    if tensor_name is None:
+        return bool(module.parametrizations)
+    return tensor_name in module.parametrizations
 
 
 def _api_parametrize_type_before_parametrizations(module):
-    return type(module)
+    return vars(type(module)).get("_jittor_weight_norm_base", type(module))
 
 
 def _api_parametrizations_orthogonal(module, *a, **k):
@@ -1038,7 +1064,79 @@ def _api_F_relu_(input):
     return nn.relu(input)
 
 
-def _api_parametrizations_weight_norm(module, name='weight', dim=0):
+class _WeightNorm(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def execute(self, gain, direction):
+        return _normalized_weight(direction, gain, self.dim)
+
+    def right_inverse(self, weight):
+        return _norm_except_dim(weight, self.dim), weight
+
+
+class _WeightNormParameters(nn.Module):
+    def __init__(self, weight, normalization):
+        super().__init__()
+        self.add_module("0", normalization)
+        parameter = get_install_context(jt).target_namespace.nn.Parameter
+        with jt.no_grad():
+            gain, direction = normalization.right_inverse(weight)
+            self.original0 = parameter(gain, requires_grad=weight.requires_grad)
+            self.original1 = parameter(direction, requires_grad=weight.requires_grad)
+
+    def __getitem__(self, index):
+        return tuple(self._modules.values())[index]
+
+    def execute(self):
+        return getattr(self, "0")(self.original0, self.original1)
+
+    def right_inverse(self, weight):
+        with jt.no_grad():
+            gain, direction = getattr(self, "0").right_inverse(weight)
+            self.original0.copy_(gain)
+            self.original1.copy_(direction)
+
+
+def _api_parametrizations_weight_norm(module, name="weight", dim=0):
+    if _api_parametrize_is_parametrized(module, name):
+        raise ValueError(f"Weight normalization already exists on {name}")
+    weight = module._parameters.get(name)
+    if not isinstance(weight, jt.Var):
+        raise ValueError(f"Module does not have a parameter named {name}")
+    already_parametrized = _api_parametrize_is_parametrized(module)
+    if not already_parametrized and hasattr(module, "parametrizations"):
+        raise ValueError("Module already has an attribute named parametrizations")
+    context = get_install_context(jt)
+    adapt = context.state["nn_class_adapter"]
+    parameters = adapt(_WeightNormParameters)(weight, adapt(_WeightNorm)(dim))
+    if not already_parametrized:
+        base = type(module)
+        parametrized = type(f"Parametrized{base.__name__}", (base,), {
+            "__slots__": (),
+            "_jittor_weight_norm_base": base,
+        })
+        module.parametrizations = context.target_namespace.nn.ModuleDict()
+        object.__setattr__(module, "__class__", parametrized)
+
+    def get_weight(owner):
+        return owner.parametrizations[name]()
+
+    def set_weight(owner, value):
+        owner.parametrizations[name].right_inverse(value)
+
+    def load_legacy_state(state, prefix, *_):
+        gain, direction = prefix + name + "_g", prefix + name + "_v"
+        if gain in state and direction in state:
+            stem = prefix + "parametrizations." + name
+            state[stem + ".original0"] = state.pop(gain)
+            state[stem + ".original1"] = state.pop(direction)
+
+    delattr(module, name)
+    setattr(type(module), name, property(get_weight, set_weight))
+    module.parametrizations[name] = parameters
+    parameters.load_hook = module._register_load_state_dict_pre_hook(load_legacy_state)
     return module
 
 
