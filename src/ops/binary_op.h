@@ -5,11 +5,13 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include "core/node_pool.h"
 #include "core/op.h"
 
 namespace jittor {
 
-struct BinaryOp : Op {
+struct BinaryOp final : Op {
+    JT_DECLARE_NODE_POOL()
     static constexpr bool accepts_storage_strides = true;
     static constexpr bool accepts_cpu_scalar_operands = true;
     Var* x, * y, * z;

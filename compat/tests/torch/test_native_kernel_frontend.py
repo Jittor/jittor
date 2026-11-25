@@ -424,3 +424,51 @@ def test_prepared_triton_writes_bound_storage_after_pending_readers(physical_win
             np.testing.assert_array_equal(value.numpy(), np.full(8, new))
         tail = np.full(8, 17.0) if physical_window else np.empty(0)
         np.testing.assert_array_equal(backing.numpy(), np.concatenate((np.full(8, expected), tail)))
+
+
+@pytest.mark.parametrize("dtype_name,torch_dtype", [
+    ("float32", torch.float32),
+    ("float16", torch.float16),
+    ("bfloat16", torch.bfloat16),
+])
+def test_tilelang_torch_frontend_dtypes_and_graph_replay(dtype_name, torch_dtype):
+    require_cuda()
+    tilelang = pytest.importorskip("tilelang")
+    import tilelang.language as T
+    from jittor.kernels import BoundOutput
+
+    @T.prim_func
+    def add_typed(
+        A: T.Tensor((256,), dtype_name),
+        B: T.Tensor((256,), dtype_name),
+        C: T.Tensor((256,), dtype_name),
+    ):
+        with T.Kernel(2, threads=128) as block:
+            for i in T.Parallel(128):
+                idx = block * 128 + i
+                C[idx] = A[idx] + B[idx]
+
+    kernel = tilelang.compile(add_typed, out_idx=[], target="cuda", execution_backend="tvm_ffi")
+
+    class Model(jt.nn.Module):
+        def execute(self, x):
+            return tilelang_call(kernel, x, x, TensorSpec((256,), dtype_name))
+
+    with torch.inference_mode(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+        model = Model()
+        replay = jt.graph_replay(model)
+        before = jt.core.graph_launch_count()
+        for value in (1.0, 2.0, 3.0, 4.0):
+            x = torch.full((256,), value, device="cuda", dtype=torch_dtype)
+            out = replay(x)
+            np.testing.assert_allclose(out.float().cpu().numpy(), np.full(256, 2.0 * value), atol=0.05, rtol=0.02)
+        assert jt.core.graph_launch_count() > before
+
+        dst = torch.zeros((256,), device="cuda", dtype=torch_dtype)
+        src = torch.full((256,), 3.0, device="cuda", dtype=torch_dtype)
+        jt.sync([dst, src], True, False)
+        ptr = dst._mem_ptr_now
+        out = tilelang_call(kernel, src, src, BoundOutput(dst))
+        out.sync(True, False)
+        assert dst._mem_ptr_now == ptr
+        np.testing.assert_allclose(dst.float().cpu().numpy(), np.full(256, 6.0), atol=0.05, rtol=0.02)

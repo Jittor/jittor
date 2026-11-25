@@ -7,8 +7,11 @@
 #include "core/common.h"
 #include "runtime/traversal_epoch.h"
 #include "runtime/backend.h"
+#include "runtime/node_index.h"
 
 namespace jittor {
+
+struct VarPtrBatch;
 
 // Working storage of `build_exec_plan`, `count_fuse` and the hold schedule:
 // nothing in it is read once the plan is built. It lives in the plan so that
@@ -18,6 +21,8 @@ namespace jittor {
 // allocated and freed some forty vectors.
 struct PlanScratch {
     vector<Node*> bfs_q;
+    vector<Var*> new_planning_vars;
+    NodeIndex planning_held;
     vector<int> roots, next, deps;
     vector<int> in_var, producer, out_var, consumers_begin, consumers;
     vector<int> readers, read_by;
@@ -28,6 +33,7 @@ struct PlanScratch {
     vector<int> father, fuse_level, fuse_queue, unvisited_consumers, group_size;
     vector<BackendId> op_backend;
     vector<char> op_scalar;
+    vector<int8_t> op_scalar_rank, op_tiny_numel;
     vector<char> forced_material, half_union, bounded;
     // schedule_hold_release
     vector<int> last_use;
@@ -103,7 +109,7 @@ struct ExecPlan {
     // PyTorch's 9.17 GB on an 8-layer Qwen3 step, and the 28-layer one did
     // not fit a 24 GB card. After its last use nothing in the batch reads the
     // node again, which is all the hold was protecting.
-    vector<VarPtr>* batch_hold = nullptr;
+    VarPtrBatch* batch_hold = nullptr;
     vector<vector<int>> release_after;
     // ops.size(), kept because the Runner reports it after `ops` has been
     // consumed.
@@ -147,7 +153,7 @@ struct ExecPlan {
 // Leaves `plan.epoch` held; the caller releases it once the batch is compiled.
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan);
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
-                     vector<VarPtr>& planning_hold);
+                     VarPtrBatch& planning_hold);
 
 // A batch that failed before running all of its ops leaves the rest pending.
 // Mark every unfinished var so the next sync does not plan and execute them

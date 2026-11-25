@@ -220,7 +220,25 @@ inline void jk_put_str_with_len(JK& jk, const char* a, int n) {
     jk.size += n;
 }
 
-inline JK& operator<<(JK& jk, const char* s) {
+template <size_t N>
+inline JK& operator<<(JK& jk, const char (&s)[N]) {
+    if (N > 1) {
+        jk.reserve(N - 1);
+        std::memcpy(jk.buffer + jk.size, s, N - 1);
+        jk.size += N - 1;
+    }
+    return jk;
+}
+
+template <size_t N>
+inline JK& operator<<(JK& jk, char (&s)[N]) {
+    jk_put_str_with_len(jk, s, strlen(s));
+    return jk;
+}
+
+template <typename P, typename std::enable_if<
+    std::is_same<P, const char*>::value || std::is_same<P, char*>::value, int>::type = 0>
+inline JK& operator<<(JK& jk, P s) {
     jk_put_str_with_len(jk, s, strlen(s));
     return jk;
 }
@@ -247,8 +265,12 @@ inline JK& operator<<(JK& jk, const char c) {
 }
 
 inline JK& operator<<(JK& jk, const JK::hex1& h) {
-    uint8 data = h.data % 16;
-    return jk << (char)((data<10) ? data+'0' : data-10+'a');
+    static constexpr char digits[16] = {
+        '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'
+    };
+    jk.reserve(1);
+    jk.buffer[jk.size++] = digits[h.data & 15u];
+    return jk;
 }
 
 inline JK& operator<<(JK& jk, const JK::shex1& h) {
@@ -259,16 +281,32 @@ inline JK& operator<<(JK& jk, const JK::shex1& h) {
 }
 
 inline JK& operator<<(JK& jk, const JK::hex2& h) {
-    return jk << JK::hex1(h.data>>4) << JK::hex1(h.data);
+    static constexpr char digits[16] = {
+        '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'
+    };
+    jk.reserve(2);
+    char* p = jk.buffer + jk.size;
+    p[0] = digits[(h.data >> 4) & 15u];
+    p[1] = digits[h.data & 15u];
+    jk.size += 2;
+    return jk;
 }
 
 inline JK& operator<<(JK& jk, const JK::hex& h) {
-    auto a = h.data;
+    static constexpr char digits[16] = {
+        '0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'
+    };
+    uint64 a = h.data;
     uint nbits = 64 - lzcnt(a);
-    nbits = a ? nbits-1 : 0;
-    int i=nbits/4;
-    for (; i>=0; i--)
-        jk << JK::hex1(a >> (i*4));
+    nbits = a ? nbits - 1 : 0;
+    int n = (int)(nbits / 4) + 1;
+    jk.reserve(n);
+    char* p = jk.buffer + jk.size;
+    for (int i = n - 1; i >= 0; --i) {
+        p[i] = digits[a & 15u];
+        a >>= 4;
+    }
+    jk.size += n;
     return jk;
 }
 
@@ -397,43 +435,43 @@ vector<pair<string,string>> parse_jit_keys(const string& s);
 
 template <class Ta, class Tb>
 void add_jit_define(JK& jk, const Ta& key, const Tb& val) {
-    jk << JK::key << key << JK::val << val;
+    jk << "«" << key << JK::val << val;
 }
 
 template <class Ta, class Tb, class Tc>
 void add_jit_define(JK& jk, const Ta& key, const Tb& i, const Tc& val) {
-    jk << JK::key << key << i << JK::val << val;
+    jk << "«" << key << i << JK::val << val;
 }
 
 
 template <class Ta>
 void add_jit_define(JK& jk, const Ta& key, const JK::hex& val) {
-    jk << JK::key << key << JK::hex_val << val;
+    jk << "«" << key << JK::hex_val << val;
 }
 
 template <class Ta, class Tb>
 void add_jit_define(JK& jk, const Ta& key, const Tb& i, const JK::hex& val) {
-    jk << JK::key << key << i << JK::hex_val << val;
+    jk << "«" << key << i << JK::hex_val << val;
 }
 
 template <class Ta>
 void add_jit_define(JK& jk, const Ta& key, const JK::hex1& val) {
-    jk << JK::key << key << JK::hex_val << val;
+    jk << "«" << key << JK::hex_val << val;
 }
 
 template <class Ta, class Tb>
 void add_jit_define(JK& jk, const Ta& key, const Tb& i, const JK::hex1& val) {
-    jk << JK::key << key << i << JK::hex_val << val;
+    jk << "«" << key << i << JK::hex_val << val;
 }
 
 template <class Ta>
 void add_jit_define(JK& jk, const Ta& key, const JK::hex2& val) {
-    jk << JK::key << key << JK::hex_val << val;
+    jk << "«" << key << JK::hex_val << val;
 }
 
 template <class Ta, class Tb>
 void add_jit_define(JK& jk, const Ta& key, const Tb& i, const JK::hex2& val) {
-    jk << JK::key << key << i << JK::hex_val << val;
+    jk << "«" << key << i << JK::hex_val << val;
 }
 
 #define _CS(x) x

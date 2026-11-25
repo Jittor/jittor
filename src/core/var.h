@@ -9,6 +9,7 @@
 #include "runtime/tensor_placement.h"
 #include "core/common.h"
 #include "core/node.h"
+#include "core/node_pool.h"
 #include "core/storage_version.h"
 #include "utils/cstr.h"
 #include "utils/fast_shared_ptr.h"
@@ -48,7 +49,8 @@ struct AutogradAliasState {
     }
 };
 
-struct Var : Node {
+struct Var final : Node {
+    JT_DECLARE_NODE_POOL()
     NanoVector shape;
     // Element strides; empty means the canonical dense layout. Offset remains
     // represented by mem_ptr relative to the shared allocation's base.
@@ -106,18 +108,15 @@ struct Var : Node {
     // unwritten rule.
     Var* share_src = nullptr;
     size_t share_offset = 0;
-    shared_ptr<StorageMutationVersion> storage_mutation_version;
-    inline shared_ptr<StorageMutationVersion> peek_storage_version() const {
-        return std::atomic_load(&storage_mutation_version);
+    AtomicStorageVersionPtr storage_mutation_version;
+    inline StorageVersionPtr peek_storage_version() const {
+        return storage_mutation_version.load();
     }
-    inline shared_ptr<StorageMutationVersion> storage_version_token() {
-        auto token = peek_storage_version();
-        if (!token) {
-            auto fresh = std::make_shared<StorageMutationVersion>();
-            if (std::atomic_compare_exchange_strong(&storage_mutation_version, &token, fresh))
-                token = move(fresh);
-        }
-        return token;
+    inline StorageVersionPtr storage_version_token() {
+        return storage_mutation_version.get_or_create(id);
+    }
+    inline void set_storage_version(StorageVersionPtr token) {
+        storage_mutation_version.store(move(token));
     }
     inline void note_storage_mutation() {
         storage_version_token()->value.fetch_add(1, std::memory_order_relaxed);
@@ -188,7 +187,7 @@ struct Var : Node {
     bool alloc(Allocator* allocator);
     inline void share_with(Var* x, size_t offset = 0) {
         CHECK_EXIST;
-        std::atomic_store(&storage_mutation_version, x->storage_version_token());
+        set_storage_version(x->storage_version_token());
         share_src = x;
         share_offset = offset;
         storage_offset_bytes = x->storage_offset_bytes + offset;
@@ -268,6 +267,157 @@ struct VarPtr {
     }
 
     void set_stop_grad(bool stop_grad);
+};
+
+// RAII owner for a batch of Vars: takes graph_mutation_mutex() once per bulk
+// own or bulk release instead of once per VarPtr. Individual slots may be
+// released early (and nulled) via release_indices / release_index; clear() and
+// destruction batch-release all remaining non-null pointers and preserve
+// vector capacity for BatchState reuse.
+struct VarPtrBatch {
+    SmallVector<Var*, 4> vars;
+
+    VarPtrBatch() = default;
+    ~VarPtrBatch() { clear(); }
+    VarPtrBatch(const VarPtrBatch&) = delete;
+    VarPtrBatch& operator=(const VarPtrBatch&) = delete;
+    VarPtrBatch(VarPtrBatch&& other) noexcept : vars(move(other.vars)) {
+        other.vars.clear();
+    }
+    VarPtrBatch& operator=(VarPtrBatch&& other) noexcept {
+        if (this != &other) {
+            clear();
+            vars = move(other.vars);
+            other.vars.clear();
+        }
+        return *this;
+    }
+
+    inline bool empty() const { return vars.empty(); }
+    inline size_t size() const { return vars.size(); }
+    inline void reserve(size_t n) { vars.reserve(n); }
+    inline Var* operator[](size_t i) const { return vars[i]; }
+
+    inline void own_all(const vector<Var*>& src) {
+        const size_t n = src.size();
+        if (n == 0) return;
+        vars.reserve(vars.size() + n);
+        own_both_liveness_batch(src.data(), n);
+        for (size_t i = 0; i < n; ++i) vars.push_back(src[i]);
+    }
+
+    inline void own_all_locked(const vector<Var*>& src) {
+        const size_t n = src.size();
+        if (n == 0) return;
+        vars.reserve(vars.size() + n);
+        own_both_liveness_batch_locked(src.data(), n);
+        for (size_t i = 0; i < n; ++i) vars.push_back(src[i]);
+    }
+
+    inline void push(Var* v) {
+        if (!v) {
+            vars.push_back(nullptr);
+            return;
+        }
+        vars.reserve(vars.size() + 1);
+        v->own_both_liveness();
+        vars.push_back(v);
+    }
+
+    inline void release_index(int idx) {
+        Var* v = vars[idx];
+        if (!v) return;
+        vars[idx] = nullptr;
+        v->release_both_liveness();
+    }
+
+    inline void release_indices(const vector<int>& indices) {
+        const size_t m = indices.size();
+        if (m == 0) return;
+        if (m == 1) {
+            release_index(indices[0]);
+            return;
+        }
+        if (m <= 64) {
+            Var* buf[64];
+            size_t count = 0;
+            for (size_t i = 0; i < m; ++i) {
+                int idx = indices[i];
+                Var* v = vars[idx];
+                if (v) {
+                    vars[idx] = nullptr;
+                    buf[count++] = v;
+                }
+            }
+            if (count) release_both_liveness_batch(buf, count);
+            return;
+        }
+        vector<Var*> buf;
+        buf.reserve(m);
+        for (int idx : indices) {
+            Var* v = vars[idx];
+            if (v) {
+                vars[idx] = nullptr;
+                buf.push_back(v);
+            }
+        }
+        if (!buf.empty()) release_both_liveness_batch(buf.data(), buf.size());
+    }
+
+    inline void release_indices_locked(const vector<int>& indices) {
+        const size_t m = indices.size();
+        if (m == 0) return;
+        if (m == 1) {
+            Var* v = vars[indices[0]];
+            if (v) {
+                vars[indices[0]] = nullptr;
+                release_both_liveness_batch_locked(&v, 1);
+            }
+            return;
+        }
+        if (m <= 64) {
+            Var* buf[64];
+            size_t count = 0;
+            for (size_t i = 0; i < m; ++i) {
+                int idx = indices[i];
+                Var* v = vars[idx];
+                if (v) {
+                    vars[idx] = nullptr;
+                    buf[count++] = v;
+                }
+            }
+            if (count) release_both_liveness_batch_locked(buf, count);
+            return;
+        }
+        vector<Var*> buf;
+        buf.reserve(m);
+        for (int idx : indices) {
+            Var* v = vars[idx];
+            if (v) {
+                vars[idx] = nullptr;
+                buf.push_back(v);
+            }
+        }
+        if (!buf.empty()) release_both_liveness_batch_locked(buf.data(), buf.size());
+    }
+
+    inline void clear() {
+        if (vars.empty()) return;
+        struct ClearOnExit {
+            SmallVector<Var*, 4>& v;
+            ~ClearOnExit() { v.clear(); }
+        } guard{vars};
+        release_both_liveness_batch(vars.begin(), vars.size());
+    }
+
+    inline void clear_locked() {
+        if (vars.empty()) return;
+        struct ClearOnExit {
+            SmallVector<Var*, 4>& v;
+            ~ClearOnExit() { v.clear(); }
+        } guard{vars};
+        release_both_liveness_batch_locked(vars.begin(), vars.size());
+    }
 };
 
 // Some constructors only decide to forward: from their arguments alone they

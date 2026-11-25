@@ -143,6 +143,26 @@ def _run_post_accumulate_hooks(leaves, grad_by_id):
                     raise RuntimeError("Tensor post accumulate grad hook must return None")
 
 
+_CACHED_ADAM_METADATA_PROTOCOL = None
+_CACHED_AUTOGRAD_MOD = None
+
+
+def _get_adam_metadata_protocol():
+    global _CACHED_ADAM_METADATA_PROTOCOL
+    if _CACHED_ADAM_METADATA_PROTOCOL is None:
+        from ...optimizer_adam import _ADAM_METADATA_PROTOCOL
+        _CACHED_ADAM_METADATA_PROTOCOL = _ADAM_METADATA_PROTOCOL
+    return _CACHED_ADAM_METADATA_PROTOCOL
+
+
+def _get_autograd_mod():
+    global _CACHED_AUTOGRAD_MOD
+    if _CACHED_AUTOGRAD_MOD is None:
+        from ... import autograd as _mod
+        _CACHED_AUTOGRAD_MOD = _mod
+    return _CACHED_AUTOGRAD_MOD
+
+
 def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     # Replicate the grad-storage half of jittor's Optimizer.backward() but
     # from an already-computed {id(param): grad} map (so a SINGLE jt.grad
@@ -157,12 +177,11 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
     # The common zero_grad()/backward() cycle publishes into empty slots.
     # A native batch validates current accessors and every slot first. Shared
     # parameters, accumulation and custom Python protocols keep the loop below.
-    from ...optimizer_adam import _ADAM_METADATA_PROTOCOL
     frontend = get_install_context(_owner.jt).target_namespace
     published = _owner.jt.core._try_publish_fresh_gradients(
         opt.param_groups, grad_by_id, filled_param_ids,
         (_NativeVar, frontend.Tensor, frontend.nn.Parameter),
-        _ADAM_METADATA_PROTOCOL, _FRESH_GRAD_PROTOCOL,
+        _get_adam_metadata_protocol(), _FRESH_GRAD_PROTOCOL,
     )
     if published:
         _finish_opt_gradient_publication(opt)
@@ -186,7 +205,7 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
             existing = grads_list[i] if i < len(grads_list) else None
             if not isinstance(existing, _NativeVar):
                 existing = getattr(p, "_torch_grad", None)
-            if isinstance(existing, _NativeVar) and list(existing.shape) == list(g.shape):
+            if isinstance(existing, _NativeVar) and existing.shape == g.shape:
                 if not zero:
                     g = g + existing
                 existing.update(g)
@@ -203,10 +222,12 @@ def _fill_opt_grads(opt, grad_by_id, filled_param_ids=None):
 
 def _finish_opt_gradient_publication(opt):
     object.__setattr__(opt, "_Optimizer__zero_grad", False)
+    # Invalidate the cached map so find_grad() rebuilds lazily on demand
+    # instead of scanning every parameter on every backward step.
     try:
-        opt._build_grad_map()
+        object.__setattr__(opt, "_grad_map", {})
     except _owner.EXPECTED as exc:
-        _owner.swallowed("torch/installers/tensor.py _fill_opt_grads: opt._build_grad_map()", exc,
+        _owner.swallowed("torch/installers/tensor.py _fill_opt_grads: opt._grad_map = {}", exc,
                   "the optimizer keeps the grad map from before this backward, so "
                   "step() may apply stale or missing gradients")
 
@@ -220,8 +241,7 @@ def _optimizer_maybe_has_fsdp_params(opt):
 
 
 def _backward(self, gradient=None, retain_graph=None, create_graph=False, **kw):
-    from ...autograd import _backward_callbacks
-    with _backward_callbacks():
+    with _get_autograd_mod()._backward_callbacks():
         return _backward_impl(self, gradient, retain_graph, create_graph, **kw)
 
 
@@ -333,25 +353,30 @@ def _backward_impl(self, gradient=None, retain_graph=None, create_graph=False, *
         # parameter replacement, but unrelated input leaves must still receive
         # gradients just as they do in Torch.
         _owner._torch_prune_leaf_registry(
-            opt_ids | retained_ids,
+            opt_ids | retained_ids if retained_ids else opt_ids,
             keep_non_parameters=True,
         )
         for v in list(tensor_state.leaf_params.values()):
+            vid = id(v)
+            if vid in leaf_map:
+                continue
             if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
-                leaf_map.setdefault(id(v), v)
+                leaf_map[vid] = v
     else:
         _owner._torch_prune_leaf_registry()
         for v in list(tensor_state.leaf_params.values()):
+            vid = id(v)
+            if vid in leaf_map:
+                continue
             if isinstance(v, _NativeVar) and v.requires_grad and v.is_backward_leaf:
-                leaf_map.setdefault(id(v), v)
+                leaf_map[vid] = v
     if not leaf_map:
         return None
     leaves = list(leaf_map.values())
     # torch leaves a disconnected target at grad=None. Keep jt.grad's
     # historical zero-materialization untouched and use the compatibility
     # core entry point that preserves missing gradients explicitly.
-    from ...autograd import _create_graph_scope
-    with _create_graph_scope(create_graph):
+    with _get_autograd_mod()._create_graph_scope(create_graph):
         if _step_capture.active() or _step_capture.tracing():
             grads = _owner.jt.core.grad_optional(self, leaves, retain_graph)
             prepared = False

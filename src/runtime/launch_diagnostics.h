@@ -11,14 +11,25 @@ struct LaunchOrigin {
     bool truncated = false;
 };
 struct LaunchRecord {
-    uint64 sequence = 0;
-    uint64 origin = 0;
+    struct UninitializedTag {};
+    static constexpr UninitializedTag uninitialized{};
+
+    uint64 sequence;
+    uint64 origin;
     Device device;
-    uintptr_t stream = 0;
-    uint32 op_id = 0;
-    char name[96] = {};
-    uint32 fused_ids[8] = {};
-    uint32 fused_count = 0;
+    uintptr_t stream;
+    uint32 op_id;
+    char name[96];
+    uint32 fused_ids[8];
+    uint32 fused_count;
+
+    LaunchRecord()
+        : sequence(0), origin(0), device(), stream(0), op_id(0),
+          name{}, fused_ids{}, fused_count(0) {}
+    // Skip zero-initializing the 96-byte name and 32-byte fused_ids arrays on
+    // the executor's hot path; the caller populates origin, op_id, fused_count,
+    // fused_ids[0..min(fused_count,8)), and NUL-terminated name before use.
+    explicit LaunchRecord(UninitializedTag) {}
     // The Python call site is `origin`, an interned id; the report resolves
     // it. Copying the resolved path into every record -- 392 bytes, under
     // the history's lock -- was most of what recording a launch cost.
@@ -75,7 +86,9 @@ struct LaunchOriginScope {
 // nothing.
 struct LaunchOperationScope {
     const LaunchRecord* previous;
+    bool active;
     explicit LaunchOperationScope(const LaunchRecord& record);
+    explicit LaunchOperationScope(const LaunchRecord* record);
     ~LaunchOperationScope();
 };
 EXTERN_LIB void record_active_launch(BackendStream stream);

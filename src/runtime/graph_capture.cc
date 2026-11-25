@@ -577,6 +577,9 @@ bool graph_launch_host_prefix(int64 graph) {
     note_graph_launch_begin();
     backend_graph_launch(reinterpret_cast<void*>(graph));
     note_graph_launch_end();
+    int dev = current_device();
+    if (dev >= 0 && dev < 64)
+        backend_compute_stream_release(1ull << dev);
     return true;
 }
 
@@ -597,6 +600,9 @@ void graph_launch(int64 graph) {
         note_graph_launch_begin();
         backend_graph_launch(reinterpret_cast<void*>(graph));
         note_graph_launch_end();
+        int dev = current_device();
+        if (dev >= 0 && dev < 64)
+            backend_compute_stream_release(1ull << dev);
     } catch (...) {
         graph_pool_leave_launch(pool_scope);
         throw;

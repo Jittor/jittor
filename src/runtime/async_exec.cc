@@ -3,6 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
@@ -35,10 +36,14 @@ namespace {
 
 // The bindings this thread is inside of, innermost first, and the innermost
 // one that is suspended in a call back into Python: the ones above it are
-// running C++ now.
-thread_local GraphEntryScope* top_scope = nullptr;
-thread_local GraphEntryScope* suspended_at = nullptr;
-thread_local bool is_worker = false;
+// running C++ now. Grouped into one struct so hot entries perform at most one
+// TLS lookup instead of three.
+struct AsyncThreadState {
+    GraphEntryScope* top_scope = nullptr;
+    GraphEntryScope* suspended_at = nullptr;
+    bool is_worker = false;
+};
+thread_local AsyncThreadState async_tls;
 
 // Leaked on purpose, as `graph_mutation_mutex()` is: the worker may still be
 // asked to stop from an exit-time callback.
@@ -48,6 +53,8 @@ struct Worker {
     std::function<void()> pending;
     uint8 pending_node_order = 0;
     bool ready = false, stopping = false;
+    bool worker_sleeping = false;
+    int waiters = 0;
     std::exception_ptr error;
     std::thread* thread = nullptr;
 };
@@ -108,9 +115,15 @@ const std::vector<int>* l3_domain(int cpu) {
 // The worker is for one Python thread: a second one's bindings may have
 // started before a batch went out and run C++ unlocked after, so once a second
 // thread is seen no further batch is handed over.
-const void* binding_thread_token() {
+inline const void* binding_thread_token() {
+#if defined(__linux__) && defined(__x86_64__)
+    const void* self;
+    asm("mov %%fs:0, %0" : "=r"(self));
+    return self;
+#else
     thread_local char token;
     return &token;
+#endif
 }
 std::atomic<const void*> binding_thread{nullptr};
 std::atomic<bool> second_binding_thread{false};
@@ -129,7 +142,8 @@ void lock_graph(int depth=1, bool may_release_gil=true) {
 }
 
 void lock_resumed_bindings() {
-    for (auto* scope = top_scope; scope && scope != suspended_at; scope = scope->outer) {
+    auto& tls = async_tls;
+    for (auto* scope = tls.top_scope; scope && scope != tls.suspended_at; scope = scope->outer) {
         if (scope->locked) continue;
         lock_graph();
         scope->locked = true;
@@ -140,10 +154,12 @@ void lock_resumed_bindings() {
 // except the ones only graph construction reads, which models flip inside a
 // forward (`torch.no_grad()`, autocast).
 void wait_before_flag_set(const char* name) {
-    if (!async_exec_inflight.load(std::memory_order_acquire) || is_worker) return;
+    if (!async_exec_inflight.load(std::memory_order_acquire) || async_tls.is_worker) return;
     if (!strcmp(name, "no_grad") || !strcmp(name, "amp_reg")
             || !strcmp(name, "auto_mixed_precision_level")
-            || !strcmp(name, "node_order"))
+            || !strcmp(name, "node_order")
+            || !strcmp(name, "auto_convert_64_to_32")
+            || !strcmp(name, "transpose_storage_view"))
         return;
     async_exec_wait();
 }
@@ -185,30 +201,61 @@ void note_caller_work() {
     caller_work_ns = caller_work_ns < 0 ? ns : (caller_work_ns * 3 + ns) / 4;
 }
 
-// Up to ~100 us of polling before the caller falls back to blocking.
-template <class Ready>
-void spin_until(Ready ready) {
-    auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
-    for (int i = 0; !ready(); i++) {
-        if ((i & 63) == 63 && std::chrono::steady_clock::now() > until) return;
+// Adaptive spin-wait: check immediately without reading the clock, do a short
+// unclocked poll for ultra-fast handovers, then spin up to an adaptive budget
+// that backs off smoothly (down to kMinUs so it can still catch and recover on
+// fast handovers) when waits sleep and ramps back up on hits.
+struct SpinBudget {
+    static constexpr int kMinUs = 4;
+    static constexpr int kMaxUs = 50;
+    int current_us = 25;
+
+    template <class Ready>
+    bool spin_until(Ready ready) {
+        if (ready()) return true;
+        for (int i = 0; i < 64; i++) {
+            if (ready()) {
+                current_us = std::min(kMaxUs, std::max(current_us * 2, 16));
+                return true;
+            }
 #if defined(__x86_64__) || defined(__i386__)
-        __builtin_ia32_pause();
+            __builtin_ia32_pause();
 #endif
+        }
+        auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(current_us);
+        for (int i = 0; ; i++) {
+            if (ready()) {
+                current_us = std::min(kMaxUs, std::max(current_us * 2, 16));
+                return true;
+            }
+            if ((i & 63) == 63 && std::chrono::steady_clock::now() > until) {
+                current_us = std::max(kMinUs, current_us / 2);
+                return false;
+            }
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#endif
+        }
     }
-}
+};
 
 void worker_main() {
-    is_worker = true;
+    async_tls.is_worker = true;
+    SpinBudget worker_spin;
     for (;;) {
         std::function<void()> job;
         uint8 submitted_order;
         {
             // A step hands over a batch every few hundred microseconds; waking
             // from a condition variable costs tens of them on a loaded host,
-            // so the worker spins a little before it sleeps.
-            spin_until([] { return job_posted.load(std::memory_order_acquire); });
+            // so the worker spins adaptively before it sleeps.
+            worker_spin.spin_until([] { return job_posted.load(std::memory_order_acquire); });
             std::unique_lock<std::mutex> lock(worker->mutex);
-            worker->wake.wait(lock, [] { return worker->ready || worker->stopping; });
+            if (!worker->ready && !worker->stopping) {
+                worker->worker_sleeping = true;
+                worker->wake.wait(lock, [] { return worker->ready || worker->stopping; });
+                worker->worker_sleeping = false;
+            }
             if (!worker->ready) return;
             job_posted.store(false, std::memory_order_relaxed);
             job = std::move(worker->pending);
@@ -238,6 +285,7 @@ void worker_main() {
                 if (!error) error = std::current_exception();
             }
         }
+        bool need_notify;
         {
             std::lock_guard<std::mutex> lock(worker->mutex);
             if (error) {
@@ -246,15 +294,21 @@ void worker_main() {
             }
             batches_run.fetch_add(1, std::memory_order_relaxed);
             async_exec_inflight.store(0, std::memory_order_release);
+            need_notify = worker->waiters > 0;
         }
-        worker->done.notify_all();
+        if (need_notify) worker->done.notify_all();
     }
 }
 
 void wait_for_worker() {
-    spin_until([] { return !async_exec_inflight.load(std::memory_order_acquire); });
+    thread_local SpinBudget waiter_spin;
+    if (waiter_spin.spin_until([] { return !async_exec_inflight.load(std::memory_order_acquire); }))
+        return;
     std::unique_lock<std::mutex> lock(worker->mutex);
+    if (!async_exec_inflight.load(std::memory_order_acquire)) return;
+    worker->waiters++;
     worker->done.wait(lock, [] { return !async_exec_inflight.load(std::memory_order_acquire); });
+    worker->waiters--;
 }
 
 // Waiting for the batch while holding either the graph lock or the GIL
@@ -273,15 +327,20 @@ void wait_for_worker_unlocked() {
 void stop_worker() {
     if (!worker->thread) return;
     wait_for_worker_unlocked();
+    bool need_wake;
     {
         std::lock_guard<std::mutex> lock(worker->mutex);
         worker->stopping = true;
+        job_posted.store(true, std::memory_order_release);
+        need_wake = worker->worker_sleeping;
     }
-    worker->wake.notify_all();
+    if (need_wake) worker->wake.notify_all();
     if (worker->thread->joinable()) worker->thread->join();
     delete worker->thread;
     worker->thread = nullptr;
     worker->stopping = false;
+    worker->worker_sleeping = false;
+    job_posted.store(false, std::memory_order_relaxed);
 }
 
 #ifdef __linux__
@@ -295,6 +354,7 @@ void in_child() {
     placement->pinned = -2;
     placement->affinity_valid = false;
     async_exec_inflight.store(0);
+    job_posted.store(false, std::memory_order_relaxed);
     error_pending.store(false);
 }
 #endif
@@ -344,14 +404,16 @@ bool async_exec_placed() {
 #endif
 }
 
-GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locked(false) {
-    top_scope = this;
+GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(nullptr), locked(false) {
+    auto& tls = async_tls;
+    outer = tls.top_scope;
+    tls.top_scope = this;
     enter_launch_origin_entry(outer_origin_active, outer_origin);
     // The worker reaches a binding only from the compiler's Python callbacks,
     // in the middle of its own batch: not a second user.
     const void* me = binding_thread_token();
     const void* user = binding_thread.load(std::memory_order_relaxed);
-    if (user != me && !is_worker) {
+    if (PREDICT_BRANCH_NOT_TAKEN(user != me) && !tls.is_worker) {
         if (!user && binding_thread.compare_exchange_strong(user, me)) {}
         else if (binding_thread.load(std::memory_order_relaxed) != me)
             second_binding_thread.store(true, std::memory_order_relaxed);
@@ -367,23 +429,25 @@ GraphEntryScope::GraphEntryScope(bool may_release_gil) : outer(top_scope), locke
 GraphEntryScope::~GraphEntryScope() {
     leave_launch_origin_entry(outer_origin_active, outer_origin);
     if (locked) graph_mutation_mutex().unlock();
-    top_scope = outer;
+    async_tls.top_scope = outer;
 }
 
 GraphLockSuspend::GraphLockSuspend()
-    : depth(graph_mutation_mutex().release_all()), boundary(suspended_at) {
-    suspended_at = top_scope;
+    : depth(graph_mutation_mutex().release_all()), boundary(nullptr) {
+    auto& tls = async_tls;
+    boundary = tls.suspended_at;
+    tls.suspended_at = tls.top_scope;
 }
 
 GraphLockSuspend::~GraphLockSuspend() {
-    suspended_at = boundary;
+    async_tls.suspended_at = boundary;
     if (depth) lock_graph(depth);
     // A batch handed over while this was suspended: what resumes now runs
     // under the lock as well.
     if (async_exec_inflight.load(std::memory_order_acquire)) lock_resumed_bindings();
 }
 
-bool on_async_worker() { return is_worker; }
+bool on_async_worker() { return async_tls.is_worker; }
 
 bool async_exec_single_thread() {
     return !second_binding_thread.load(std::memory_order_relaxed);
@@ -409,7 +473,7 @@ bool async_exec_handover_pays() {
 void async_exec_hold_active_bindings() { lock_resumed_bindings(); }
 
 bool async_exec_defer_python_release(std::function<void()>&& release) {
-    if (!is_worker) return false;
+    if (!async_tls.is_worker) return false;
     auto& state = python_releases_state();
     std::lock_guard<std::mutex> lock(state.mutex);
     state.queue.push_back(std::move(release));
@@ -419,7 +483,7 @@ bool async_exec_defer_python_release(std::function<void()>&& release) {
 
 void async_exec_run_python_releases() {
     auto& state = python_releases_state();
-    if (is_worker || !state.pending.load(std::memory_order_acquire)) return;
+    if (async_tls.is_worker || !state.pending.load(std::memory_order_acquire)) return;
     if (!Py_IsInitialized() || !PyGILState_Check()) return;
     std::vector<std::function<void()>> taken;
     {
@@ -432,18 +496,21 @@ void async_exec_run_python_releases() {
 
 void async_exec_submit(std::function<void()>&& job) {
     submitted_at = std::chrono::steady_clock::now();
-    std::unique_lock<std::mutex> lock(worker->mutex);
-    worker->pending = std::move(job);
-    worker->pending_node_order = construction_node_order();
-    worker->ready = true;
-    job_posted.store(true, std::memory_order_release);
-    async_exec_inflight.store(1, std::memory_order_release);
-    lock.unlock();
-    worker->wake.notify_one();
+    bool need_wake;
+    {
+        std::lock_guard<std::mutex> lock(worker->mutex);
+        worker->pending = std::move(job);
+        worker->pending_node_order = construction_node_order();
+        worker->ready = true;
+        job_posted.store(true, std::memory_order_release);
+        async_exec_inflight.store(1, std::memory_order_release);
+        need_wake = worker->worker_sleeping;
+    }
+    if (need_wake) worker->wake.notify_one();
 }
 
 void async_exec_wait() {
-    if (is_worker) return;
+    if (async_tls.is_worker) return;
     async_exec_run_python_releases();
     if (async_exec_inflight.load(std::memory_order_acquire)) {
         note_caller_work();

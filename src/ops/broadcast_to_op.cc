@@ -219,6 +219,6 @@ void BroadcastToOp::run() {
     CHECK(z->mem_ptr == x->mem_ptr) << "Expanded storage was not shared";
 }
 
-
+JT_DEFINE_NODE_POOL(BroadcastToOp)
 
 } // jittor

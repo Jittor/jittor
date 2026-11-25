@@ -144,19 +144,72 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
     //                question is only whether they may share one kernel).
     // `requested_backend()` walks an op's outputs for a placement, and the
     // passes below ask it of both ends of every edge they look at, several
-    // times over. Asked once per op instead.
+    // times over. Skip it altogether when no tensor has an explicit placement
+    // (every op shares `execution_target_backend()`), and otherwise ask once
+    // per op.
+    const bool uniform_backend = !explicit_tensor_placement_made.load(std::memory_order_relaxed);
     vector<BackendId>& op_backend = work.op_backend;
-    op_backend.resize(ops.size());
-    // Whether every output of the op is one element; see edge_fusable.
+    if (!uniform_backend) op_backend.resize(ops.size());
+    // Per-op scalar/tiny traits precomputed once so edge predicates are O(1):
+    //   op_scalar[i]      1 iff op has >=1 outputs and all outputs have num==1
+    //   op_scalar_rank[i] rank (0..127) iff op is elementwise and every input
+    //                     & output has num==1 and that rank; else -1
+    //   op_tiny_numel[i]  numel (1..tiny_var_numel) iff op is elementwise and
+    //                     every input & output has that num; else 0
     vector<char>& op_scalar = work.op_scalar;
     op_scalar.resize(ops.size());
+    vector<int8_t>& op_scalar_rank = work.op_scalar_rank;
+    op_scalar_rank.resize(ops.size());
+    vector<int8_t>& op_tiny_numel = work.op_tiny_numel;
+    op_tiny_numel.resize(ops.size());
     for (uint i = 0; i < ops.size(); i++) {
         if (i + 8 < ops.size()) __builtin_prefetch(ops[i + 8]);
-        op_backend[i] = ops[i]->requested_backend();
-        char scalar = ops[i]->outputs().size() != 0;
-        for (Var* out : ops[i]->outputs())
-            if (out->num != 1) { scalar = 0; break; }
+        Op* o = ops[i];
+        if (!uniform_backend) op_backend[i] = o->requested_backend();
+        char scalar = o->outputs().size() != 0;
+        int8_t scalar_rank = -1;
+        int8_t tiny_numel = 0;
+        if (o->type() == OpType::element) {
+            int64 numel = -1;
+            int rank = -1;
+            bool all_same_num = true;
+            bool all_same_rank = true;
+            for (Var* out : o->outputs()) {
+                if (out->num != 1) scalar = 0;
+                if (numel < 0) {
+                    numel = out->num;
+                    rank = (int)out->shape.size();
+                    if (numel < 1 || numel > tiny_var_numel) all_same_num = false;
+                } else {
+                    if (out->num != numel) all_same_num = false;
+                    if ((int)out->shape.size() != rank) all_same_rank = false;
+                }
+                if (!scalar && !all_same_num) break;
+            }
+            if (all_same_num) {
+                for (Var* in : o->inputs()) {
+                    if (numel < 0) {
+                        numel = in->num;
+                        rank = (int)in->shape.size();
+                        if (numel < 1 || numel > tiny_var_numel) { all_same_num = false; break; }
+                    } else {
+                        if (in->num != numel) { all_same_num = false; break; }
+                        if (numel == 1 && (int)in->shape.size() != rank) all_same_rank = false;
+                    }
+                }
+                if (all_same_num && numel >= 1 && numel <= tiny_var_numel) {
+                    tiny_numel = (int8_t)numel;
+                    if (numel == 1 && all_same_rank && rank >= 0 && rank <= 127)
+                        scalar_rank = (int8_t)rank;
+                }
+            }
+        } else {
+            for (Var* out : o->outputs())
+                if (out->num != 1) { scalar = 0; break; }
+        }
         op_scalar[i] = scalar;
+        op_scalar_rank[i] = scalar_rank;
+        op_tiny_numel[i] = tiny_numel;
     }
     // A Python number an operator was handed (`x.min() - r`), as it reaches
     // `var`: the number itself, or the number broadcast to the operator's
@@ -171,15 +224,6 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         }
         return var->flag(VarFlags::_python_number);
     };
-    // An elementwise op over one-element vars of the given rank only.
-    auto scalar_elementwise = [&](Op* o, uint rank) -> bool {
-        if (o->type() != OpType::element) return false;
-        for (Var* v : o->outputs())
-            if (v->num != 1 || v->shape.size() != rank) return false;
-        for (Var* v : o->inputs())
-            if (v->num != 1 || v->shape.size() != rank) return false;
-        return true;
-    };
     // `other` writes the one-element `var` and `op` reads it, both elementwise
     // over one-element vars of var's rank: see fuse_scalar_chains.
     auto scalar_chain_edge = [&](Var* var, Op* op, Op* other) -> bool {
@@ -188,15 +232,9 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         // its readers: it is written once and read (tests/core/test_fuser.py
         // test_for_fuse); a Python number already fuses by the rule below.
         if (other->_inputs.empty()) return false;
-        auto rank = var->shape.size();
-        return scalar_elementwise(op, rank) && scalar_elementwise(other, rank);
-    };
-    // An elementwise op whose every var has exactly `numel` elements.
-    auto tiny_elementwise = [&](Op* o, int64 numel) -> bool {
-        if (o->type() != OpType::element) return false;
-        for (Var* v : o->outputs()) if (v->num != numel) return false;
-        for (Var* v : o->inputs()) if (v->num != numel) return false;
-        return true;
+        const int rank = (int)var->shape.size();
+        return (int)op_scalar_rank[op->batch_index_at(tt)] == rank
+            && (int)op_scalar_rank[other->batch_index_at(tt)] == rank;
     };
     // `op` and `other` both read the tiny `var`, both elementwise over vars
     // of its size: the per-slice gradients of one parameter all read the loss
@@ -207,24 +245,30 @@ void count_fuse(int64_t tt, int start_var_num, const vector<Op*>& ops, const vec
         if (!fuse_scalar_chains || var->num < 1 || var->num > tiny_var_numel
                 || fuse_tiny_op_limit <= 0) return false;
         if (var->num == 1) {
-            auto rank = var->shape.size();
-            return scalar_elementwise(op, rank) && scalar_elementwise(other, rank);
+            const int rank = (int)var->shape.size();
+            return (int)op_scalar_rank[op->batch_index_at(tt)] == rank
+                && (int)op_scalar_rank[other->batch_index_at(tt)] == rank;
         }
         // A multi-element tiny var shared by many readers (a 2x2 constant
         // every gate multiplies) joins every reader into one component whose
         // bounded re-merge then dominates planning; leave those to the
         // ordinary sibling rule, which stops at sixteen readers.
         if (var->outputs().size() >= 16) return false;
-        return tiny_elementwise(op, var->num) && tiny_elementwise(other, var->num);
+        const int8_t numel = (int8_t)var->num;
+        return op_tiny_numel[op->batch_index_at(tt)] == numel
+            && op_tiny_numel[other->batch_index_at(tt)] == numel;
     };
     auto tiny_bounded_edge = [&](Var* var, Op* op, Op* other, int relation) -> bool {
+        if (var->num > tiny_var_numel) return false;
         // `op` walks to `other`: for a data edge `op` writes `var`.
         return relation == 1 ? scalar_chain_edge(var, other, op)
              : relation == 0 && tiny_sibling_edge(var, op, other);
     };
     auto edge_fusable = [&](Var* var, Op* op, Op* other, int relation) -> bool {
         if (op->float32_precision != other->float32_precision) return false;
-        if (op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)]) return false;
+        if (!uniform_backend
+                && op_backend[op->batch_index_at(tt)] != op_backend[other->batch_index_at(tt)])
+            return false;
         if (var->flag(VarFlags::_stop_fuse)) return false;
         if (relation == 1) {
             // vars before start_var_num are the batch's inputs: they already
