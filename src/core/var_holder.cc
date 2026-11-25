@@ -6,6 +6,7 @@
 // ***************************************************************
 #include <unordered_set>
 #include <unordered_map>
+#include <list>
 #include <algorithm>
 #include <sstream>
 #include "core/var_holder.h"
@@ -199,7 +200,8 @@ PyObject* state_capture_end() {
 }
 
 void add_hold_vars(VarHolder* self) {
-    self->iter = runtime_holder_state().add(self);
+    runtime_holder_state().add(self->holder_link, self->pending_link, self,
+                               self->var && !self->var->is_finished());
 }
 
 void schedule_pending_from_python(VarHolder* holder) {
@@ -906,8 +908,8 @@ VarHolder::VarHolder(VarPtr&& v) {
 
 VarHolder::VarHolder(VarHolder* v) : var(v->var) {
     own_holder();
-    iter = v->iter;
-    *iter = this;
+    runtime_holder_state().replace(v->holder_link, holder_link,
+                                   v->pending_link, pending_link, this);
     capture_record = v->capture_record;
     // `v` is discarded without running ~VarHolder, so what ~VarHolder would
     // have relinked has to be relinked here: `v`'s own view record and the
@@ -925,14 +927,14 @@ VarHolder::VarHolder(VarHolder* v) : var(v->var) {
 
 // The runtime owner maintains the weak-sync cursor and makes repeated unlink
 // safe, including destruction after release_from_holders().
-static inline void unlink_from_hold_vars(list<VarHolder*>::iterator& iter) {
-    runtime_holder_state().erase(iter);
+static inline void unlink_from_hold_vars(VarHolder* self) {
+    runtime_holder_state().erase(self->holder_link, self->pending_link);
 }
 
 void VarHolder::release_from_holders() {
     if (PREDICT_BRANCH_NOT_TAKEN(!var)) return;
-    if (runtime_holder_state().contains(iter)) {
-        unlink_from_hold_vars(iter);
+    if (runtime_holder_state().contains(holder_link)) {
+        unlink_from_hold_vars(this);
         release_holder();
     }
 }
@@ -1375,7 +1377,7 @@ static void preserve_copy_storage(VarPtr& value, VarHolder* destination) {
         << "copy commit cannot preserve incompatible storage geometry";
     auto version = storage->var->storage_version_token();
     replacement._update(storage.get(), false);
-    std::atomic_store(&replacement.var->storage_mutation_version, version);
+    replacement.var->set_storage_version(move(version));
     USER_CHECK(replacement.var->mem_ptr == storage->var->mem_ptr)
         << "copy commit did not retain its actual allocation";
     value = VarPtr(replacement.var);
@@ -1604,7 +1606,7 @@ VarHolder::~VarHolder() {
     if (PREDICT_BRANCH_NOT_TAKEN(state_capture != nullptr))
         state_capture->erase(this);
     drop_capture_record(this);
-    unlink_from_hold_vars(iter);
+    unlink_from_hold_vars(this);
     release_holder();
     // Dropping the last holder runs the liveness propagation, which frees
     // nodes, which reaches the allocator: every one of those steps reports by
@@ -1670,6 +1672,7 @@ void VarHolder::rebind_view_result(VarPtr&& v, bool preserve_grad_policy,
     var->release_both_liveness();
     var = v.ptr;
     own_holder();
+    track_pending();
     v.ptr = nullptr;
     refresh_transpose_views(preserve_grad_policy, nullptr, preserve_copy_storage);
 }
@@ -1818,8 +1821,7 @@ VarHolder* VarHolder::storage_data_alias() {
     // Tensor.data shares bytes but has an independent version counter and
     // trainability. Detach above shares the counter for its distinct contract.
     alias->var->autograd_alias = std::make_shared<AutogradAliasState>();
-    std::atomic_store(&alias->var->storage_mutation_version,
-        std::make_shared<StorageMutationVersion>());
+    alias->var->set_storage_version(StorageVersionPtr::make(alias->var->id));
     return alias;
 }
 
@@ -1883,6 +1885,7 @@ VarHolder* VarHolder::start_grad() {
     auto dvar = jittor::detach(var);
     dvar->grad_hook = var->grad_hook;
     std::swap(dvar.ptr, var);
+    track_pending();
     var->autograd_alias = move(alias_state);
     if (var->autograd_alias) {
         var->autograd_alias->own_requires_grad = true;
@@ -1985,6 +1988,7 @@ VarHolder* VarHolder::assign_impl(VarHolder* v, bool preserve_grad_policy) {
     var->release_both_liveness();
     var = replacement.ptr;
     own_holder();
+    track_pending();
     refresh_transpose_views(preserve_grad_policy);
     return this;
 }
@@ -2256,7 +2260,7 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
         var->placement = replacement->placement;
         auto version = var->storage_version_token();
         var->share_with(replacement.ptr);
-        std::atomic_store(&var->storage_mutation_version, version);
+        var->set_storage_version(move(version));
         CHECK(var->alloc(replacement->allocator));
         return this;
     }
@@ -2285,6 +2289,7 @@ VarHolder* VarHolder::_update(VarHolder* v, bool logical_write) {
     var->release_both_liveness();
     var = v->var;
     own_holder();
+    track_pending();
     var->set_flag(VarFlags::_out_hint);
     refresh_transpose_views();
     return this;
@@ -2481,28 +2486,32 @@ void poll_fetches() {
 
 void sync_all(bool device_sync) {
     vector<Var*> vars;
-    vars.reserve(runtime_holder_state().holders().size());
-    for (auto v : runtime_holder_state().holders()) {
+    auto& holder_state = runtime_holder_state();
+    vars.reserve(holder_state.pending_size() + fetcher.size());
+    holder_state.for_each_pending([&](VarHolder* v) -> bool {
+        Var* var = v->var;
+        if (var->is_finished()) return false;
         // Same reason `top_weak_sync` skips these: a kept graph is run on
         // purpose by whoever kept it. `sync_all` cannot finish one anyway --
         // `keep_graph` is what leaves it pending -- so sweeping it up here
         // only re-runs it, every time anyone asks for everything to complete.
-        if (v->var->flag(VarFlags::_kept)) continue;
+        if (var->flag(VarFlags::_kept)) return true;
         // A failed root belongs to the caller that asked for it: an explicit
         // sync still retries and re-raises, but sweeping everything up must
         // not re-run a batch that already reported its error. Without this,
         // every `sync_all` after one failure re-raised it from an unrelated
         // caller (a flag scope's exit flush, then every later test).
-        if (v->var->flag(VarFlags::_execution_failed)) continue;
+        if (var->flag(VarFlags::_execution_failed)) return true;
         // Sinks only. Sweeping every holder and forcing weak_sync=false were
         // both tried against MiniMax-H3's uniform-random-byte video: ~70%
         // failure becomes ~17% and ~33% respectively, and ~17% with both. They
         // raise the chance the Var is evaluated in passing; they do not fix it,
         // so the root cause is not here. See section 48 of the H3 results doc.
-        if (!v->var->_outputs.size())
-            vars.push_back(v->var);
-    }
-    for (auto& v :fetcher)
+        if (!var->_outputs.size())
+            vars.push_back(var);
+        return true;
+    });
+    for (auto& v : fetcher)
         vars.push_back(v.ptr);
     graph_check();
     runtime_executor().run_sync(vars, device_sync); //need sync at last

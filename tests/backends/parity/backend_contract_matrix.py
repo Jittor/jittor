@@ -621,6 +621,9 @@ UNPROBED_REASONS = {
     # Graph plumbing with no standalone value: `tapes` is only reachable from a
     # multi-output custom gradient, which `tape` already exercises.
     "tapes": "only reachable through a multi-output custom gradient; `tape` covers the mechanism",
+    "stack_scalars": "internal to batched slice gradients; covered by tests/core/test_getitem_grad_accumulate.py",
+    "cuda_launch": "requires a compiled Triton kernel; covered by tests/backends/cuda/test_native_kernel_compilers.py",
+    "tvm_ffi_launch": "requires a compiled TileLang module; covered by tests/backends/cuda/test_native_kernel_compilers.py",
 }
 
 

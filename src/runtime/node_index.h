@@ -93,6 +93,22 @@ struct NodeIndex {
         return slots[i].value;
     }
 
+    /// Insert (node -> new_val) if absent, returning {stored_value, inserted}.
+    /// Performs a single probe instead of `has(node)` followed by `operator[]`.
+    inline pair<int32, bool> try_emplace(Node* node, int32 new_val) {
+        size_t i = probe(node);
+        while (slots[i].gen == generation) {
+            if (slots[i].key == node) return {slots[i].value, false};
+            i = (i+1) & mask;
+        }
+        ASSERT(count < limit) << "NodeIndex overflow: reset() was given too small a bound";
+        slots[i].key = node;
+        slots[i].value = new_val;
+        slots[i].gen = generation;
+        count++;
+        return {new_val, true};
+    }
+
     /// This node's value, or `_default` when it was never indexed.
     inline int get(Node* node, int _default=-1) const {
         size_t i = probe(node);

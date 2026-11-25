@@ -61,16 +61,31 @@ int main() {
     for (int i = 0; i < 64; i++) churn.push_back(std::vector<char>(1 << 16, (char)0xa5));
     int missing = 0;
     for (int i = 0; i < n; i++) {
-        int* found = table.find(std::string("k") + std::to_string(i));
+        std::string key = std::string("k") + std::to_string(i);
+        int* found = table.find(key);
         if (!found || *found != i) missing++;
+        int* found_zc = table.find(key.data(), key.size());
+        if (!found_zc || *found_zc != i) missing++;
     }
+    // Zero-copy lookup on a non-owning stack buffer (not NUL-terminated) must
+    // match existing keys and return nullptr for prefixes/misses.
+    const char probe[] = {'k', '4', '2', 'X'};
+    int* zc_hit = table.find(probe, 3);
+    int* zc_miss = table.find(probe, 4);
+    if (!zc_hit || *zc_hit != 42 || zc_miss != nullptr) missing++;
     printf("entries=%zu missing=%d\n", table.size(), missing);
     jittor::jit_cache_map<int> bounded;
     bounded.capacity = 8;
     for (int i = 0; i < 1000; i++)
         bounded[std::string("k") + std::to_string(i)] = i;
-    printf("bounded=%zu\n", bounded.size());
-    return (missing != 0 || bounded.size() > 8) ? 1 : 0;
+    int bounded_bad = 0;
+    for (int i = 992; i < 1000; i++) {
+        std::string key = std::string("k") + std::to_string(i);
+        int* found = bounded.find(key.data(), key.size());
+        if (!found || *found != i) bounded_bad++;
+    }
+    printf("bounded=%zu bounded_bad=%d\n", bounded.size(), bounded_bad);
+    return (missing != 0 || bounded.size() > 8 || bounded_bad != 0) ? 1 : 0;
 }
 """
 
@@ -160,7 +175,7 @@ class TestJitCacheMapUnderAsan(unittest.TestCase):
             self.skipTest("could not build with -fsanitize=address:\n" + output)
         self.assertNotIn("AddressSanitizer", output)
         self.assertIn("missing=0", output)
-        self.assertIn("bounded=8", output)
+        self.assertIn("bounded=8 bounded_bad=0", output)
         self.assertEqual(run.returncode, 0, output)
 
     def test_the_predecessor_pattern_is_what_asan_catches(self):

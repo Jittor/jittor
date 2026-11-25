@@ -133,20 +133,22 @@ void Executor::auto_flush() {
         return;
     vector<Var*> vars;
     int64 pending_bytes = 0;
-    for (auto holder : runtime_holder_state().holders()) {
+    auto& holder_state = runtime_holder_state();
+    holder_state.for_each_pending([&](VarHolder* holder) -> bool {
         auto var = holder->var;
-        if (var->_outputs.size() || var->is_finished()) continue;
+        if (var->is_finished()) return false;
+        if (var->_outputs.size()) return true;
         // Recovery work must not implicitly retry a failed, unrelated graph.
         // Explicit roots and their data dependencies still run normally.
-        if (var->flag(VarFlags::_execution_failed)) continue;
+        if (var->flag(VarFlags::_execution_failed)) return true;
         // The third place a kept graph must not be picked up as a
         // bystander (see `top_weak_sync` and `sync_all`), and the easiest
         // to miss: this fires in the middle of the NEXT call's
         // construction, so the kept graph is re-executed while the caller
         // is still building the work that was going to replace it.
-        if (var->flag(VarFlags::_kept)) continue;
+        if (var->flag(VarFlags::_kept)) return true;
         auto op = var->input();
-        if (op && op->flag(OpFlags::_must_stay_pending)) continue;
+        if (op && op->flag(OpFlags::_must_stay_pending)) return true;
         // Nor a var an elementwise op is still to compute. Launched now it
         // is written out, and a training forward keeps it for the backward,
         // where it would otherwise have fused into its readers and never
@@ -156,10 +158,11 @@ void Executor::auto_flush() {
         // when something that must be written out -- a matmul, a
         // convolution, a reduction -- needs it.
         if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
-            continue;
+            return true;
         vars.push_back(var);
         pending_bytes += var->size;
-    }
+        return true;
+    });
     // Enough operators, but is there enough work? Cutting the graph costs
     // a fusion boundary and a second planning pass; that only pays for
     // itself when the device has something substantial to chew on
@@ -229,6 +232,7 @@ void Executor::submit_pending(Var* target, bool force) {
 }
 
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+    (void)tt;
     fused_op.ops.clear();
     fused_op.edges.clear();
     // Membership through the segment's own index rather than a traversal
@@ -240,50 +244,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
         fused_op.ops.push_back(op);
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
-    fused_op.update_ops();
-    for (Op* op : fused_op.ops) {
-        uint fid1 = fused_op.op_index.get(op);
-        int iid = 0;
-        for (auto& edge : fused_op.snapshot_inputs(op)) {
-            Var* v = edge.first;
-            // this is a control dependency edge, dont used
-            if (edge.second < 0) continue;
-            iid++;
-            int iop_id;
-            int iv_id;
-            pair<Op*, int> producer = fused_op.snapshot_producer(v);
-            int producer_id = producer.first ? fused_op.op_index.get(producer.first) : -1;
-            if (producer_id >= 0) {
-                iop_id = producer_id;
-                iv_id = producer.second;
-            } else {
-                iv_id = fused_op.var_index.get(v);
-                ASSERT(iv_id >= 0) << "input var of a fused op was not indexed by update_ops";
-                // add iv_id, prevent iv_id jit key overflow
-                iop_id = fused_op.ops.size() + iv_id;
-            }
-            fused_op.edges.emplace_back(iop_id, iv_id, fid1, iid-1);
-        }
-        // TODO: can we remove this?
-        // uint oid = 0;
-        // for (Var* v : op->outputs()) {
-        //     oid++;
-        //     if (v->tflag != tt) {
-        //         // this var node not belong to current execution
-        //         // this will happend in multiple outputs fuseable op
-        //         // v->custom_data = 0 represents this var cannot be fused
-        //         v->custom_data = 0;
-        //         continue;
-        //     }
-        //     // for (auto o : v->outputs_with_index()) {
-        //     //     Op* op2 = o.op;
-        //     //     uint iid = o.index;
-        //     //     if (op2->tflag != ntt) continue;
-        //     //     uint fid2 = op2->custom_data;
-        //     //     fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
-        //     // }
-        // }
-    }
+    fused_op.update_ops_and_edges();
 }
 
 static void top_weak_sync(vector<Var*>& vars) {
@@ -482,7 +443,8 @@ static void schedule_hold_release(ExecPlan& plan) {
 // recycled -- it is an op, built afresh for every batch as it always was.
 struct BatchState {
     ExecPlan plan;
-    vector<VarPtr> batch_hold;
+    VarPtrBatch planning_hold;
+    VarPtrBatch batch_hold;
     unique_ptr<FusedOp> fused_op;
     vector<Var*> vars;
 };
@@ -511,6 +473,7 @@ void recycle_batch_state(BatchState* state) {
     state->fused_op.reset();
     state->vars.clear();
     state->batch_hold.clear();
+    state->planning_hold.clear();
     bool keep = state->plan.ops.capacity() <= BatchStatePool::pooled_ops_limit
         && state->plan.all_vars.capacity() <= 2 * BatchStatePool::pooled_ops_limit;
     if (keep) {
@@ -583,9 +546,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // Their saved tensors may be roots collected by sync_all, so own those
     // roots before draining callbacks or releasing the graph lock. The batch
     // hold below starts only after planning, too late to protect this window.
-    vector<VarPtr> root_hold;
-    root_hold.reserve(vars.size());
-    for (Var* var : vars) root_hold.emplace_back(var);
+    VarPtrBatch root_hold;
+    root_hold.own_all(vars);
     // The batch on the worker, if one is in flight, comes first: this one may
     // need what it produces, and only one runs at a time.
     async_exec_wait();
@@ -633,9 +595,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // Planning and graph optimization use raw node pointers. Own the roots
     // immediately, then let the planner extend this hold to every Var it
     // reaches before any graph rewrite can release their producer Ops.
-    vector<VarPtr> planning_hold;
-    planning_hold.reserve(vars.size());
-    for (Var* v : vars) planning_hold.emplace_back(v);
+    VarPtrBatch& planning_hold = state->planning_hold;
+    planning_hold.own_all(vars);
     build_exec_plan(vars, weak_sync, plan, planning_hold);
     trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
@@ -660,13 +621,15 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // use. The edge snapshot stays because a *live* var can still have its
     // edges released (`release_inputs`, which the shim uses to park tensors),
     // and the planner reads them.
-    vector<VarPtr>& batch_hold = state->batch_hold;
-    batch_hold.reserve(plan.all_vars.size());
-    for (Var* v : plan.all_vars) batch_hold.emplace_back(v);
-    // The final batch hold now owns every pointer the plan keeps. Releasing
-    // traversal-only holds may discard superseded nodes from earlier graph
-    // optimization passes, but cannot invalidate this plan.
-    planning_hold.clear();
+    VarPtrBatch& batch_hold = state->batch_hold;
+    {
+        std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
+        batch_hold.own_all_locked(plan.all_vars);
+        // The final batch hold now owns every pointer the plan keeps. Releasing
+        // traversal-only holds may discard superseded nodes from earlier graph
+        // optimization passes, but cannot invalidate this plan.
+        planning_hold.clear_locked();
+    }
     // What phase 7 has to discount: this hold is bookkeeping, not a consumer.
     plan.batch_hold_per_var = 1;
     schedule_hold_release(plan);

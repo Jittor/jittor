@@ -33,7 +33,7 @@ with jt.flag_scope(use_cuda=1):
     print((z * 2).numpy())
 ```
 
-Upstream JIT specialization and persistent compiler caching, constexpr arguments, compiler options, callable grids, and multiple outputs are supported. Noncontiguous inputs retain their actual strides: the kernel must explicitly accept and use them. A linear-addressing kernel does not automatically support arbitrary layouts. Autotuners, interpreters, and kernels requiring global scratch are not yet accepted.
+Upstream JIT specialization and persistent compiler caching, constexpr arguments, compiler options, scalar/tuple/callable grids, zero-input kernels, multiple outputs, `@triton.autotune`, and global/profile scratch workspaces (allocated from executor temporary storage) are supported. Launches execute natively in C++ via the CUDA driver `cuLaunchKernel` on Jittor's compute stream without requiring PyTorch, enabling `async_execution` and CUDA Graph capture/replay (`jt.graph_replay` and `jt.capture_step`, for both inference and `jt.Function` training). Noncontiguous inputs retain their actual strides: the kernel must explicitly accept and use them. A linear-addressing kernel does not automatically support arbitrary layouts. Triton interpreter mode, `launch_cooperative_grid`, `launch_pdl`, TMA tensor descriptors, and autotuner `pre_hook`/`post_hook` are not yet supported.
 
 Use `jittor.kernels.BoundOutput(buffer)` in a Triton output slot to update an existing CUDA allocation during inference. Bound outputs keep their addresses, and the executor orders the writes after existing readers. The call accepts fresh `TensorSpec` outputs alongside bound outputs. This path prepares the launch before CUDA recording and requires `jt.no_grad()`, contiguous CUDA inputs on the current device, ready nonempty bound buffers, and positive grid dimensions. Output buffers cannot overlap each other. If a kernel also reads a buffer it writes, it must avoid races within the launch.
 
@@ -64,7 +64,7 @@ with jt.flag_scope(use_cuda=1):
     print(z.numpy())
 ```
 
-`out_idx=[]` selects a function accepting caller-provided output buffers. Jittor supplies owning DLPack views; TVM-FFI executes on Jittor's current stream. Output shapes and dtypes must match the compiled ABI. Callee-allocated return values and other TileLang execution backends are not integrated yet.
+`out_idx=[]` selects a function accepting caller-provided output buffers. Native TVM-FFI executables run directly in C++ via the TVM-FFI C ABI (stack-allocated `DLTensor` views and `TVMFFIEnvSetStream`) on Jittor's compute stream without Python callbacks, enabling `async_execution`, CUDA Graph capture/replay, zero-input kernels, and `BoundOutput` in inference mode (`jt.no_grad()`, contiguous CUDA inputs/outputs, reader-ordered writes); non-C-ABI executables fall back to the Python callback path with lazy DLPack export. Output shapes and dtypes must match the compiled ABI. Callee-allocated return values and other TileLang execution backends are not integrated yet.
 
 ## Backward and execution contract
 
@@ -81,6 +81,6 @@ class Add(jt.Function):
         return dout, dout
 ```
 
-The caller must keep inputs read-only, write every declared output, and avoid out-of-bounds accesses. These are native device-kernel memory safety obligations. All tensors must share a device. Input mutation, output aliases, device graph capture/replay, and implicit higher-order derivatives are not supported. Supporting a compiler does not imply supporting all these features.
+The caller must keep inputs read-only, write every declared output, and avoid out-of-bounds accesses. These are native device-kernel memory safety obligations. All tensors must share a device. The ordinary `TensorSpec` path does not support in-place input mutation or output aliasing (use `BoundOutput` explicitly for inference-time in-place updates), and implicit higher-order derivatives are not supported. Supporting a compiler does not imply supporting all these features.
 
-Custom providers can use `call(launch, *inputs, outputs=..., backend=...)`. The callback receives `context.inputs`, `context.outputs`, `context.device`, and `context.stream`. Buffer views expose pointers, shape, dtype, strides, and DLPack. Enqueue work on the supplied stream only; do not reenter Jittor execution, switch consumer streams, or retain callback views. The executor preserves dependencies so inputs are computed before consumption and storage is not reused prematurely.
+Custom providers can use `call(launch, *inputs, outputs=..., backend=...)` (including zero-input kernels). The callback receives `context.inputs`, `context.outputs`, `context.device`, and `context.stream`. Buffer views expose pointers, shape, dtype, strides, and lazy DLPack export, and callback failures preserve the Python exception type and message. Enqueue work on the supplied stream only; do not reenter Jittor execution, switch consumer streams, or retain callback views. The executor preserves dependencies so inputs are computed before consumption and storage is not reused prematurely; generic Python callbacks via `call(...)` do not support device graph capture/replay.
