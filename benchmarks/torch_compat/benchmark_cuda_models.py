@@ -726,13 +726,15 @@ def run_stock(job, directory, torch, jt, np):
     start = perf_counter()
     workload.setup()
     jittor_compile = jt is not None and job["mode"] == "reduce-overhead"
-    if job.get("torch_mode") == "compiled" or (jittor_compile and task.mode == "infer"
-                                               and task.compile_what is not None):
+    compile_inference = task.mode == "infer" and (job.get("torch_mode") == "compiled"
+                                                  or (jittor_compile and task.compile_what is not None))
+    compile_training = task.mode == "train" and job.get("torch_mode") == "compiled"
+    if compile_inference:
         workload.compile("reduce-overhead")
     sync([])
     setup_s = perf_counter() - start
 
-    def call(_):
+    def call(index):
         start = perf_counter()
         values = workload.step()
         sync(values)
@@ -740,6 +742,9 @@ def run_stock(job, directory, torch, jt, np):
         value = values[0].detach().float().mean().cpu().item()
         if not math.isfinite(value):
             raise RuntimeError("Nonfinite workload output")
+        if index == 0 and compile_training:
+            # Let the eager warmup allocate optimizer state outside capture.
+            workload.compile("reduce-overhead")
         return values, {"total_s": elapsed, "value": float(value)}
 
     warmups, index = warm_up(job, call, settled)

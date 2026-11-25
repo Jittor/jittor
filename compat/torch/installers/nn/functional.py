@@ -1,3 +1,6 @@
+import math
+import operator
+
 from jittor.nn.functional.interpolation import _interpolate_antialiased
 from jittor.nn.functional.loss import _checked_class_target, _legacy_reduction, smooth_l1_loss as _native_smooth_l1
 from ...fidelity import Fidelity, register_api_bindings
@@ -161,6 +164,58 @@ def _log_softmax(input, dim=None, _stacklevel=3, dtype=None):
     return _jt_log_softmax(input, dim=dim)
 
 
+def _linear_interpolate_1d(input, size, scale_factor, align_corners, recompute_scale_factor):
+    if input.ndim != 3:
+        raise NotImplementedError("linear interpolation requires input shaped (N, C, L)")
+    if not input.is_floating_point():
+        raise RuntimeError("linear interpolation requires floating-point input")
+    if (size is None) == (scale_factor is None):
+        raise ValueError("specify exactly one of size and scale_factor")
+
+    length = int(input.shape[-1])
+    scale = None
+    if size is not None:
+        if recompute_scale_factor:
+            raise ValueError("recompute_scale_factor is only applicable to scale_factor")
+        if isinstance(size, (tuple, list)):
+            if len(size) != 1:
+                raise ValueError("size must specify one spatial dimension")
+            size = size[0]
+        output_length = operator.index(size)
+    else:
+        if isinstance(scale_factor, (tuple, list)):
+            if len(scale_factor) != 1:
+                raise ValueError("scale_factor must specify one spatial dimension")
+            scale_factor = scale_factor[0]
+        factor = float(scale_factor)
+        if not math.isfinite(factor) or factor <= 0:
+            raise ValueError("scale_factor must be finite and positive")
+        output_length = math.floor(length * factor)
+        if not recompute_scale_factor:
+            scale = 1.0 / factor
+    if length <= 0 or output_length <= 0:
+        raise RuntimeError("input and output lengths must be positive")
+    if length == output_length:
+        return input.clone()
+
+    dtype = _dtype_to_str(input.dtype)
+    compute_dtype = "float64" if dtype == "float64" else "float32"
+    positions = jt.arange(output_length, dtype=compute_dtype)
+    if align_corners:
+        ratio = (length - 1) / (output_length - 1) if output_length > 1 else 0.0
+        positions = positions * ratio
+    else:
+        ratio = length / output_length if scale is None else scale
+        positions = (positions + 0.5) * ratio - 0.5
+    positions = positions.clamp(0.0, length - 1)
+    left = positions.cast("int64")
+    right = (left + 1).clamp(0, length - 1)
+    weight = positions - left.cast(compute_dtype)
+    first = jt.index_select(input, 2, left).cast(compute_dtype)
+    second = jt.index_select(input, 2, right).cast(compute_dtype)
+    return (first * (1 - weight) + second * weight).cast(dtype)
+
+
 def _interpolate(input=None, size=None, scale_factor=None,
                  mode="nearest", align_corners=None,
                  recompute_scale_factor=None, antialias=False,
@@ -175,6 +230,8 @@ def _interpolate(input=None, size=None, scale_factor=None,
     # Resize creates coordinate tensors internally. Allocate them on the
     # input device even when the process is currently using an accelerator.
     with tensor_frontend(_context.target_namespace.Var, device=input.device):
+        if mode == "linear":
+            return _linear_interpolate_1d(input, size, scale_factor, ac, recompute_scale_factor)
         return _jt_interpolate(input, size=size,
                                scale_factor=scale_factor, mode=mode,
                                align_corners=ac)

@@ -529,31 +529,46 @@ class ConvTranspose1d(nn.Module):
         super().__init__()
         import math as _math
         import jittor as _jt2
-        g1 = lambda v: v[0] if isinstance(v, (tuple, list)) else v
+        def single(value):
+            return tuple(value) if isinstance(value, (tuple, list)) else (value,)
+
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = g1(kernel_size)
-        self.stride = g1(stride)
-        self.padding = g1(padding)
-        self.output_padding = g1(output_padding)
-        self.dilation = g1(dilation)
+        self.kernel_size = single(kernel_size)
+        self.stride = single(stride)
+        self.padding = single(padding)
+        self.output_padding = single(output_padding)
+        self.dilation = single(dilation)
         self.groups = groups
         self.weight = _jt2.init.invariant_uniform(
-            [in_channels, out_channels // groups, self.kernel_size], dtype="float")
+            [in_channels, out_channels // groups, self.kernel_size[0]], dtype="float")
         if bias:
-            fan = (in_channels // groups) * self.kernel_size
+            fan = (in_channels // groups) * self.kernel_size[0]
             bound = 1.0 / _math.sqrt(fan) if fan > 0 else 0.0
             self.bias = _jt2.init.uniform([out_channels], "float", -bound, bound)
         else:
             self.bias = None
+
+    @jt.no_grad()
+    def reset_parameters(self):
+        from jittor._core.var import device_scope_like
+
+        fan_in = (self.out_channels // self.groups) * self.kernel_size[0]
+        bound = 1.0 / _math.sqrt(fan_in) if fan_in else 0.0
+        with device_scope_like(self.weight):
+            jt.init.uniform_(self.weight, -bound, bound)
+        if self.bias is not None:
+            with device_scope_like(self.bias):
+                jt.init.uniform_(self.bias, -bound, bound)
+
     def execute(self, x):
         import jittor as _jt2
         from jittor.nn.functional._amp import bias_for_compute_dtype
         x2 = x.unsqueeze(2)                       # (N,Cin,1,L)
         w2 = self.weight.unsqueeze(2)             # (Cin,Cout/g,1,K)
         y = _jt2.nn.conv_transpose2d(
-            x2, w2, None, (1, self.stride), (0, self.padding),
-            (0, self.output_padding), self.groups, (1, self.dilation))
+            x2, w2, None, (1, *self.stride), (0, *self.padding),
+            (0, *self.output_padding), self.groups, (1, *self.dilation))
         y = y.squeeze(2)                          # (N,Cout,Lout)
         if self.bias is not None:
             # The bias is added here rather than inside the fused conv, so it
