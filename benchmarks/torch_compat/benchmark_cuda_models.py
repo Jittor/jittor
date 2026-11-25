@@ -745,9 +745,10 @@ def run_stock(job, directory, torch, jt, np):
     start = perf_counter()
     workload.setup()
     jittor_compile = jt is not None and job["mode"] == "reduce-overhead"
-    compile_inference = task.mode == "infer" and (job.get("torch_mode") == "compiled"
-                                                  or (jittor_compile and task.compile_what is not None))
-    compile_training = task.mode == "train" and job.get("torch_mode") == "compiled"
+    compile_requested = (job.get("torch_mode") == "compiled"
+                         or (jittor_compile and task.compile_what is not None))
+    compile_inference = task.mode == "infer" and compile_requested
+    compile_training = task.mode == "train" and compile_requested
     if compile_inference:
         workload.compile("reduce-overhead")
     sync([])
@@ -766,7 +767,8 @@ def run_stock(job, directory, torch, jt, np):
             workload.compile("reduce-overhead")
         return values, {"total_s": elapsed, "value": float(value)}
 
-    warmups, index = warm_up(job, call, settled)
+    warmup_job = dict(job, warmup=max(3, job["warmup"])) if compile_training else job
+    warmups, index = warm_up(warmup_job, call, settled)
     capture_before = compile_report(torch, "jittor", workload) if jittor_compile else None
     outputs, measurements = timed_calls(directory, job, call, index)
     residency = cuda_residency(torch, jt, outputs[0])
@@ -1258,7 +1260,7 @@ def execution_order(args, case):
     stock = args.stock_cases.get(case)
     if case in MODEL_CASES:
         preference = args.model_mode
-    elif stock is not None and (stock["mode"] != "infer" or stock["compile_what"] is None):
+    elif stock is not None and stock["compile_what"] is None:
         preference = "eager"
     elif stock is not None:
         preference = args.stock_mode
