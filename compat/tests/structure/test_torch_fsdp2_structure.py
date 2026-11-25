@@ -420,6 +420,16 @@ assert second is jittor.torch_fsdp2_compat
                 "signature": signature,
                 "pickle": bool(serialized),
             }
+        # The real scaler replaces the old (*args, **kwargs) placeholder.
+        # Its positional order is ShardedGradScaler's, not ordinary AMP's:
+        # backoff_factor precedes growth_factor. This is the sole intended
+        # field change in this snapshot; exports and all other records stay.
+        self.assertEqual(
+            callables["ShardedGradScaler"]["signature"],
+            "(device='cuda', init_scale=65536.0, backoff_factor=0.5, "
+            "growth_factor=2.0, growth_interval=2000, enabled=True, "
+            "process_group=None)",
+        )
         payload = {"public": public, "callables": callables}
         encoded = json.dumps(
             payload, sort_keys=True, separators=(",", ":")
@@ -438,7 +448,7 @@ assert second is jittor.torch_fsdp2_compat
         # entries differ, and the counts are still unchanged.
         self.assertEqual(
             hashlib.sha256(encoded).hexdigest(),
-            "41dc930fd903edd1741c9d899d6d86fcbbc460fe99240d296e5dc763e2616ccb",
+            "9e814b471cae22214bb70343b1d8d883089fb73a3b82e43ebac090b61fa5f34d",
         )
 
     def test_protocol_2_legacy_pickle_fixtures_load_canonical_objects(self):

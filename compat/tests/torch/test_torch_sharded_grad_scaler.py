@@ -71,6 +71,39 @@ class TestShardedGradScaler(cu.JittorTestCase):
             self.assertSetEqual(set(scaler.state_dict()), {
                 "scale", "growth_factor", "backoff_factor", "growth_interval", "_growth_tracker"})
 
+    def test_positional_backoff_and_growth_match_keyword_configuration(self, device):
+        with forbid_backend_fallbacks(), _local_collective(device) as calls:
+            group = object()
+            positional = ShardedGradScaler(device, 8., .25, 4., 1, True, group)
+            keyword = ShardedGradScaler(
+                device=device, init_scale=8., backoff_factor=.25,
+                growth_factor=4., growth_interval=1, enabled=True,
+                process_group=group)
+            expected = {"scale": 8., "backoff_factor": .25, "growth_factor": 4.,
+                        "growth_interval": 1, "_growth_tracker": 0}
+            self.assertDictEqual(positional.state_dict(), expected)
+            self.assertDictEqual(keyword.state_dict(), expected)
+            self.assertIs(positional.process_group, group)
+            self.assertIs(keyword.process_group, group)
+            parameters = []
+            for scaler in (positional, keyword):
+                p = torch.nn.Parameter(torch.tensor([1.], dtype=torch.float16, device=device))
+                opt = torch.optim.SGD([p], lr=.25)
+                opt.zero_grad()
+                scaler.scale(p.float().sum()).backward()
+                scaler.unscale_(opt)
+                np.testing.assert_array_equal(p.grad.numpy(), [1.])
+                scaler.step(opt)
+                scaler.update()
+                p.sync()
+                self.assertEqual(p.location(), "cpu" if device == "cpu" else "device")
+                np.testing.assert_array_equal(p.numpy(), [.75])
+                parameters.append(p.detach().cpu().numpy())
+            np.testing.assert_array_equal(parameters[0], parameters[1])
+            self.assertDictEqual(positional.state_dict(), keyword.state_dict())
+            self.assertDictEqual(positional.state_dict(), {**expected, "scale": 32.})
+            self.assertEqual(len(calls), 2)
+
     def test_nonfinite_skips_step_and_backs_off(self, device):
         for bad in (float("inf"), float("nan")):
             with self.subTest(bad=bad), forbid_backend_fallbacks(), _local_collective(device):

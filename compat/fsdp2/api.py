@@ -621,8 +621,8 @@ class ShardedGradScaler(_TorchGradScaler):
     _allow_fp16_grads = True
     _allow_empty_gradients = True
 
-    def __init__(self, device="cuda", init_scale=2.0 ** 16, growth_factor=2.0,
-                 backoff_factor=0.5, growth_interval=2000, enabled=True,
+    def __init__(self, device="cuda", init_scale=2.0 ** 16, backoff_factor=0.5,
+                 growth_factor=2.0, growth_interval=2000, enabled=True,
                  process_group=None):
         super().__init__(device=device, init_scale=init_scale,
                          growth_factor=growth_factor,
