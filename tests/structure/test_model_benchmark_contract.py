@@ -107,6 +107,42 @@ class TestModelBenchmarkContract(unittest.TestCase):
         mismatch = result["jittor_checks"]["jittor_compiled"]["output_errors"]["batch.1.0"]
         self.assertEqual(mismatch["elements_outside_tolerance"], 1)
 
+    def test_cuda_reference_requires_three_verified_modes(self):
+        rows = [
+            dict(runtime=runtime, case="model", round=1, status="ok",
+                 median_s=seconds, execution=mode,
+                 **{"torch_mode" if runtime == "torch" else "jittor_mode": mode})
+            for runtime, mode, seconds in (
+                ("torch", "eager", 0.004),
+                ("torch", "compiled", 0.001),
+                ("jittor", "eager", 0.002),
+            )
+        ]
+        for include_compiled in (True, False):
+            with self.subTest(include_compiled=include_compiled):
+                compared = rows if include_compiled else [rows[0], rows[2]]
+                result_for_mode = lambda reference, candidate: {
+                    "parity": candidate is rows[2], "comparable": candidate is rows[2],
+                }
+                with mock.patch.object(cuda_runner, "compare_pair", side_effect=result_for_mode):
+                    result, = cuda_runner.compare_results(compared)
+                self.assertTrue(result["jittor_checks"]["jittor_eager"]["parity"])
+                self.assertIsNone(result.get("jittor_over_torch"))
+                self.assertIsNone(result.get("torch_baseline_mode"))
+                if include_compiled:
+                    self.assertFalse(result["torch_compile_check"]["parity"])
+
+    def test_cuda_output_checks_report_absolute_relative_and_cosine_errors(self):
+        import numpy as np
+
+        reference = np.array([2.0, 4.0, -np.inf])
+        candidate = np.array([1.0, 4.0, -np.inf])
+        result = cuda_runner.compare_arrays(np, reference, candidate, 0.0, 0.0)
+        self.assertFalse(result["parity"])
+        self.assertEqual(result["max_abs_diff"], 1.0)
+        self.assertEqual(result["max_rel_diff"], 0.5)
+        self.assertAlmostEqual(result["cosine_similarity"], 18 / np.sqrt(340))
+
     def test_cuda_training_parity_reports_first_failed_step(self):
         rank = dict(training_input_sha256="inputs", initial_state_sha256="weights",
                     records=[dict(step=0, loss=1.0), dict(step=1, loss=0.8), dict(step=2, loss=0.6)])

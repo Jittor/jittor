@@ -1077,23 +1077,28 @@ def compare_training(np, reference, candidate):
     inputs_match = all(left.get(key) is not None and left[key] == right.get(key)
                        for left, right in zip(expected, actual) for key in keys)
     errors = []
+    metrics = {}
     for rank, (left, right) in enumerate(zip(expected, actual)):
         expected_steps = [row["step"] for row in left["records"]]
         actual_steps = [row["step"] for row in right["records"]]
-        if expected_steps != actual_steps:
-            errors.append(dict(rank=rank, parity_error="Training steps differ"))
+        if not expected_steps or expected_steps != actual_steps:
+            errors.append(dict(rank=rank, parity_error="Training steps are missing or differ"))
             continue
         reference_loss = np.array([row["loss"] for row in left["records"]])
         candidate_loss = np.array([row["loss"] for row in right["records"]])
-        failed = np.flatnonzero(~np.isclose(reference_loss, candidate_loss,
+        metrics[f"rank{rank}.loss"] = compare_arrays(
+            np, reference_loss, candidate_loss, TRAINING_LOSS_ATOL, TRAINING_LOSS_RTOL)
+        failed = np.flatnonzero(~np.isclose(candidate_loss, reference_loss,
                                            atol=TRAINING_LOSS_ATOL, rtol=TRAINING_LOSS_RTOL))
         if failed.size:
             first = failed[0]
             errors.append(dict(rank=rank, first_step=expected_steps[first], steps_outside_tolerance=int(failed.size),
                                reference_loss=float(reference_loss[first]), candidate_loss=float(candidate_loss[first]),
                                max_abs=float(np.abs(reference_loss - candidate_loss).max())))
-    return dict(same_inputs=inputs_match, parity=not errors, comparable=inputs_match and not errors,
-                loss_errors=errors)
+    parity = bool(metrics) and all(check["parity"] for check in metrics.values()) and not errors
+    return dict(same_inputs=inputs_match, parity=parity, comparable=inputs_match and parity,
+                output_errors=metrics, loss_errors=errors,
+                atol=TRAINING_LOSS_ATOL, rtol=TRAINING_LOSS_RTOL)
 
 
 def compare_stock_losses(np, reference, candidate):
@@ -1173,22 +1178,23 @@ def compare_results(rows):
                    jittor_eager_ms=times.get("jittor_eager"), jittor_compiled_ms=times.get("jittor_compiled"),
                    jittor_ms=None, jittor_execution=None,
                    statuses={mode: row["status"] for mode, row in modes.items()})
-    references = [mode for mode in ("eager", "compiled") if mode in ok]
+    def passed(check):
+        return check.get("comparable") is True and check.get("parity") is True
+
+    best = None
     if "eager" in ok and "compiled" in ok:
         compiled_check = compare_pair(ok["eager"], ok["compiled"])
         summary["torch_compile_check"] = compiled_check
-        if not compiled_check["comparable"]:
-            references.remove("compiled")
+        if passed(compiled_check):
+            best = min(("eager", "compiled"), key=times.__getitem__)
+            summary.update(torch_baseline_mode=best, torch_baseline_ms=times[best], torch_ms=times[best])
     candidates = [mode for mode in ("jittor_compiled", "jittor_eager", "jittor") if mode in ok]
     checks = {}
-    if references:
-        best = min(references, key=times.__getitem__)
-        summary.update(torch_baseline_mode=best, torch_baseline_ms=times[best], torch_ms=times[best])
-        reference = ok.get("eager", ok[best])
-        checks = {mode: compare_pair(reference, ok[mode]) for mode in candidates}
+    if "eager" in ok:
+        checks = {mode: compare_pair(ok["eager"], ok[mode]) for mode in candidates}
         summary["jittor_checks"] = checks
     if candidates:
-        verified = [mode for mode in candidates if checks.get(mode, {}).get("comparable")]
+        verified = [mode for mode in candidates if passed(checks.get(mode, {}))]
         # A refused capture ran eager. Prefer the separately measured eager mode.
         if "jittor_eager" in verified and ok.get("jittor_compiled", {}).get("execution") == "eager-fallback":
             verified = [mode for mode in verified if mode != "jittor_compiled"]
@@ -1197,7 +1203,7 @@ def compare_results(rows):
                        jittor_execution=ok[selected]["execution"])
         if checks:
             summary.update(checks[selected])
-            if summary["comparable"]:
+            if best and passed(checks[selected]) and times[best] > 0 and times[selected] > 0:
                 summary["jittor_over_torch"] = times[selected] / times[best]
     return [summary]
 
@@ -1206,13 +1212,30 @@ def compare_arrays(np, a, b, atol, rtol):
     if a.shape != b.shape or a.dtype != b.dtype:
         return dict(parity=False, reference_shape=a.shape, candidate_shape=b.shape,
                     reference_dtype=str(a.dtype), candidate_dtype=str(b.dtype))
-    close = np.isclose(a, b, atol=atol, rtol=rtol) if np.issubdtype(a.dtype, np.floating) else (a == b)
+    close = np.isclose(b, a, atol=atol, rtol=rtol) if np.issubdtype(a.dtype, np.floating) else (a == b)
     both_finite = np.isfinite(a) & np.isfinite(b)
-    with np.errstate(invalid="ignore"):
-        difference = np.abs(a.astype(np.float64) - b.astype(np.float64))
-    max_abs = float(np.max(difference, where=both_finite, initial=0.0))
+    reference = a[both_finite].astype(np.float64, copy=False)
+    actual = b[both_finite].astype(np.float64, copy=False)
+    with np.errstate(over="ignore", invalid="ignore"):
+        difference = np.abs(reference - actual)
+        max_abs = float(np.max(difference, initial=0.0))
+        relative = difference / np.maximum(np.abs(reference), np.finfo(np.float64).eps)
+        max_rel = float(np.max(relative, initial=0.0))
+    reference_scale = np.max(np.abs(reference), initial=0.0)
+    actual_scale = np.max(np.abs(actual), initial=0.0)
+    cosine = None
+    if reference_scale and actual_scale:
+        reference = reference / reference_scale
+        actual = actual / actual_scale
+        dot = np.dot(reference, actual)
+        cosine = float(np.clip(dot / (np.linalg.norm(reference) * np.linalg.norm(actual)), -1, 1))
+    elif reference.size:
+        cosine = 1.0 if reference_scale == actual_scale else 0.0
     outside = int(a.size - np.count_nonzero(close))
-    return dict(parity=outside == 0, max_abs=max_abs, elements=a.size, elements_outside_tolerance=outside)
+    max_abs = max_abs if math.isfinite(max_abs) else None
+    return dict(parity=outside == 0, max_abs=max_abs, max_abs_diff=max_abs,
+                max_rel_diff=max_rel if math.isfinite(max_rel) else None, cosine_similarity=cosine,
+                elements=a.size, elements_outside_tolerance=outside)
 
 
 def compare_model_outputs(np, reference, candidate):
@@ -1222,7 +1245,7 @@ def compare_model_outputs(np, reference, candidate):
                   "bfloat16": (2e-2, 8e-2)}[reference["dtype"]]
     errors = {}
     with np.load(ref, allow_pickle=False) as left, np.load(actual, allow_pickle=False) as right:
-        if set(left.files) != set(right.files):
+        if not left.files or set(left.files) != set(right.files):
             return dict(parity=False, parity_error="Output fields differ")
         for key in left.files:
             errors[key] = compare_arrays(np, left[key], right[key], atol, rtol)
@@ -1282,8 +1305,9 @@ def execution_order(args, case):
 def run_matrix(args, output):
     rows = []
     comparisons = []
+    planned_rounds = dict.fromkeys(args.case, args.rounds or (1 if len(args.case) > 1 else 2))
     meta = {"state": "running", "pid": os.getpid(), "planned": args.case,
-            "started": datetime.now(timezone.utc).isoformat()}
+            "started": datetime.now(timezone.utc).isoformat(), "planned_rounds": planned_rounds}
 
     def publish(current=None):
         meta["current"] = current
@@ -1291,10 +1315,10 @@ def run_matrix(args, output):
 
     for name in args.case:
         executions = execution_order(args, name)
-        rounds = args.rounds or (1 if len(args.case) > 1 and name not in WAN_CASES else 2)
+        rounds = planned_rounds[name]
         processed = None
         preprocessing_error = None
-        for round_id in range(1, 2 if name == VIDEO else rounds + 1):
+        for round_id in range(1, rounds + 1):
             budget = args.measurement_timeout
             round_rows = []
             for runtime, mode in executions:
