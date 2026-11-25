@@ -68,24 +68,29 @@ class RNNBase(jt.Module):
                 build_unit(f'bias_hh_l{layer}', gate_size)
 
     def _cudnn_flatten_weights(self, cudnn_mode):
-        def copy_to_flatten_weight(param_name, offset_idx, num_gates):
-            def copy_to(param_name, offset_idx, idx):
-                nonlocal ft_weight
-                cur_offset = self._cudnn_weight_offset[offset_idx]
-                param = getattr(self, param_name)
-                param = param[self.hidden_size * idx: self.hidden_size * (idx + 1)]
-                ft_weight = jt.setitem(ft_weight,
-                    slice(cur_offset, cur_offset + param.numel()), param.flatten())
+        def copy_gates(param, offsets):
+            nonlocal ft_weight
+            gate_size = param.numel() // num_gates
+            first = 0
+            for end in range(1, num_gates + 1):
+                offset = offsets[first]
+                length = (end - first) * gate_size
+                if end < num_gates and offsets[end] == offset + length:
+                    continue
+                piece = param
+                if first != 0 or end != num_gates:
+                    piece = param[first * self.hidden_size:end * self.hidden_size]
+                ft_weight = jt.setitem(ft_weight, slice(offset, offset + length), piece.flatten())
+                first = end
 
+        def copy_parameters(suffix, offset):
+            stride = 2 if self.bias else 1
+            end = offset + num_gates * stride
+            offsets = self._cudnn_weight_offset
+            copy_gates(getattr(self, 'weight' + suffix), offsets[offset:end:stride])
             if self.bias:
-                for idx in range(num_gates):
-                    copy_to('weight' + param_name, offset_idx + idx * 2, idx)
-                    copy_to('bias' + param_name, offset_idx + idx * 2 + 1, idx)
-                return num_gates * 2
-            else:
-                for idx in range(num_gates):
-                    copy_to('weight' + param_name, offset_idx + idx, idx)
-                return num_gates
+                copy_gates(getattr(self, 'bias' + suffix), offsets[offset + 1:end:stride])
+            return end
 
         library = get_library("cudnn")
         if library is None:
@@ -115,15 +120,13 @@ class RNNBase(jt.Module):
         ft_weight = jt.zeros(self._cudnn_weight_size, dtype=dtype)
         # Functional writes retain the parameter-copy graph under both
         # autograd policies, without mutating a fresh trainable leaf.
-        cnt = 0
+        # Adjacent gates of a parameter can be copied together. Padded or
+        # interleaved layouts still use their individual cuDNN offsets.
+        offset = 0
         for layer in range(self.num_layers):
-            suffix = ''
-            cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
-            cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
-            if self.bidirectional:
-                suffix = '_reverse'
-                cnt += copy_to_flatten_weight(f'_ih_l{layer}' + suffix, cnt, num_gates)
-                cnt += copy_to_flatten_weight(f'_hh_l{layer}' + suffix, cnt, num_gates)
+            for direction in ('', '_reverse') if self.bidirectional else ('',):
+                offset = copy_parameters(f'_ih_l{layer}{direction}', offset)
+                offset = copy_parameters(f'_hh_l{layer}{direction}', offset)
         return ft_weight
 
     @abstractmethod
