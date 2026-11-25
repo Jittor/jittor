@@ -108,10 +108,10 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
 # internal invariants.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    # Replace the blanket contiguous-only rejection with three precise guards:
-    # last stride 1 for itemsize changes, byte-stride divisibility, and refusal
-    # to reinterpret an arbitrary non-contiguous reshape (net two boundaries).
-    "src/ops/composite/reinterpret_view_op.cc": 12,
+    # Equal-rank dtype views check the last stride and byte-stride divisibility.
+    # Complex pair views also check the component stride when merging a pair
+    # and the byte-stride divisibility of the remaining axes.
+    "src/ops/composite/reinterpret_view_op.cc": 14,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
@@ -557,6 +557,8 @@ def test_reinterpret_view_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_REINTERPRET_VIEW_BOUNDARIES[
         "src/ops/composite/reinterpret_view_op.cc"]
+    assert source.count("USER_CHECK(x->storage_stride(prefix_rank) == 1)") == 1
+    assert source.count("USER_CHECK(byte_stride % ydsize == 0)") == 2
 
 
 def test_binary_shape_migration_is_explicit_and_bounded():
