@@ -22,7 +22,7 @@ class TestJaggedSum(cu.JittorTestCase):
             np.testing.assert_array_equal(values.grad.detach().cpu().numpy(), np.ones((3, 2)))
             kept = nested.sum(dim=-2, keepdim=True, dtype=torch.float32)
             self.assertEqual(tuple(kept.shape), (2, 1, 2))
-            self.assertEqual(kept.dtype, torch.float32)
+            self.assertTrue(kept.dtype == torch.float32)
 
     def test_full_sum_includes_holes_but_row_sum_refuses_them(self, device):
         with forbid_backend_fallbacks():
