@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 560" width="1120" height="560" role="img" aria-label="Jittor 2.0 算子构图与执行分流流水线">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #FAFBFD; stroke: #E2E8F0; stroke-width: 1.5; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 19px; font-weight: 700; fill: #0F172A; }
+      .sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 12px; fill: #475569; }
+      .stage { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 12px; font-weight: 700; fill: #334155; }
+      .box-t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 12.5px; font-weight: 600; fill: #0F172A; }
+      .box-b { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.5px; fill: #334155; }
+      .note { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 11px; fill: #475569; }
+      .edge { stroke: #475569; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-muted { stroke: #94A3B8; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="4" y="4" width="1112" height="552" rx="14" class="bg"/>
+  <text x="30" y="36" class="title">一次运算从构图到设备执行的完整流水线</text>
+  <text x="30" y="56" class="sub">Phase 1 惰性构图 → Phase 2-5 规划、融合与并行编译 → Phase 6-7 同步/异步执行与内存回收</text>
+
+  <!-- Row 1: Lazy Graph Construction -->
+  <rect x="24" y="74" width="1072" height="106" rx="10" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.3"/>
+  <text x="38" y="95" class="stage">阶段 A · 惰性构图与触发边界（Python 主线程）</text>
+
+  <rect x="38" y="106" width="225" height="60" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="50" y="126" class="box-t">1. 前端算子调用</text>
+  <text x="50" y="143" class="box-b">Native jt.* / compat torch.*</text>
+  <text x="50" y="157" class="box-b">TensorFrontendScope 选返回类</text>
+
+  <rect x="292" y="106" width="235" height="60" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="304" y="126" class="box-t">2. 分派与节点挂接</text>
+  <text x="304" y="143" class="box-b">try_dispatch / op_register</text>
+  <text x="304" y="157" class="box-b">挂接 Op/Var，登记 VarHolder</text>
+
+  <rect x="556" y="106" width="240" height="60" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="568" y="126" class="box-t">3. 触发提交判断</text>
+  <text x="568" y="143" class="box-b">.numpy() / .sync() / auto_flush</text>
+  <text x="568" y="157" class="box-b">module_boundary / dynamic shape</text>
+
+  <rect x="826" y="106" width="254" height="60" rx="7" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="838" y="126" class="box-t">未触发：立即返回延迟 Var</text>
+  <text x="838" y="143" class="note">仅增长计算图，不分配大块设备显存</text>
+  <text x="838" y="157" class="note">继续累积以便更大范围算子融合</text>
+
+  <line x1="263" y1="136" x2="290" y2="136" class="edge"/>
+  <line x1="527" y1="136" x2="554" y2="136" class="edge"/>
+  <line x1="796" y1="136" x2="824" y2="136" class="edge-muted"/>
+
+  <!-- Row 2: Planning, Fusion & Parallel Compile -->
+  <rect x="24" y="202" width="1072" height="122" rx="10" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.3"/>
+  <text x="38" y="223" class="stage">阶段 B · 规划、图改写、融合与预编译（Executor::run_sync）</text>
+
+  <rect x="38" y="234" width="236" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="50" y="254" class="box-t">4. 收集批次与图优化</text>
+  <text x="50" y="271" class="box-b">async_exec_wait() 排空前批</text>
+  <text x="50" y="286" class="box-b">build_exec_plan: BFS + gopt</text>
+  <text x="50" y="301" class="note">planning_hold 保护原始节点指针</text>
+
+  <rect x="302" y="234" width="242" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="314" y="254" class="box-t">5. 算子融合与生命周期排程</text>
+  <text x="314" y="271" class="box-b">Fuser::count_fuse 划分融合段</text>
+  <text x="314" y="286" class="box-b">schedule_hold_release 算末次使用</text>
+  <text x="314" y="301" class="note">快照边表避免并发图改写竞争</text>
+
+  <rect x="572" y="234" width="248" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="584" y="254" class="box-t">6. 分层预编译与零拷贝查表</text>
+  <text x="584" y="271" class="box-b">jit_cache_map (零拷贝) / Tier-0</text>
+  <text x="584" y="286" class="box-b">NVRTC 进程内编译 / OpCompiler</text>
+  <text x="584" y="301" class="note">CPU PCH + CAS 共享缓存 + cubin 缓存</text>
+
+  <rect x="848" y="234" width="232" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="860" y="254" class="box-t">7. 执行路径分流决策</text>
+  <text x="860" y="271" class="box-b">may_run_async(plan)?</text>
+  <text x="860" y="286" class="note">纯设备无回调批次 → Worker 异步</text>
+  <text x="860" y="301" class="note">含同步/录制/CPU/回调 → 主线程</text>
+
+  <path d="M 676 166 L 676 188 L 156 188 L 156 232" class="edge"/>
+  <line x1="274" y1="272" x2="300" y2="272" class="edge"/>
+  <line x1="544" y1="272" x2="570" y2="272" class="edge"/>
+  <line x1="820" y1="272" x2="846" y2="272" class="edge"/>
+
+  <!-- Row 3: Execution, Launch & Teardown -->
+  <rect x="24" y="346" width="1072" height="190" rx="10" fill="#FFFBEB" stroke="#FCD34D" stroke-width="1.3"/>
+  <text x="38" y="367" class="stage">阶段 C · 批次执行、多路算子发射与资源回收（run_exec_plan）</text>
+
+  <rect x="38" y="378" width="242" height="66" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="50" y="398" class="box-t">8a. 异步 Worker 线程执行</text>
+  <text x="50" y="415" class="box-b">async_exec_submit → worker_main</text>
+  <text x="50" y="431" class="note">主线程立返继续构图，延迟应用图记账</text>
+
+  <rect x="38" y="456" width="242" height="66" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="50" y="476" class="box-t">8b. 主线程同步执行 / 图录制</text>
+  <text x="50" y="493" class="box-b">run_exec_plan / graph_replay</text>
+  <text x="50" y="509" class="note">支持 CUDA Graph 录制与整图回放</text>
+
+  <rect x="312" y="378" width="448" height="144" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1.3"/>
+  <text x="326" y="399" class="box-t">9. 逐段分配显存并分流发射（BackendStreamKind::Compute）</text>
+
+  <rect x="326" y="410" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="336" y="428" class="box-t">分层 JIT / NVRTC 核</text>
+  <text x="336" y="445" class="box-b">Tier-0 / NVRTC / OpCompiler</text>
+
+  <rect x="542" y="410" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="552" y="428" class="box-t">后端加速库算子</text>
+  <text x="552" y="445" class="box-b">cuBLAS / cuDNN / ACL / MKL</text>
+
+  <rect x="326" y="466" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="336" y="484" class="box-t">原生外部与自定义核</text>
+  <text x="336" y="501" class="box-b">CudaLaunchOp / TvmFfiLaunchOp</text>
+
+  <rect x="542" y="466" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="552" y="484" class="box-t">静态图与分层图回放</text>
+  <text x="552" y="501" class="box-b">graph_launch / graphed_module</text>
+
+  <rect x="790" y="378" width="290" height="144" rx="7" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+  <text x="804" y="399" class="box-t">10. 收尾、复用与流交接</text>
+  <text x="804" y="421" class="box-b">• reuse_dying_inputs 原地复用死输入</text>
+  <text x="804" y="440" class="box-b">• finish_pending_liveness 释放中间态</text>
+  <text x="804" y="459" class="box-b">• ComputeHandoff 发布跨线程流事件</text>
+  <text x="804" y="478" class="box-b">• device_sync=true 时等待目标设备</text>
+  <text x="804" y="502" class="note">异常路径执行 mark_failed_batch + 异步定位</text>
+
+  <path d="M 964 310 L 964 332 L 159 332 L 159 376" class="edge"/>
+  <path d="M 964 332 L 16 332 L 16 489 L 36 489" class="edge"/>
+  <line x1="280" y1="411" x2="310" y2="430" class="edge"/>
+  <line x1="280" y1="489" x2="310" y2="472" class="edge"/>
+  <line x1="760" y1="450" x2="788" y2="450" class="edge"/>
+</svg>

@@ -2,7 +2,7 @@
 
 [本栏目目录](index.md) · [English](source-architecture.en.md)
 
-先用本页确定改动属于哪个模块，再查对应实现契约。源码 checkout 与打包边界见[仓库布局](repository-layout.md)。
+先用本页确定改动属于哪个模块，再查对应实现契约。系统分层原理图与 C++/后端目录地图见[整体架构与运行原理](architecture-overview.md)，源码 checkout 与打包边界见[仓库布局](repository-layout.md)。
 
 | 要修改的内容 | 详细契约 |
 | --- | --- |

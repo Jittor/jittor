@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 490" width="1120" height="490" role="img" aria-label="Jittor 与 JittorEcosystem 三仓协同开发架构图">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#2563EB"/>
+    </marker>
+    <style>
+      .bg { fill: #FAFBFD; stroke: #E2E8F0; stroke-width: 1.5; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 19px; font-weight: 700; fill: #0F172A; }
+      .sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 12px; fill: #475569; }
+      .card-t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 14px; font-weight: 700; fill: #0F172A; }
+      .card-sub { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #475569; }
+      .body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 11.5px; fill: #334155; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.6px; fill: #1E293B; }
+      .lbl { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 11px; font-weight: 600; fill: #1D4ED8; }
+      .edge { stroke: #475569; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-blue { stroke: #2563EB; stroke-width: 1.8; fill: none; marker-end: url(#arrow-blue); }
+      .edge-dash { stroke: #64748B; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="4" y="4" width="1112" height="482" rx="14" class="bg"/>
+  <text x="30" y="36" class="title">Jittor 主仓与 JittorEcosystem 三仓协同开发与 Pin 闭环</text>
+  <text x="30" y="56" class="sub">清晰的分层归属、单向依赖、Fork-only PR 治理与固定提交（compatibility.json）证据绑定</text>
+
+  <!-- Repo 1: Main Repo -->
+  <rect x="28" y="80" width="440" height="236" rx="10" fill="#EFF6FF" stroke="#60A5FA" stroke-width="1.5"/>
+  <text x="46" y="106" class="card-t">1. 主仓：Jittor/jittor</text>
+  <text x="46" y="124" class="card-sub">基线分支：2.0-refactor · 规则：AGENTS.md</text>
+
+  <rect x="46" y="138" width="404" height="58" rx="6" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.1"/>
+  <text x="58" y="158" class="body">• 核心计算、延迟图、自动微分、JIT 与多后端（src/、python/、backends/）</text>
+  <text x="58" y="177" class="body">• 通用 Torch 兼容发行物（compat/：torch、shim、fsdp2、triton）</text>
+
+  <rect x="46" y="206" width="404" height="94" rx="6" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.1"/>
+  <text x="58" y="226" class="body">• 开发方式：个人 fork 建分支 → 最小复现 + 回归 → PR 到 2.0-refactor</text>
+  <text x="58" y="245" class="body">• 门禁分层：--tier core（44s）→ --tier smoke（约 390s）→ full</text>
+  <text x="58" y="264" class="body">• 提交前：check_repo_layout.sh + generate_manifest --check + structure</text>
+  <text x="58" y="283" class="body">• 严禁直接 push/merge 上游 2.0-refactor；不保留下游 adapters/</text>
+
+  <!-- Repo 2: Ecosystem Downstream Repos -->
+  <rect x="652" y="80" width="440" height="236" rx="10" fill="#ECFDF5" stroke="#34D399" stroke-width="1.5"/>
+  <text x="670" y="106" class="card-t">2. 生态下游仓：JittorEcosystem/jittor-*</text>
+  <text x="670" y="124" class="card-sub">vllm / transformers / accelerate / deepspeed / trl / verl 等</text>
+
+  <rect x="670" y="138" width="404" height="58" rx="6" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.1"/>
+  <text x="682" y="158" class="body">• 仅拥有该库私有适配、上游版本锁（upstream/）与官方用例验证</text>
+  <text x="682" y="177" class="body">• compatibility.json 固定上游版本与框架/compat 提交 SHA</text>
+
+  <rect x="670" y="206" width="404" height="94" rx="6" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.1"/>
+  <text x="682" y="226" class="body">• 分级取证：host/package → 官方 L1 → L2 原生 PyTorch 对拍 → 性能</text>
+  <text x="682" y="245" class="body">• 证据流：support/{scope,tasks,results}.json → support_matrix.py</text>
+  <text x="682" y="264" class="body">• 自动生成双语 docs/support*.md 与 docs/validation*.md（禁手改）</text>
+  <text x="682" y="283" class="body">• 开发方式：本仓 task/&lt;slug&gt; → PR 到 main；换 pin 必须重跑受影响证据</text>
+
+  <!-- Cross-repo arrows -->
+  <path d="M 468 158 L 648 158" class="edge-blue"/>
+  <rect x="478" y="132" width="160" height="22" rx="4" fill="#DBEAFE"/>
+  <text x="488" y="147" class="lbl">合并 SHA → 更新 pin</text>
+
+  <path d="M 652 246 L 472 246" class="edge"/>
+  <rect x="476" y="253" width="166" height="36" rx="4" fill="#F1F5F9"/>
+  <text x="484" y="268" class="body">核心/compat 缺口最小复现</text>
+  <text x="484" y="283" class="body">回流主仓提独立 PR 修复</text>
+
+  <!-- Repo 3: Shared Skills + External Lab Root -->
+  <rect x="28" y="344" width="520" height="118" rx="10" fill="#FFFBEB" stroke="#FBBF24" stroke-width="1.5"/>
+  <text x="46" y="369" class="card-t">3. 共享技能仓：JittorEcosystem/jittor-dev-skills</text>
+  <text x="46" y="387" class="card-sub">克隆至 $JITTOR_LAB_ROOT/jittor-dev-skills（不复制回主仓）</text>
+  <text x="46" y="410" class="body">• 沉淀跨仓可复用操作方法：归属分流、隔离验证、数值/性能对拍、PR 与建仓闭环</text>
+  <text x="46" y="429" class="body">• 冲突裁决：目标项目 AGENTS.md &gt; 共享技能；工具与命令随各自源码仓维护</text>
+  <text x="46" y="448" class="mono">门禁：python3 tools/check_skills.py（目录、frontmatter、链接与路径校验）</text>
+
+  <rect x="572" y="344" width="520" height="118" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="590" y="369" class="card-t">仓外隔离运行态：$JITTOR_LAB_ROOT</text>
+  <text x="590" y="387" class="card-sub">默认与主仓同级的 jittor-lab/（严禁把实验与缓存留在工作树内）</text>
+  <text x="590" y="410" class="mono">worktrees/&lt;task&gt;/          独立 Git worktree（一任务一工作树）</text>
+  <text x="590" y="429" class="mono">_state/&lt;topic&gt;/&lt;run&gt;/      独立 JITTOR_HOME / TMPDIR / 模型与日志</text>
+  <text x="590" y="448" class="body">单测与 benchmark 不共享编译缓存；并行任务各自隔离设备与缓存目录</text>
+
+  <line x1="250" y1="344" x2="250" y2="318" class="edge-dash"/>
+  <line x1="480" y1="344" x2="760" y2="318" class="edge-dash"/>
+  <line x1="650" y1="344" x2="410" y2="318" class="edge-dash"/>
+  <line x1="870" y1="344" x2="870" y2="318" class="edge-dash"/>
+</svg>
