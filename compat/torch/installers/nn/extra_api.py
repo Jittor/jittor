@@ -614,6 +614,24 @@ class LocalResponseNorm(nn.Module):
         return f"{self.size}, alpha={self.alpha}, beta={self.beta}, k={self.k}"
 
 
+def _try_single_round_rms_norm(x, normalized_shape, weight, eps):
+    """Fuse the CUDA inference path for a contiguous half-precision row."""
+    name = _dtype_to_str(x.dtype)
+    if not (
+        jt.flags.no_grad
+        and name in ("float16", "bfloat16")
+        and weight is not None
+        and _dtype_to_str(weight.dtype) == name
+        and len(normalized_shape) == 1
+        and tuple(x.shape[-1:]) == normalized_shape
+        and tuple(weight.shape) == normalized_shape
+        and x._storage_is_contiguous()
+        and weight._storage_is_contiguous()
+    ):
+        return None
+    return _try_dispatch("nn.rms_norm.single_round.inference", x, weight, eps)
+
+
 class RMSNorm(nn.Module):
     def __init__(self, normalized_shape, eps=1e-6, elementwise_affine=True, **k):
         super().__init__()
@@ -633,6 +651,9 @@ class RMSNorm(nn.Module):
         # attention off the flash backend. The reduction also covers all of
         # `normalized_shape`, not just the trailing dim.
         name = _dtype_to_str(x.dtype)
+        fast = _try_single_round_rms_norm(x, self.normalized_shape, self.weight, self.eps)
+        if fast is not None:
+            return fast
         if (
             _jt2.flags.no_grad
             and getattr(_jt2.flags, "use_acl", 0)
@@ -651,8 +672,7 @@ class RMSNorm(nn.Module):
         ):
             # Stock RMSNorm multiplies its weight before the final half cast.
             # The ACL kernel preserves that contract with FP32 statistics.
-            # Keep CUDA's separately rounded RMS kernel and every unverified
-            # boundary with this module's original portable computation.
+            # The portable computation handles the remaining layouts.
             fast = _try_dispatch("nn.rms_norm.inference", x, self.weight, float(self.eps))
             if fast is not None:
                 return fast

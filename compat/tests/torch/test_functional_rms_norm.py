@@ -6,6 +6,25 @@ import pytest
 import torch
 
 
+@pytest.mark.parametrize("device", os.environ.get("JITTOR_TEST_DEVICES", "cpu").split(","))
+def test_weighted_bfloat16_rms_norm_repeats_exactly(device):
+    rng = np.random.default_rng(20261125)
+    with torch.no_grad():
+        value = torch.from_numpy(rng.standard_normal((1, 480, 3072), dtype=np.float32)).to(
+            device=device, dtype=torch.bfloat16)
+        weights = torch.from_numpy(rng.uniform(.25, 1.75, size=3072).astype(np.float32)).to(
+            device=device, dtype=torch.bfloat16)
+        module = torch.nn.RMSNorm(3072, eps=1e-6).to(device=device, dtype=torch.bfloat16)
+        module.weight.copy_(weights)
+        for run in (lambda: module(value),
+                    lambda: torch.nn.functional.rms_norm(value, (3072,), weights, eps=1e-6)):
+            initial = run()
+            assert initial.dtype == torch.bfloat16 and initial.device.type == device
+            expected = initial.float().cpu().numpy()
+            for _ in range(4):
+                np.testing.assert_array_equal(run().float().cpu().numpy(), expected)
+
+
 @pytest.mark.parametrize("shape,axes,weighted", [
     ((2, 3, 64), (64,), True),
     ((2, 3, 64), (64,), False),

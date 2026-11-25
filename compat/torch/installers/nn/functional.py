@@ -45,6 +45,9 @@ def _rms_norm(input, normalized_shape, weight=None, eps=None):
     name = _dtype_to_str(input.dtype)
     normalized = ((normalized_shape,) if isinstance(normalized_shape, int)
                   else tuple(normalized_shape))
+    fast = _try_single_round_rms_norm(input, normalized, weight, eps)
+    if fast is not None:
+        return fast
     if (name == "float32" and weight is not None
             and _dtype_to_str(weight.dtype) == "float32"
             and len(normalized) == 1
@@ -143,7 +146,7 @@ def _poisson_nll(input, target, log_input=True, full=False, size_average=None,
 from ...context import get_install_context
 from types import MappingProxyType
 from .loss_modules import CrossEntropyLoss, LOSS_CLASSES, PixelShuffle, PixelUnshuffle
-from .extra_api import _adapt_extra
+from .extra_api import _adapt_extra, _try_single_round_rms_norm
 
 def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
     _context = get_install_context(jt)
