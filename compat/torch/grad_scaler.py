@@ -73,6 +73,8 @@ class GradScaler(_NativeGradScaler):
     # Native optimizers clear consumed gradients on a skipped step. Torch's
     # caller owns zero_grad(), and may inspect non-finite gradients afterwards.
     _clear_grads_on_skip = False
+    _allow_fp16_grads = False
+    _allow_empty_gradients = False
 
     def scale(self, outputs):
         if self._enabled and isinstance(outputs, jt.Var) and not self._scale_initialized:
@@ -105,11 +107,17 @@ class GradScaler(_NativeGradScaler):
         if state["stage"] is OptState.STEPPED:
             raise RuntimeError("unscale_() is being called after step().")
         grads = self._grads(optimizer)
-        if any(dtype_name(grad.dtype) == "float16" for grad in grads):
+        if not self._allow_fp16_grads and any(
+                dtype_name(grad.dtype) == "float16" for grad in grads):
             raise ValueError("Attempting to unscale FP16 gradients.")
         super().unscale_(optimizer)
-        state.update(stage=OptState.UNSCALED, checked=bool(grads),
+        self._synchronize_found_inf(optimizer)
+        state.update(stage=OptState.UNSCALED,
+                     checked=bool(grads) or self._allow_empty_gradients,
                      found_inf=self._found_inf, found_inf_var=self._found_inf_var)
+
+    def _synchronize_found_inf(self, optimizer):
+        """Ordinary AMP has no cross-rank overflow decision."""
 
     def step(self, optimizer, *args, **kwargs):
         if not self._enabled:

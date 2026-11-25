@@ -9,6 +9,8 @@ import numpy as np
 import jittor as jt
 from jittor import nn
 
+from ..torch.grad_scaler import GradScaler as _TorchGradScaler
+
 from . import common, config, dtensor, grad_sync, optimizer, shard
 from ..diagnostics import EXPECTED, swallowed
 
@@ -607,27 +609,62 @@ class FullyShardedDataParallel(nn.Module, FSDPModule):
         return optim_state_dict
 
 
-class ShardedGradScaler:
-    def __init__(self, *args, **kwargs):
-        self._enabled = kwargs.get("enabled", True)
+class ShardedGradScaler(_TorchGradScaler):
+    """Dynamic FP16 scaling with one shared overflow decision per group.
 
-    def scale(self, loss):
-        return loss
+    Loss scaling, gradient unscaling, optimizer stages and checkpoint state
+    remain owned by the ordinary GradScaler. This class only admits FP16
+    shards (including empty ranks) and synchronizes overflow before stepping.
+    Captured execution is rejected until collective replay is supported.
+    """
 
-    def step(self, optimizer, *args, **kwargs):
-        return optimizer.step(*args, **kwargs)
+    _allow_fp16_grads = True
+    _allow_empty_gradients = True
 
-    def update(self, *args, **kwargs):
-        return None
+    def __init__(self, device="cuda", init_scale=2.0 ** 16, growth_factor=2.0,
+                 backoff_factor=0.5, growth_interval=2000, enabled=True,
+                 process_group=None):
+        super().__init__(device=device, init_scale=init_scale,
+                         growth_factor=growth_factor,
+                         backoff_factor=backoff_factor,
+                         growth_interval=growth_interval, enabled=enabled)
+        self.process_group = process_group
 
     def unscale_(self, optimizer):
-        return None
+        if self._enabled:
+            from ..torch.context import get_install_context
+            if not get_install_context(jt).target_namespace.distributed.is_initialized():
+                raise RuntimeError("ShardedGradScaler requires an initialized process group")
+            from jittor._runtime import step_capture
+            if step_capture.active() or self._device is not None:
+                raise NotImplementedError(
+                    "ShardedGradScaler collective replay is not implemented; "
+                    "create a fresh scaler after captured scale()")
+        return super().unscale_(optimizer)
 
-    def state_dict(self):
-        return {"enabled": self._enabled}
-
-    def load_state_dict(self, state_dict):
-        self._enabled = state_dict.get("enabled", self._enabled)
+    def _synchronize_found_inf(self, optimizer):
+        from ..torch.context import get_install_context
+        torch = get_install_context(jt).target_namespace
+        dist = torch.distributed
+        if not dist.is_initialized():
+            raise RuntimeError("ShardedGradScaler requires an initialized process group")
+        # Communicator placement is independent of CPU parameter offload.
+        # Every rank, even one with no local gradients, enters this collective.
+        backend = dist.get_backend(self.process_group)
+        target = (torch.device("cuda", torch.cuda.current_device())
+                  if backend == "nccl" else torch.device(self._device_type))
+        flag = torch.tensor([float(self._found_inf)], dtype=torch.float32,
+                            device=target)
+        work = dist.all_reduce(flag, op=dist.ReduceOp.SUM,
+                               group=self.process_group, async_op=True)
+        if work is None:
+            raise RuntimeError("ShardedGradScaler all_reduce returned no work handle")
+        work.wait()
+        # Eager AMP already reads each local finite check. Only copy this tiny
+        # control value to host; the collective and all gradient math stay on
+        # their original device. Do not migrate the collective tensor itself.
+        self._found_inf = bool(flag.cpu().item())
+        self._found_inf_var = None
 
 
 _EXPORTS = (
