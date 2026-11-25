@@ -23,10 +23,16 @@ def supported(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     oh = (height + 2*padding[0] - dilation[0]*(kh-1) - 1)//stride[0] + 1
     ow = (width + 2*padding[1] - dilation[1]*(kw-1) - 1)//stride[1] + 1
     inner, columns = channels*kh*kw, n*oh*ow
-    # The portable contraction can fuse without an im2col allocation. Keep
-    # it when this explicit workspace would exceed 256 MiB or BLAS limits.
-    return (oh > 0 and ow > 0 and oh*ow <= 2147483647 and inner <= 2147483647
-            and columns <= 2147483647 and inner*columns*4 <= (256 << 20))
+    if not (oh > 0 and ow > 0 and oh*ow <= 2147483647 and inner <= 2147483647
+            and columns <= 2147483647):
+        return False
+    workspace_limit = 256 << 20
+    if inner*columns*4 <= workspace_limit:
+        return True
+    # Inference can reuse a bounded im2col tile. The differentiable path
+    # still requires the full columns tensor for its existing backward.
+    from jittor._runtime.core_api import _output_requires_grad
+    return inner*4 <= workspace_limit and not _output_requires_grad(x, weight, bias)
 
 
 

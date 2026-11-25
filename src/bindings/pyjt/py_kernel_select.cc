@@ -240,7 +240,10 @@ Verdict rocm_conv_rule(PyObject* args) {
     if (batch > INT_MAX/spatial || x->shape[1] > INT_MAX/w->shape[2]
             || x->shape[1]*w->shape[2] > INT_MAX/w->shape[3]) return declines;
     int64 inner = x->shape[1]*w->shape[2]*w->shape[3], columns = batch*spatial;
-    return !columns || inner <= (256LL << 20)/4/columns ? accepts : declines;
+    if (!columns || inner <= (256LL << 20)/4/columns) return accepts;
+    // Large inference calls can tile the workspace; the Python predicate
+    // owns the shared autograd decision for this case.
+    return unknown;
 }
 
 Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {

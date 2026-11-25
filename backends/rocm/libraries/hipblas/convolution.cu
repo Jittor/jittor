@@ -5,12 +5,13 @@
 namespace jittor {
 namespace {
 __global__ void columns_kernel(const float* x, float* columns, int64_t count,
-    int channels, int height, int width, int kh, int kw, int oh, int ow,
-    int sh, int sw, int ph, int pw, int dh, int dw) {
-    const int64_t spatial = (int64_t)oh * ow, inner = (int64_t)channels * kh * kw;
+    int channels, int height, int width, int kh, int kw, int tile_spatial, int ow,
+    int spatial_offset, int sh, int sw, int ph, int pw, int dh, int dw) {
+    const int64_t inner = (int64_t)channels * kh * kw;
     for (int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
             i < count; i += (int64_t)gridDim.x * blockDim.x) {
-        const int64_t p = i % spatial, k = i / spatial % inner, n = i / spatial / inner;
+        const int64_t p = i % tile_spatial + spatial_offset;
+        const int64_t k = i / tile_spatial % inner, n = i / tile_spatial / inner;
         const int64_t h = p / ow * sh - ph + k / kw % kh * dh;
         const int64_t w = p % ow * sw - pw + k % kw * dw;
         columns[i] = h >= 0 && h < height && w >= 0 && w < width
@@ -29,10 +30,10 @@ unsigned blocks(int64_t count) { return (unsigned)std::min<int64_t>((count+255)/
 } // namespace
 
 hipError_t hip_conv_columns(const float* x, float* columns, int64_t count,
-    int channels, int height, int width, int kh, int kw, int oh, int ow,
-    int sh, int sw, int ph, int pw, int dh, int dw, hipStream_t stream) {
+    int channels, int height, int width, int kh, int kw, int tile_spatial, int ow,
+    int spatial_offset, int sh, int sw, int ph, int pw, int dh, int dw, hipStream_t stream) {
     columns_kernel<<<blocks(count), 256, 0, stream>>>(x, columns, count,
-        channels, height, width, kh, kw, oh, ow, sh, sw, ph, pw, dh, dw);
+        channels, height, width, kh, kw, tile_spatial, ow, spatial_offset, sh, sw, ph, pw, dh, dw);
     return hipGetLastError();
 }
 

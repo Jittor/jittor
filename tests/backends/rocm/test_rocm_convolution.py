@@ -121,7 +121,8 @@ def test_workspace_and_blas_limits_decline_without_allocating():
     def metadata(shape):
         return SimpleNamespace(ndim=4,dtype='float32',shape=shape,
                                _storage_is_contiguous=lambda: True)
-    assert not supported(metadata((16,512,256,256)),metadata((512,512,3,3)),padding=1)
+    # One im2col column is itself too large to fit even a single tile.
+    assert not supported(metadata((1,8000000,3,3)),metadata((1,8000000,3,3)))
     assert not supported(metadata((1,2147483648,1,1)),metadata((1,2147483648,1,1)))
     assert not supported(metadata((0,3,65536,65536)),metadata((4,3,1,1)))
     assert not supported(metadata((0,3,2147483648,1)),metadata((4,3,1,1)))
@@ -153,6 +154,35 @@ def test_native_inference_batched_nchw_and_pointwise(batch, kh, stride, padding,
         np.testing.assert_array_equal(base.numpy(), raw.transpose(0, 1, 3, 2))
         np.testing.assert_array_equal(w.numpy(), weights)
         np.testing.assert_array_equal(bb.numpy(), biases)
+
+
+@pytest.mark.parametrize("batch,channels", [(1,128), (2,64)])
+def test_native_inference_tiles_large_workspace(batch, channels):
+    from jittor.backends.rocm.kernels.convolution import supported
+    height = width = 256
+    multipliers = np.arange(1, batch+1, dtype="float32")
+    bias_values = np.arange(4, dtype="float32")
+    with jt.no_grad():
+        x = jt.ones((batch, channels, height, width)) * jt.array(multipliers).reshape((batch,1,1,1))
+        w = jt.ones((4, channels, 3, 3))
+        b = jt.array(bias_values)
+        assert supported(x,w,b,padding=1)
+        assert select_kernel("conv2d",x,w,b,(1,1),(1,1),(1,1),1) is not None
+        out = jt.nn.conv2d(x,w,b,padding=1)
+        out.sync()
+        assert out.location() == "device" and not out.requires_grad
+        rows = np.full(height,3,dtype="float32")
+        cols = np.full(width,3,dtype="float32")
+        rows[[0,-1]] = 2
+        cols[[0,-1]] = 2
+        valid = rows[:,None]*cols[None,:]
+        expected = multipliers[:,None,None,None]*channels*valid[None,None,:,:]+bias_values[None,:,None,None]
+        np.testing.assert_array_equal(out.numpy(),expected)
+    with jt.flag_scope(no_grad=0):
+        x.start_grad()
+        w.start_grad()
+        assert not supported(x,w,b,padding=1)
+        assert select_kernel("conv2d",x,w,b,(1,1),(1,1),(1,1),1) is None
 
 
 def test_native_inference_zero_batch_and_reused_workspace():
