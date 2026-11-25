@@ -577,7 +577,12 @@ def prepare_video(torch, jt, np, job):
     weight = next(pipe.transformer.parameters())
     cap_workspace = jt is not None and job["mode"] == "reduce-overhead"
     if job["mode"] == "reduce-overhead":
-        pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead")
+        if jt is None:
+            pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead")
+        else:
+            # Step capture can replay the transformer's in-place storage
+            # updates. Module graph replay refuses opaque writes.
+            pipe.transformer.forward = torch.compile(pipe.transformer.forward, mode="reduce-overhead")
     if cap_workspace:
         jt.cudnn.set_max_workspace_ratio(job["decode_workspace_ratio"])
     height, width, frames, steps = 256, 384, 17, 8
@@ -697,7 +702,12 @@ def run_wan(job, directory, torch, jt, np):
     from worker import settled
 
     warmups, index = warm_up(job, call, settled if job.get("torch_mode") == "compiled" else None)
-    replay = model.__dict__.get("_replay") if jt is not None else None
+    replay = None
+    if jt is not None:
+        if job["case"] == VIDEO and job["mode"] == "reduce-overhead":
+            replay = model.forward
+        else:
+            replay = model.__dict__.get("_replay")
     replay_before = dict(replay.stats) if replay is not None else {}
     _, measurements = timed_calls(directory, job, call, index)
     execution = job["mode"]
