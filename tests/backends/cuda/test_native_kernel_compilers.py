@@ -241,3 +241,254 @@ print("native Triton without Torch passed")
 ''', timeout=120, text=True, merge_stderr=True, without_torch_mode=True)
     assert result.returncode == 0, result.stdout
     assert "native Triton without Torch passed" in result.stdout
+
+
+def test_triton_scalar_int_grid():
+    triton = pytest.importorskip("triton")
+    kernel = add_kernel()
+    a = jt.array(np.arange(257, dtype=np.float32))
+    b = jt.full((257,), 1.5, dtype="float32")
+    y_lit = triton_call(kernel, a, b, TensorSpec(a.shape), N=257, BLOCK=128, grid=3)
+    y_fn = triton_call(
+        kernel, a, b, TensorSpec(a.shape),
+        N=257, BLOCK=128, grid=lambda meta: triton.cdiv(meta["N"], meta["BLOCK"]),
+    )
+    expected = np.arange(257, dtype=np.float32) + 1.5
+    np.testing.assert_array_equal(y_lit.numpy(), expected)
+    np.testing.assert_array_equal(y_fn.numpy(), expected)
+
+
+def test_triton_zero_input_generator():
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+
+    @triton.jit
+    def fill_seq(O, offset, N: tl.constexpr, BLOCK: tl.constexpr):
+        i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        tl.store(O + i, i.to(tl.float32) + offset, i < N)
+
+    y = triton_call(fill_seq, TensorSpec((257,), "float32"), 2.5, N=257, BLOCK=128, grid=3)
+    np.testing.assert_array_equal(y.numpy(), np.arange(257, dtype=np.float32) + 2.5)
+
+
+def test_triton_cuda_graph_replay():
+    kernel = add_kernel()
+
+    class Model(jt.nn.Module):
+        def execute(self, x):
+            return triton_call(kernel, x, x, TensorSpec(x.shape), N=257, BLOCK=128, grid=3) + 1.0
+
+    with jt.flag_scope(auto_graph_replay=0, async_execution=1), jt.no_grad():
+        model = Model()
+        replay = jt.graph_replay(model)
+        before = jt.core.graph_launch_count()
+        for value in (1.0, 3.0, 5.0, 7.0, 9.0):
+            x = jt.full((257,), value, dtype="float32")
+            out = replay(x)
+            np.testing.assert_array_equal(out.numpy(), np.full(257, 2.0 * value + 1.0, dtype=np.float32))
+        assert jt.core.graph_launch_count() > before
+
+
+def test_triton_capture_step_training():
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+
+    @triton.jit
+    def mul_add_fwd(X, W, Y, N: tl.constexpr, BLOCK: tl.constexpr):
+        i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        m = i < N
+        tl.store(Y + i, tl.load(X + i, m, 0.0) * tl.load(W + i, m, 0.0), m)
+
+    @triton.jit
+    def mul_add_bwd(X, W, DY, DX, DW, N: tl.constexpr, BLOCK: tl.constexpr):
+        i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        m = i < N
+        dy = tl.load(DY + i, m, 0.0)
+        tl.store(DX + i, dy * tl.load(W + i, m, 0.0), m)
+        tl.store(DW + i, dy * tl.load(X + i, m, 0.0), m)
+
+    class TritonMul(jt.Function):
+        def execute(self, x, w):
+            self.x, self.w = x, w
+            return triton_call(
+                mul_add_fwd, x, w, TensorSpec(x.shape, "float32"),
+                N=256, BLOCK=128, grid=2,
+            )
+
+        def grad(self, dy):
+            return triton_call(
+                mul_add_bwd, self.x, self.w, dy,
+                TensorSpec(self.x.shape, "float32"),
+                TensorSpec(self.w.shape, "float32"),
+                N=256, BLOCK=128, grid=2,
+            )
+
+    init_w = np.linspace(0.5, 1.5, 256, dtype=np.float32)
+    w_cap = jt.array(init_w.copy())
+    w_ref = init_w.copy()
+    lr = 0.05
+    inputs = [np.full(256, float(i + 1) * 0.25, dtype=np.float32) for i in range(6)]
+    jt_inputs = [jt.array(arr) for arr in inputs]
+    jt.sync([w_cap, *jt_inputs], True, False)
+
+    def train_step(x):
+        y = TritonMul.apply(x, w_cap)
+        loss = (y * y).sum()
+        dw = jt.grad(loss, w_cap)
+        w_cap.update(w_cap - lr * dw)
+        return loss
+
+    captured = jt.capture_step(train_step)
+    before = jt.core.graph_launch_count()
+    try:
+        for arr, x in zip(inputs, jt_inputs):
+            loss = captured(x)
+            ref_y = arr * w_ref
+            ref_loss = float(np.sum(ref_y * ref_y))
+            ref_dw = 2.0 * ref_y * arr
+            w_ref = w_ref - lr * ref_dw
+            np.testing.assert_allclose(loss.numpy(), ref_loss, rtol=1e-4, atol=1e-4)
+        assert jt.core.graph_launch_count() > before
+    finally:
+        captured.invalidate()
+    np.testing.assert_allclose(w_cap.numpy(), w_ref, rtol=1e-4, atol=1e-4)
+
+
+def test_triton_autotune_preserves_inputs_and_matches_reference():
+    triton = pytest.importorskip("triton")
+    import triton.language as tl
+
+    @triton.autotune(
+        configs=[
+            triton.Config({"BLOCK": 64}, num_warps=2),
+            triton.Config({"BLOCK": 128}, num_warps=4),
+        ],
+        key=["N"],
+    )
+    @triton.jit
+    def tuned_add_and_touch(X, Y, O, N, BLOCK: tl.constexpr):
+        i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        m = i < N
+        x = tl.load(X + i, m, 0.0)
+        y = tl.load(Y + i, m, 0.0)
+        # Even if a buggy kernel wrote into X, tuning runs on clones; here we
+        # verify clean outputs and unmutated inputs.
+        tl.store(O + i, x * 2.0 + y, m)
+
+    rng = np.random.default_rng(123)
+    x_np = rng.normal(size=(513,)).astype(np.float32)
+    y_np = rng.normal(size=(513,)).astype(np.float32)
+    x = jt.array(x_np)
+    y = jt.array(y_np)
+    jt.sync([x, y], True, False)
+
+    out1 = triton_call(
+        tuned_add_and_touch, x, y, TensorSpec(x.shape, "float32"), 513,
+        grid=lambda meta: triton.cdiv(meta["N"], meta["BLOCK"]),
+    )
+    assert tuned_add_and_touch.best_config is not None
+    out2 = triton_call(
+        tuned_add_and_touch, x, y, TensorSpec(x.shape, "float32"), 513,
+        grid=lambda meta: triton.cdiv(meta["N"], meta["BLOCK"]),
+    )
+    expected = x_np * 2.0 + y_np
+    np.testing.assert_allclose(out1.numpy(), expected, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(out2.numpy(), expected, rtol=1e-6, atol=1e-6)
+    np.testing.assert_array_equal(x.numpy(), x_np)
+    np.testing.assert_array_equal(y.numpy(), y_np)
+
+    # Prove tuning benchmarks run on isolated clones: a kernel that mutates a
+    # BoundOutput must apply only the single real launch, not the tuning trials.
+    from jittor.kernels import BoundOutput
+
+    @triton.autotune(
+        configs=[
+            triton.Config({"BLOCK": 64}, num_warps=2),
+            triton.Config({"BLOCK": 128}, num_warps=4),
+        ],
+        key=["N"],
+    )
+    @triton.jit
+    def inc_bound(B, N, BLOCK: tl.constexpr):
+        i = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        m = i < N
+        tl.store(B + i, tl.load(B + i, m, 0.0) + 1.0, m)
+
+    with jt.no_grad():
+        buf = jt.zeros((256,), dtype="float32")
+        buf.sync(True, False)
+        out_b = triton_call(
+            inc_bound, BoundOutput(buf), 256,
+            grid=lambda meta: triton.cdiv(meta["N"], meta["BLOCK"]),
+        )
+        out_b.sync(True, False)
+        # Exactly +1.0 from the single real launch (0 mutations from tuning!).
+        np.testing.assert_array_equal(buf.numpy(), np.ones(256, dtype=np.float32))
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float16", "bfloat16"])
+def test_tilelang_dtypes(dtype):
+    tilelang = pytest.importorskip("tilelang")
+    import tilelang.language as T
+
+    @T.prim_func
+    def add_typed(
+        A: T.Tensor((256,), dtype),
+        B: T.Tensor((256,), dtype),
+        C: T.Tensor((256,), dtype),
+    ):
+        with T.Kernel(2, threads=128) as block:
+            for i in T.Parallel(128):
+                idx = block * 128 + i
+                C[idx] = A[idx] + B[idx]
+
+    kernel = tilelang.compile(add_typed, out_idx=[], target="cuda", execution_backend="tvm_ffi")
+    data = np.linspace(-2.0, 2.0, 256, dtype=np.float32)
+    a = jt.array(data).cast(dtype)
+    b = jt.full((256,), 0.5, dtype=dtype)
+    c = tilelang_call(kernel, a, b, TensorSpec((256,), dtype))
+    np.testing.assert_allclose(c.float32().numpy(), data + 0.5, atol=0.04, rtol=0.02)
+
+
+def test_tilelang_zero_input_and_cuda_graph_replay():
+    tilelang = pytest.importorskip("tilelang")
+    import tilelang.language as T
+    from jittor.kernels import BoundOutput
+
+    @T.prim_func
+    def fill_const(C: T.Tensor((256,), "float32")):
+        with T.Kernel(2, threads=128) as block:
+            for i in T.Parallel(128):
+                idx = block * 128 + i
+                C[idx] = T.cast(idx, "float32") + 1.5
+
+    fill_k = tilelang.compile(fill_const, out_idx=[], target="cuda", execution_backend="tvm_ffi")
+    filled = tilelang_call(fill_k, TensorSpec((256,), "float32"))
+    np.testing.assert_array_equal(filled.numpy(), np.arange(256, dtype=np.float32) + 1.5)
+
+    add_k = make_tilelang_add(257)
+
+    class Model(jt.nn.Module):
+        def execute(self, x):
+            return tilelang_call(add_k, x, x, TensorSpec((257,), "float32")) + 2.0
+
+    with jt.flag_scope(auto_graph_replay=0, async_execution=1), jt.no_grad():
+        model = Model()
+        replay = jt.graph_replay(model)
+        before = jt.core.graph_launch_count()
+        for value in (1.0, 3.0, 5.0, 7.0):
+            x = jt.full((257,), value, dtype="float32")
+            out = replay(x)
+            np.testing.assert_array_equal(out.numpy(), np.full(257, 2.0 * value + 2.0, dtype=np.float32))
+        assert jt.core.graph_launch_count() > before
+
+        # BoundOutput in inference mode preserves storage address and writes in place.
+        buf = jt.zeros((257,), dtype="float32")
+        src = jt.full((257,), 4.0, dtype="float32")
+        jt.sync([buf, src], True, False)
+        ptr = buf._mem_ptr_now
+        out = tilelang_call(add_k, src, src, BoundOutput(buf))
+        out.sync(True, False)
+        assert out._mem_ptr_now == ptr
+        assert buf._mem_ptr_now == ptr
+        np.testing.assert_array_equal(buf.numpy(), np.full(257, 8.0, dtype=np.float32))

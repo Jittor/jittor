@@ -86,3 +86,54 @@ def test_tilelang_rejects_non_cuda_target_before_export():
                              target=SimpleNamespace(kind=SimpleNamespace(name="llvm")))
     with pytest.raises(ValueError, match="CUDA compilation target"):
         executable_for(kernel)
+
+
+def test_exception_type_and_message_preserved():
+    def fail(ctx):
+        raise ValueError("BOOM exact sentinel 42")
+
+    with jt.flag_scope(use_cuda=0):
+        x = jt.ones((4,))
+        with pytest.raises(RuntimeError, match="ValueError: BOOM exact sentinel 42"):
+            call(fail, x, outputs=TensorSpec(x.shape), backend="cpu").numpy()
+        # A subsequent launch must see a clean Python error state.
+        y = call(add_one, x, outputs=TensorSpec(x.shape), backend="cpu")
+        np.testing.assert_array_equal(y.numpy(), np.full(4, 2.0, dtype=np.float32))
+
+
+def test_zero_input_external_kernel():
+    def fill_arange(ctx):
+        assert len(ctx.inputs) == 0
+        assert len(ctx.outputs) == 1
+        assert ctx.device == ("cpu", 0)
+        np.copyto(writable(ctx.outputs[0]), np.arange(8, dtype=np.float32) + 3.0)
+
+    with jt.flag_scope(use_cuda=0):
+        y = call(fill_arange, outputs=TensorSpec((8,), "float32"), backend="cpu")
+        np.testing.assert_array_equal(y.numpy(), np.arange(8, dtype=np.float32) + 3.0)
+
+
+def test_lazy_dlpack_export_and_scope_expiry():
+    leaked = []
+
+    def ptr_only(ctx):
+        leaked.append(ctx.inputs[0])
+        src = np.ctypeslib.as_array(
+            (ctypes.c_float * 4).from_address(ctx.inputs[0].data_ptr())
+        )
+        np.copyto(writable(ctx.outputs[0]), src * 3.0)
+
+    def consume_twice(ctx):
+        _ = ctx.inputs[0].__dlpack__()
+        ctx.inputs[0].__dlpack__()
+
+    with jt.flag_scope(use_cuda=0):
+        x = jt.array(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+        y = call(ptr_only, x, outputs=TensorSpec((4,), "float32"), backend="cpu")
+        np.testing.assert_array_equal(y.numpy(), np.array([3.0, 6.0, 9.0, 12.0], dtype=np.float32))
+        # Exporting DLPack from a retained _Buffer after callback exit must fail cleanly.
+        with pytest.raises(RuntimeError, match="after callback exit"):
+            leaked[0].__dlpack__()
+        # Consuming DLPack twice inside the callback must raise BufferError.
+        with pytest.raises(RuntimeError, match="BufferError: kernel buffer DLPack capsule has already been consumed"):
+            call(consume_twice, x, outputs=TensorSpec((4,), "float32"), backend="cpu").numpy()
