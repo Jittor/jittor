@@ -83,4 +83,7 @@ void ReshapeOp::infer_shape() {
     }
     y->share_with(x);
 }
+
+JT_DEFINE_NODE_POOL(ReshapeOp)
+
 } // jittor

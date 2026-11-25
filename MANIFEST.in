@@ -720,6 +720,7 @@ include src/core/memory_profiler.cc
 include src/core/memory_profiler.h
 include src/core/node.cc
 include src/core/node.h
+include src/core/node_pool.h
 include src/core/numpy_func.h
 include src/core/op.cc
 include src/core/op.h
@@ -788,6 +789,8 @@ include src/ops/composite/contiguous_op.cc
 include src/ops/composite/contiguous_op.h
 include src/ops/composite/copy_op.cc
 include src/ops/composite/copy_op.h
+include src/ops/composite/cuda_launch_op.cc
+include src/ops/composite/cuda_launch_op.h
 include src/ops/composite/device_copy_op.cc
 include src/ops/composite/device_copy_op.h
 include src/ops/composite/empty_op.cc
@@ -840,6 +843,8 @@ include src/ops/composite/tape_op.cc
 include src/ops/composite/tape_op.h
 include src/ops/composite/transpose_op.cc
 include src/ops/composite/transpose_op.h
+include src/ops/composite/tvm_ffi_launch_op.cc
+include src/ops/composite/tvm_ffi_launch_op.h
 include src/ops/composite/where_op.cc
 include src/ops/composite/where_op.h
 include src/ops/composite/write_back_op.cc

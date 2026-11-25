@@ -5,7 +5,10 @@ import weakref as _weakref
 import jittor as jt
 import numpy as np
 from .context import get_install_context
-from .optimizer_adam import _AdamStep, _AdamSteps, _adam_state_shape_changes
+from .optimizer_adam import (
+    _AdamStep, _AdamSteps, _adam_state_shape_changes,
+    _can_fast_clear_grads, _fast_clear_param_grads,
+)
 from ..diagnostics import EXPECTED, swallowed
 from typing import Any, Dict, List
 from .. import fsdp_hooks as _fsdp_hooks
@@ -20,8 +23,6 @@ from jittor.optim.algorithms.sgd import (
 )
 from .tensor_state import get_tensor_state
 from .installers.tensor.autograd_api import _optimizer_maybe_has_fsdp_params
-from jittor.optim.algorithms.adam import adam_update
-
 
 DeviceDict = dict
 
@@ -467,27 +468,20 @@ def _load_state_dict_torch(self, state_dict):
 def _zero_grad_compat(self, set_to_none=True):
     _context = get_install_context(jt)
     _orig_zero = _context.state["optimizer_native_api"]['_orig_zero']
+    _canonical_types = _can_fast_clear_grads(self, _context.target_namespace) if set_to_none else ()
     for _pg in getattr(self, "param_groups", []):
         _params = list(_pg.get("params", []))
         _new_grads: List[Any] = []
         if set_to_none:
-            _pg.pop("grads", None)
+            if "grads" in _pg:
+                _pg["grads"] = [None] * len(_params)
         else:
             _old_grads = list(_pg.get("grads") or [])
-            _new_grads = []
             for _i, _p in enumerate(_params):
                 _old = _old_grads[_i] if _i < len(_old_grads) else None
-                _published = (
-                    getattr(_p, "_torch_grad", None)
-                    if isinstance(_p, jt.Var) else None
-                )
-                if isinstance(_p, jt.Var) and (
-                        isinstance(_old, jt.Var)
-                        or isinstance(_published, jt.Var)):
-                    _existing = (
-                        _old if isinstance(_old, jt.Var)
-                        else _published
-                    )
+                _published = getattr(_p, "_torch_grad", None) if isinstance(_p, jt.Var) else None
+                if isinstance(_p, jt.Var) and (isinstance(_old, jt.Var) or isinstance(_published, jt.Var)):
+                    _existing = _old if isinstance(_old, jt.Var) else _published
                     _existing.update(jt.zeros_like(_existing))
                     _existing.stop_grad().stop_fuse()
                     _new_grads.append(_existing)
@@ -497,6 +491,9 @@ def _zero_grad_compat(self, set_to_none=True):
                 _pg["grads"] = _new_grads
             else:
                 _pg.pop("grads", None)
+        if _canonical_types:
+            _fast_clear_param_grads(_params, _canonical_types)
+            continue
         for _i, _p in enumerate(_params):
             if not isinstance(_p, jt.Var):
                 continue
@@ -534,7 +531,7 @@ def _optimizer_has_ready_grads(opt):
         if not _grads:
             continue
         for _p, _g in zip(_pg.get("params", []), _grads):
-            if isinstance(_p, jt.Var) and isinstance(_g, jt.Var) and list(_p.shape) == list(_g.shape):
+            if isinstance(_p, jt.Var) and isinstance(_g, jt.Var) and _p.shape == _g.shape:
                 return True
     return False
 
@@ -545,7 +542,7 @@ def _advance_ready_param_steps(opt):
         grads = pg.get("grads") or []
         for i, (param, grad) in enumerate(zip(pg.get("params", []), grads)):
             if isinstance(param, jt.Var) and isinstance(grad, jt.Var) \
-                    and list(param.shape) == list(grad.shape):
+                    and param.shape == grad.shape:
                 steps[i] = int(steps[i]) + 1
 
 

@@ -5,12 +5,14 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include "core/node_pool.h"
 #include "core/op.h"
 
 
 namespace jittor {
 
-struct BroadcastToOp : Op {
+struct BroadcastToOp final : Op {
+    JT_DECLARE_NODE_POOL()
     static constexpr bool accepts_storage_strides = true;
     // An expand is normally a storage descriptor, but a one-element source
     // keeps the computed form so the constant can fuse into its consumer;

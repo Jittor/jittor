@@ -67,14 +67,13 @@ void mark_failed_batch(const ExecPlan& plan) {
 }
 
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan) {
-    vector<VarPtr> planning_hold;
-    planning_hold.reserve(vars.size());
-    for (Var* v : vars) planning_hold.emplace_back(v);
+    VarPtrBatch planning_hold;
+    planning_hold.own_all(vars);
     build_exec_plan(vars, weak_sync, plan, planning_hold);
 }
 
 void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
-                     vector<VarPtr>& planning_hold) {
+                     VarPtrBatch& planning_hold) {
     plan.clear();
     // The BFS and graph optimizers retain raw Node pointers. Compile workers
     // from the preceding asynchronous batch can finish and propagate
@@ -86,17 +85,33 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
     std::lock_guard<GraphMutationMutex> graph_guard(graph_mutation_mutex());
     auto& scratch = plan.scratch;
     plan.backend = execution_target_backend();
-    // A graph optimizer can make the next traversal reach the same Vars
-    // again. One liveness owner per distinct Var is sufficient; duplicate
-    // VarPtrs only make their eventual release propagate a large cascade at
-    // once while the final batch hold is being installed.
-    unordered_set<Var*> planning_held;
-    planning_held.reserve(planning_hold.size() * 2 + 1);
-    for (auto& held : planning_hold)
-        if (held.ptr) planning_held.insert(held.ptr);
+    // A graph optimizer can make a second traversal reach the same Vars again.
+    // On the first pass (the common case when no graph optimizer triggers),
+    // `batch_epoch->marked(v)` already guarantees each BFS-discovered Var is
+    // visited once and is disjoint from the already-held `vars` roots, so no
+    // hash set is needed at all. Only if `graph_optimize()` triggers a second
+    // pass do we populate the reusable `scratch.planning_held` index.
+    const bool roots_preheld = !planning_hold.empty();
+    bool use_held_set = false;
+    vector<Var*>& new_held = scratch.new_planning_vars;
     auto hold_for_planning = [&](Var* value) {
-        if (planning_held.insert(value).second)
-            planning_hold.emplace_back(value);
+        if (!use_held_set) {
+            new_held.push_back(value);
+            return;
+        }
+        NodeIndex& held = scratch.planning_held;
+        if (held.has(value)) return;
+        if (PREDICT_BRANCH_NOT_TAKEN(held.count >= held.limit)) {
+            held.reset(std::max(held.slots.size() * 2,
+                                (planning_hold.size() + new_held.size()) * 2 + 16));
+            for (Var* existing : planning_hold.vars)
+                if (existing) held[existing] = 1;
+            for (Var* existing : new_held)
+                if (existing) held[existing] = 1;
+            if (held.has(value)) return;
+        }
+        held[value] = 1;
+        new_held.push_back(value);
     };
     // == phase 2: collect the batch ==
     // bfs find all ops need to run
@@ -110,6 +125,7 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
         op_num = 0;
         start_var_num = 0;
         bfs_q.clear();
+        new_held.clear();
         // get all nodes need to be executed
         int need_opt = 0;
         batch_epoch.reset(new TraversalEpoch("Executor::run_sync"));
@@ -118,12 +134,10 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
             if (!v->is_finished() && !graph_capture_host_leaf(v)
                     && !step_readout_ready(v) && !batch_epoch->marked(v)) {
                 batch_epoch->mark(v);
-                // Take the liveness hold when the raw pointer enters the
-                // traversal, not after the whole BFS. An asynchronous compile
-                // worker can finish while the BFS is still walking and free
-                // an intermediate before a post-pass gets a chance to retain
-                // it. Holding the output Var also retains its producer Op.
-                hold_for_planning(v);
+                // Record the reached Vars while graph_mutation_mutex() is held
+                // and batch-own all of them right after this BFS pass, before
+                // any graph optimizer runs or the lock is released.
+                if (use_held_set || !roots_preheld) hold_for_planning(v);
                 start_var_num++;
                 bfs_q.push_back(v);
                 max_id = std::max(max_id, v->id);
@@ -167,7 +181,15 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
                 }
             }
         }
+        planning_hold.own_all_locked(new_held);
+        new_held.clear();
         if (!need_opt || gopt_disable) break;
+        if (!use_held_set) {
+            use_held_set = true;
+            scratch.planning_held.reset(planning_hold.size() * 2 + 16);
+            for (Var* existing : planning_hold.vars)
+                if (existing) scratch.planning_held[existing] = 1;
+        }
         // Keep the collected pointers valid throughout the optimization
         // pass. A rewrite may retire another node; leave its allocation
         // alone until the traversal marks have been restored.
@@ -230,6 +252,11 @@ void build_exec_plan(vector<Var*>& vars, bool weak_sync, ExecPlan& plan,
     int var_num = all_vars.size();
     plan.op_num = op_num;
     plan.start_var_num = start_var_num;
+
+    if (op_num == 0) {
+        plan.var_fused.assign(var_num, 1);
+        return;
+    }
 
     // father: father of union-find set
     vector<int>& father = scratch.father;

@@ -861,6 +861,6 @@ void BinaryOp::jit_prepare(JK& jk) {
     if (ys) jk << "«YSMASK=" << JK::hex(y->stride_pattern());
 }
 
-
+JT_DEFINE_NODE_POOL(BinaryOp)
 
 } // jittor

@@ -154,7 +154,8 @@ struct VarHolder {
     void clear_collectable_view_base();
     // @pyjt(_view_base_object)
     PyObject* view_base_object();
-    list<VarHolder*>::iterator iter;
+    HolderLink holder_link;
+    HolderLink pending_link;
     // Set when this holder is a view of another one; see VarView.
     VarView* view = nullptr;
     // Head of the list of views onto this holder, so that destruction can tell
@@ -184,6 +185,10 @@ struct VarHolder {
 
     inline void release_holder() {var->holder = nullptr;}
     inline void own_holder() {var->holder = this;}
+    inline void track_pending() {
+        if (var && !var->is_finished() && holder_link.linked() && !pending_link.linked())
+            runtime_holder_state().mark_pending(holder_link, pending_link, this);
+    }
 
     /**
      * assign the data from another Var.
@@ -222,6 +227,7 @@ struct VarHolder {
         }
         std::swap(var, v->var);
         own_holder(); v->own_holder();
+        track_pending(); v->track_pending();
         return this; 
     };
 

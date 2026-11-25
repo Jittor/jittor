@@ -334,13 +334,13 @@ static Var* aliased_input(Var* v) {
     return nullptr;
 }
 
-static bool may_release_kept(Var* v, const std::unordered_set<Var*>& pinned) {
+static bool may_release_kept(Var* v, const std::unordered_set<Var*>* pinned) {
     if (!v->flag(VarFlags::_kept) || v->is_finished() || !v->mem_ptr) return false;
     if (!rematerialization_allows_release(v)) return false;
     if (v->flag(VarFlags::_host_resident)) return false;
     Op* producer = v->input();
     if (!producer) return false;
-    if (pinned.count(v)) return false;
+    if (pinned && pinned->count(v)) return false;
     // A constant built inside the graph (`jt.array`) has one copy of its data,
     // which its first run moves into the var: freed, a re-run has nothing to
     // fill the fresh buffer with.
@@ -350,7 +350,7 @@ static bool may_release_kept(Var* v, const std::unordered_set<Var*>& pinned) {
 static void release_kept_storage(Var* v, const std::unordered_set<Var*>& released,
                                  const std::unordered_set<Var*>& pinned,
                                  std::unordered_set<Var*>& waiting) {
-    if (!may_release_kept(v, pinned)) return;
+    if (!may_release_kept(v, &pinned)) return;
     if (!v->share_next) {
         Var* view_of = aliased_input(v);
         size_t offset = view_of ? v->storage_offset_bytes - view_of->storage_offset_bytes : 0;
@@ -369,7 +369,7 @@ static void release_kept_storage(Var* v, const std::unordered_set<Var*>& release
     int roots = 0;
     for (Var* m : group) {
         if (!waiting.count(m)) return;
-        if (!may_release_kept(m, pinned)) return;
+        if (!may_release_kept(m, &pinned)) return;
         Var* base = aliased_input(m);
         if (!base) { ++roots; continue; }
         rebinds.push_back({m, base, m->storage_offset_bytes - base->storage_offset_bytes});
@@ -491,7 +491,7 @@ static bool releases_pending(Op* op, FusedOp& fused, const vector<Var*>& last_us
 // liveness looks spent: the output of a `jt.Function` -- a loss through the
 // full-reduce fast path -- reads that way and is not.
 static bool dies_after(Var* v, FusedOp& fused, const vector<Var*>& last_used,
-                       const std::unordered_set<Var*>& kept_pinned,
+                       const std::unordered_set<Var*>* kept_pinned,
                        unordered_map<Op*, int>& memo) {
     bool last_use = std::find(last_used.begin(), last_used.end(), v) != last_used.end();
     if (keep_graph == 2) return last_use && may_release_kept(v, kept_pinned);
@@ -584,7 +584,7 @@ static bool shares_only_with_its_tape_source(Var* v) {
 }
 
 static void reuse_dying_inputs_of(FusedOp& fused, const vector<Var*>& last_used,
-                                  const std::unordered_set<Var*>& kept_pinned,
+                                  const std::unordered_set<Var*>* kept_pinned,
                                   Allocator* allocator, vector<Var*>& taken) {
     unordered_map<Op*, int> memo;
     for (auto& out_info : fused.vars) {
@@ -630,7 +630,7 @@ DEFINE_FLAG(int, stream_dying_inputs, 1 << 20, "Bytes from which a CUDA kernel l
 // its lines still cached. As a mask over `fused.vars`; see
 // FusedOp::streamed_inputs.
 static uint64 dying_stream_mask(FusedOp& fused, const vector<Var*>& last_used,
-                                const std::unordered_set<Var*>& kept_pinned) {
+                                const std::unordered_set<Var*>* kept_pinned) {
     int64 widest = 0;
     for (auto& info : fused.vars) widest = std::max(widest, info.var->num);
     uint64 mask = 0;
@@ -742,8 +742,7 @@ struct DeferredGraphWork {
         while (front < items.size()) {
             Item& item = items[front++];
             if (item.released_segment >= 0) {
-                for (int index : plan.release_after[item.released_segment])
-                    (*plan.batch_hold)[index].free_liveness();
+                plan.batch_hold->release_indices_locked(plan.release_after[item.released_segment]);
             } else if (item.op) {
                 finish_unfused(item.op, outputs_bk);
             } else {
@@ -813,6 +812,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // running
     SetupFreeBuffer setup_free_buffer;
     vector<Var*> outputs_bk;
+    vector<Var*> fused_outputs_buf;
+    vector<Var*> last_used_buf;
     #ifdef HAS_ACCELERATOR
     int sync_times = 0;
     #endif
@@ -821,23 +822,27 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // asked for (see `schedule_hold_release`) -- and what must keep its memory
     // because a var outside that set views it. Only `keep_graph == 2` asks;
     // see `release_kept_storage`.
-    std::unordered_set<Var*> kept_released, kept_pinned, kept_waiting;
-    if (keep_graph == 2 && plan.batch_hold) {
+    struct KeptStorageState {
+        std::unordered_set<Var*> released, pinned, waiting;
+    };
+    unique_ptr<KeptStorageState> kept_state;
+    if (PREDICT_BRANCH_NOT_TAKEN(keep_graph == 2 && plan.batch_hold)) {
+        kept_state.reset(new KeptStorageState());
         for (auto& segment : plan.release_after)
             for (int index : segment)
-                kept_released.insert(plan.all_vars[index]);
+                kept_state->released.insert(plan.all_vars[index]);
         for (Var* v : plan.all_vars) {
-            if (kept_released.count(v)) continue;
+            if (kept_state->released.count(v)) continue;
             while (Var* base = aliased_input(v)) {
                 v = base;
-                if (!kept_pinned.insert(v).second) break;
+                if (!kept_state->pinned.insert(v).second) break;
             }
         }
     }
     vector<Var*> reused_inputs;
     // The key each operator was prepared with, for the failure report below:
-    // copied because running the operator may reuse the shared key buffer.
-    // One buffer for the batch, so the copy is not an allocation per op.
+    // copied only when V_ON(1), because check_op_async_error only prints the
+    // generated source path when V_ON(1).
     string prepared_jit_key;
     const bool on_worker = on_async_worker();
     // On the worker the loop runs without the graph lock; see
@@ -853,9 +858,18 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         // dropped with the hold itself.
         if (rid && plan.batch_hold) {
             if (on_worker) deferred.release(rid - 1);
-            else for (int index : plan.release_after[rid - 1]) {
-                if (keep_graph == 2) release_kept_storage(plan.all_vars[index], kept_released, kept_pinned, kept_waiting);
-                (*plan.batch_hold)[index].free_liveness();
+            else {
+                const auto& rel = plan.release_after[rid - 1];
+                if (!rel.empty()) {
+                    if (PREDICT_BRANCH_NOT_TAKEN((bool)kept_state)) {
+                        for (int index : rel) {
+                            release_kept_storage(plan.all_vars[index], kept_state->released, kept_state->pinned, kept_state->waiting);
+                            plan.batch_hold->release_index(index);
+                        }
+                    } else {
+                        plan.batch_hold->release_indices(rel);
+                    }
+                }
             }
         }
         // Every input a segment took over has been released by now.
@@ -870,7 +884,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         int root = queue[rid];
         Op* op = ops[root];
         bool is_fused_op = false;
-        prepared_jit_key.clear();
+        if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1))) prepared_jit_key.clear();
         try {
         if (op->type() != OpType::other) {
             op = &fused_op;
@@ -886,9 +900,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         if (keep_graph && constants_already_placed(op, is_fused_op, fused_op)) {
             for (Var* var : op->outputs()) rematerialization_mark_kept(var);
             if (is_fused_op) {
-                vector<Var*> outputs;
-                for (Var* var : op->outputs()) outputs.push_back(var);
-                finish_fused_outputs(outputs);
+                fused_outputs_buf.clear();
+                for (Var* var : op->outputs()) fused_outputs_buf.push_back(var);
+                finish_fused_outputs(fused_outputs_buf);
             } else finish_unfused(op, outputs_bk);
             continue;
         }
@@ -917,16 +931,31 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         trace_op.named(op, is_fused_op,
                        requested_backend == BackendId::Cpu ? -1 : execution_device);
-        LaunchRecord launch;
-        launch.origin = op->launch_origin;
-        launch.op_id = is_fused_op ? 0 : op->type_id();
-        std::strncpy(launch.name, is_fused_op ? "fused_op" : op->name(), sizeof(launch.name)-1);
-        if (is_fused_op) {
-            launch.fused_count = fused_op.ops.size();
-            for (size_t member=0; member<std::min(fused_op.ops.size(), size_t(8)); ++member)
-                launch.fused_ids[member] = fused_op.ops[member]->type_id();
+        const bool need_launch_record = execution_backend != BackendId::Cpu
+            || requested_backend != BackendId::Cpu
+            || op->flag(OpFlags::_manual_device);
+        LaunchRecord launch(LaunchRecord::uninitialized);
+        if (need_launch_record) {
+            launch.origin = op->launch_origin;
+            if (is_fused_op) {
+                launch.op_id = 0;
+                std::memcpy(launch.name, "fused_op", 9);
+                const size_t fcount = fused_op.ops.size();
+                launch.fused_count = fcount;
+                const size_t fcap = fcount < 8 ? fcount : 8;
+                for (size_t member = 0; member < fcap; ++member)
+                    launch.fused_ids[member] = fused_op.ops[member]->type_id();
+            } else {
+                launch.op_id = op->type_id();
+                launch.fused_count = 0;
+                const char* oname = op->name();
+                size_t nlen = 0;
+                while (nlen < sizeof(launch.name) - 1 && oname[nlen]) ++nlen;
+                std::memcpy(launch.name, oname, nlen);
+                launch.name[nlen] = '\0';
+            }
         }
-        LaunchOperationScope launch_scope(launch);
+        LaunchOperationScope launch_scope(need_launch_record ? &launch : nullptr);
         Device allocation_target{execution_backend, execution_device};
         #ifdef HAS_ACCELERATOR
         // A genuine accelerator fallback may execute a CPU kernel against
@@ -984,13 +1013,14 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 if (!holding) reuse = stream = false;
             }
             if (reuse || stream) {
-                vector<Var*> last_used;
-                for (int index : plan.release_after[rid]) last_used.push_back(plan.all_vars[index]);
+                last_used_buf.clear();
+                for (int index : plan.release_after[rid]) last_used_buf.push_back(plan.all_vars[index]);
                 // What running the segment would flag anyway (see below), so
                 // that `_needed_by_backward` is final when it is read.
                 propergate_needed_flags(fused_op);
-                if (stream) fused_op.streamed_inputs = dying_stream_mask(fused_op, last_used, kept_pinned);
-                if (reuse) reuse_dying_inputs_of(fused_op, last_used, kept_pinned, allocator, reused_inputs);
+                const std::unordered_set<Var*>* pinned_ptr = kept_state ? &kept_state->pinned : nullptr;
+                if (stream) fused_op.streamed_inputs = dying_stream_mask(fused_op, last_used_buf, pinned_ptr);
+                if (reuse) reuse_dying_inputs_of(fused_op, last_used_buf, pinned_ptr, allocator, reused_inputs);
             }
             if (holding) graph_mutation_mutex().unlock();
             for (auto* var : op->outputs()) {
@@ -1005,7 +1035,8 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
         op->prepare_execution_on(jkl, execution_backend);
-        prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
+        if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1)))
+            prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
         bool is_cuda = execution_backend != BackendId::Cpu;
         if (PREDICT_BRANCH_NOT_TAKEN(graph_capture_recording) && !is_cuda
                 && !graph_capture_launches_nothing(op))
@@ -1147,9 +1178,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
                 for (Op* member : fused_op.ops)
                     for (Var* var : member->outputs()) rematerialization_mark_kept(var);
             }
-            vector<Var*> outputs;
-            for (Var* var : op->outputs()) outputs.push_back(var);
-            finish_fused_outputs(outputs);
+            fused_outputs_buf.clear();
+            for (Var* var : op->outputs()) fused_outputs_buf.push_back(var);
+            finish_fused_outputs(fused_outputs_buf);
             continue;
         }
         // Leave everything alive and re-runnable; see the `keep_graph` flag
@@ -1171,12 +1202,14 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             // do_prepare may itself be the throwing operation. Preserve its
             // first exception and whatever key it produced instead of running
             // the failing, potentially stateful preparation a second time.
-            if (prepared_jit_key.empty()) prepared_jit_key = jkl.to_string();
             string jit_src_path;
-            if (prepared_jit_key.size()) {
-                auto candidate = Op::get_filename_from_jit_key(
-                    prepared_jit_key, ".cc");
-                if (jit_compiler::file_exist(candidate)) jit_src_path = candidate;
+            if (V_ON(1)) {
+                if (prepared_jit_key.empty()) prepared_jit_key = jkl.to_string();
+                if (prepared_jit_key.size()) {
+                    auto candidate = Op::get_filename_from_jit_key(
+                        prepared_jit_key, ".cc");
+                    if (jit_compiler::file_exist(candidate)) jit_src_path = candidate;
+                }
             }
             check_op_async_error(op, is_fused_op, e, jit_src_path);
         }
@@ -1187,9 +1220,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     }
     // The last segment's vars are otherwise released with the hold, which
     // frees nothing for a kept var: its node is still alive.
-    if (keep_graph == 2 && plan.batch_hold && queue.size())
+    if (kept_state && queue.size())
         for (int index : plan.release_after[queue.size() - 1])
-            release_kept_storage(plan.all_vars[index], kept_released, kept_pinned, kept_waiting);
+            release_kept_storage(plan.all_vars[index], kept_state->released, kept_state->pinned, kept_state->waiting);
     // == phase 7: finish the batch ==
     LOGvv << "All" << plan.op_num << "ops finished, return vars:" << vars;
     // a zero-sized var has no memory to point at (see the size==0 branch in

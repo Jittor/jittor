@@ -110,4 +110,29 @@ JIT_TEST(jit_cache_map_find_does_not_insert) {
     ASSERTop(*table.find("something"),==,7);
 }
 
+JIT_TEST(jit_cache_map_zero_copy_find) {
+    jit_cache_map<int> table;
+    table.capacity = 16;
+    const char buf[] = "prefix_key42_suffix";
+    ASSERT(!table.find(buf + 7, 5));
+    ASSERT(!table.find("", 0));
+    table["key42"] = 42;
+    table[""] = 99;
+    int* hit = table.find(buf + 7, 5);
+    ASSERT(hit && *hit == 42);
+    ASSERT(!table.find(buf + 7, 4));
+    ASSERT(!table.find(buf + 7, 6));
+    int* empty_hit = table.find("", 0);
+    ASSERT(empty_hit && *empty_hit == 99);
+    // Eviction with zero-copy lookups keeps surviving keys reachable.
+    for (int i = 0; i < 64; ++i)
+        table[short_key(i)] = i;
+    ASSERTop(table.size(),==,(size_t)16);
+    for (int i = 48; i < 64; ++i) {
+        string k = short_key(i);
+        int* p = table.find(k.data(), k.size());
+        ASSERT(p && *p == i);
+    }
+}
+
 } // jittor
