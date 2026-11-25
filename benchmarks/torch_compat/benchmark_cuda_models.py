@@ -18,7 +18,7 @@ transformer/config.json with one block at 2,240 tokens. These cases use
 deterministic synthetic weights by default and accept shared local Safetensors
 fixtures through --t2v-weights and --i2v-weights.
 
-The reference measures eager PyTorch and torch.compile(mode="reduce-overhead").
+The reference measures torch.compile(mode="reduce-overhead") before eager PyTorch.
 The faster validated reference is used for the comparison. The default Jittor mode follows the
 measured presets, with reduce-overhead for short inference and video and
 default execution for ti2v-4400. Set --jittor-mode default for an eager API
@@ -29,7 +29,11 @@ the measurement window. Use an isolated --cache-dir to reuse Jittor builds
 across serial benchmark invocations.
 
 --case stock selects the 14 existing Torch compatibility workloads, including
-Qwen3, Stable Diffusion, DDPM, ResNet, ViT and BERT. --case training selects
+Qwen3, Stable Diffusion, DDPM, ResNet, ViT and BERT. Stock and ecosystem
+inference measure Jittor replay first and eager next where both are supported.
+The comparison uses the fastest result that passes the output checks.
+Deterministic stock inference checks every output over one input-pool cycle.
+--case training selects
 the 53 CV and NLP training configurations from the RTX 4090 matrix. Training
 uses the pinned jittor-accelerate benchmarking tools and a matching upstream
 Accelerate checkout. Supply the tools directory from jittor-accelerate
@@ -128,8 +132,8 @@ EAGER_TRAINING = {"bert-large-cased-r2-b4", "roberta-large-r2-b4"}
 
 
 def parse_args():
-    stock_cases = [case["name"] for case in list_workloads()]
-    groups = {"wan": list(WAN_CASES), "stock": stock_cases, "training": list(TRAINING_CASES)}
+    stock_cases = {case["name"]: case for case in list_workloads()}
+    groups = {"wan": list(WAN_CASES), "stock": list(stock_cases), "training": list(TRAINING_CASES)}
     groups["ecosystem"] = list(MODEL_CASES)
     groups["all"] = groups["wan"] + groups["stock"] + groups["training"] + groups["ecosystem"]
     for name, case in MODEL_CASES.items():
@@ -155,13 +159,15 @@ def parse_args():
     parser.add_argument("--jittor-mode", choices=("preset", "default", "reduce-overhead"),
                         default="preset", help="execution mode for the Wan cases")
     parser.add_argument("--stock-size", choices=("full", "tiny"), default="full")
+    parser.add_argument("--stock-mode", choices=("both", "reduce-overhead", "eager"), default="both",
+                        help="Jittor execution mode for stock inference workloads")
     parser.add_argument("--training-tools", type=Path, help="directory containing bench_cv.py and bench_nlp.py")
     parser.add_argument("--accelerate-checkout", type=Path, help="the upstream Accelerate checkout")
     parser.add_argument("--training-fixtures", type=Path, help="local training snapshots by model name")
     parser.add_argument("--cv-data", type=Path, help="Oxford-IIIT Pet image directory")
     parser.add_argument("--nlp-metric", type=Path, help="local GLUE metric script")
     parser.add_argument("--model-assets", type=Path, help="directory containing local model assets by preset name")
-    parser.add_argument("--model-mode", choices=("eager", "reduce-overhead"), default="eager",
+    parser.add_argument("--model-mode", choices=("both", "reduce-overhead", "eager"), default="both",
                         help="Jittor execution mode for ecosystem presets")
     parser.add_argument("--profile-model", action="store_true", help="profile a separate ecosystem inference call")
     parser.add_argument("--gpu", help="comma-separated physical CUDA indices or UUIDs")
@@ -266,10 +272,12 @@ def worker_env(args, output, runtime):
     return env
 
 
-def make_job(args, name, runtime, round_id, torch_mode=None):
+def make_job(args, name, runtime, round_id, mode=None):
+    torch_mode = mode if runtime == "torch" else None
     job = {"case": name, "runtime": runtime, "round": round_id,
-           "source_root": str(args.source_root.resolve()), "torch_mode": torch_mode}
-    reference_mode = "reduce-overhead" if torch_mode == "compiled" else "eager"
+           "source_root": str(args.source_root.resolve()), "torch_mode": torch_mode,
+           "jittor_mode": mode if runtime == "jittor" else None}
+    inference_mode = "reduce-overhead" if mode == "compiled" else "eager"
     if name in TRAINING_CASES:
         return training_job(args, job)
     if name in MODEL_CASES:
@@ -277,14 +285,13 @@ def make_job(args, name, runtime, round_id, torch_mode=None):
         assets = args.model_assets.resolve() if args.model_assets else None
         if case.checkpoint and (assets is None or not (assets / name).exists()):
             raise FileNotFoundError(f"{name} needs {case.checkpoint} at --model-assets/{name}")
-        mode = args.model_mode if runtime == "jittor" else reference_mode
-        return dict(job, kind="model", mode=mode, profile=args.profile_model,
+        return dict(job, kind="model", mode=inference_mode, profile=args.profile_model,
                     group=case.group, scope=case.scope, model=case.model, model_assets=str(assets) if assets else None,
                     dtype=case.dtype, warmup=args.warmup or 6, samples=args.samples or 12,
                     seed=args.seed if args.seed is not None else 0)
     if name in args.stock_cases:
         warmup, samples = (1, 2) if args.stock_size == "tiny" else (6, 12)
-        return dict(job, kind="stock", mode=reference_mode, size=args.stock_size,
+        return dict(job, kind="stock", mode=inference_mode, size=args.stock_size,
                     seed=args.seed if args.seed is not None else 0,
                     warmup=args.warmup or warmup, samples=args.samples or samples)
     shape, warmup, samples = WAN_CASES[name]
@@ -297,7 +304,7 @@ def make_job(args, name, runtime, round_id, torch_mode=None):
     weights = None if checkpoint else getattr(args, f"{variant}_weights")
     return dict(job, **{
         "kind": "wan",
-        "mode": mode if runtime == "jittor" else reference_mode,
+        "mode": mode if runtime == "jittor" else inference_mode,
         "checkpoint": str(checkpoint.resolve()) if checkpoint else None,
         "config": str(config.resolve()),
         "weights": str(weights.resolve()) if weights else None,
@@ -400,6 +407,8 @@ def stop_workers(processes):
 def run_one(args, output, job, budget):
     name, runtime = job["case"], job["runtime"]
     execution_label = "torch-compiled" if job.get("torch_mode") == "compiled" else runtime
+    if job.get("jittor_mode"):
+        execution_label = f"jittor-{job['jittor_mode']}"
     directory = output / f"{name}-{execution_label}-{job['round']}"
     directory.mkdir()
     if budget <= 0:
@@ -705,8 +714,8 @@ def run_wan(job, directory, torch, jt, np):
                 measurements=measurements, residency=residency)
 
 
-def run_stock(job, directory, torch, jt):
-    from worker import Synchronizer, configure, settled
+def run_stock(job, directory, torch, jt, np):
+    from worker import Synchronizer, compile_report, configure, settled
     from workloads import WORKLOADS
 
     settings = configure(torch, "cuda", False, False, job["runtime"])
@@ -716,7 +725,9 @@ def run_stock(job, directory, torch, jt):
     sync = Synchronizer(torch, job["runtime"], "cuda")
     start = perf_counter()
     workload.setup()
-    if job.get("torch_mode") == "compiled":
+    jittor_compile = jt is not None and job["mode"] == "reduce-overhead"
+    if job.get("torch_mode") == "compiled" or (jittor_compile and task.mode == "infer"
+                                               and task.compile_what is not None):
         workload.compile("reduce-overhead")
     sync([])
     setup_s = perf_counter() - start
@@ -732,11 +743,39 @@ def run_stock(job, directory, torch, jt):
         return values, {"total_s": elapsed, "value": float(value)}
 
     warmups, index = warm_up(job, call, settled)
+    capture_before = compile_report(torch, "jittor", workload) if jittor_compile else None
     outputs, measurements = timed_calls(directory, job, call, index)
     residency = cuda_residency(torch, jt, outputs[0])
-    return dict(execution=job["mode"], setup_s=setup_s, warmups=warmups, measurements=measurements,
-                config=workload.config(), observed_output=residency, settings=settings,
-                stochastic=task.stochastic)
+    execution = job["mode"]
+    replay = {}
+    refusal = None
+    if jittor_compile:
+        capture_after = compile_report(torch, "jittor", workload)
+        if capture_after is not None:
+            before = (capture_before or {}).get("stats", {})
+            replay = {name: count - before.get(name, 0) for name, count in capture_after["stats"].items()}
+            refusal = capture_after["refused"] or capture_after["graph_refused"]
+        else:
+            refusal = "stock workload does not expose a replay capture"
+        execution = ("cuda-graph" if replay.get("graph") else
+                     "executor-replay" if replay.get("replayed") else "eager-fallback")
+
+    checked_batches = 0
+    if task.mode == "infer" and not task.stochastic:
+        # Save a full cycle in input-pool order, independent of warmup length.
+        arrays = {}
+        checked_batches = len(workload.pool)
+        for step in range(index + job["samples"], index + job["samples"] + checked_batches):
+            values = workload.step()
+            sync(values)
+            batch = step % checked_batches
+            for i, value in enumerate(values):
+                arrays[f"batch.{batch}.{i}"] = output_array(np, torch, value)
+        np.savez_compressed(directory / "outputs.npz", **arrays)
+    return dict(execution=execution, measured_replay=replay, replay_refused=refusal,
+                setup_s=setup_s, warmups=warmups, measurements=measurements,
+                config=workload.config(), dtype=task.default_dtype, observed_output=residency,
+                settings=settings, stochastic=task.stochastic, checked_output_batches=checked_batches)
 
 
 def output_tensors(torch, result, prefix="output"):
@@ -748,6 +787,16 @@ def output_tensors(torch, result, prefix="output"):
     elif isinstance(result, (list, tuple)):
         for index, item in enumerate(result):
             yield from output_tensors(torch, item, f"{prefix}.{index}")
+
+
+def output_array(np, torch, tensor):
+    value = tensor.detach().cpu()
+    if value.dtype in (torch.bfloat16, torch.float16):
+        value = value.float()
+    array = value.numpy()
+    if not np.isfinite(array).all():
+        raise RuntimeError("Nonfinite inference output")
+    return array
 
 
 def run_model(job, directory, torch, jt, np):
@@ -780,14 +829,7 @@ def run_model(job, directory, torch, jt, np):
     replay_before = dict(getattr(forward, "stats", {}))
     outputs, measurements = timed_calls(directory, job, call, index)
     residency["outputs"] = {key: cuda_residency(torch, jt, tensor) for key, tensor in outputs.items()}
-    arrays = {}
-    for key, tensor in outputs.items():
-        value = tensor.detach().cpu()
-        if value.dtype in (torch.bfloat16, torch.float16):
-            value = value.float()
-        arrays[key] = value.numpy()
-        if not np.isfinite(arrays[key]).all():
-            raise RuntimeError(f"Nonfinite model output in {key}")
+    arrays = {key: output_array(np, torch, tensor) for key, tensor in outputs.items()}
     np.savez_compressed(directory / "outputs.npz", **arrays)
     execution = job["mode"]
     replay = {}
@@ -932,7 +974,13 @@ def run_worker(spec):
         if job["kind"] == "training":
             result = run_training_rank(job, directory, jt)
         elif job["kind"] == "stock":
-            result = run_stock(job, directory, torch, jt)
+            from workloads import WORKLOADS
+
+            inference = WORKLOADS[job["case"]].mode == "infer"
+            grad_scope = torch.no_grad() if inference else nullcontext()
+            replay_scope = jt.flag_scope(auto_graph_replay=0) if inference and jt is not None else nullcontext()
+            with grad_scope, replay_scope:
+                result = run_stock(job, directory, torch, jt, np)
         elif job["kind"] == "model":
             replay_scope = jt.flag_scope(auto_graph_replay=0) if jt is not None else nullcontext()
             with torch.no_grad(), replay_scope:
@@ -987,23 +1035,32 @@ def compare_pair(reference, candidate):
         parity = all(item["parity"] for item in errors.values())
         return dict(parity=parity, comparable=parity and dependencies_match, output_errors=errors,
                     same_dependencies=dependencies_match)
-    shape_matches = reference["config"] == candidate["config"]
-    return dict(same_dependencies=dependencies_match, same_inputs=shape_matches,
-                comparable=dependencies_match and shape_matches)
+    inputs_match = reference["config"] == candidate["config"] and reference["seed"] == candidate["seed"]
+    result = dict(same_dependencies=dependencies_match, same_inputs=inputs_match,
+                  comparable=dependencies_match and inputs_match)
+    if reference.get("checked_output_batches") and candidate.get("checked_output_batches"):
+        result.update(compare_model_outputs(np, reference, candidate))
+        result["comparable"] = result["comparable"] and result["parity"]
+    return result
 
 
 def compare_results(rows):
     if not rows:
         return []
-    modes = {r.get("torch_mode") or ("eager" if r["runtime"] == "torch" else "jittor"): r
-             for r in rows}
+    modes = {}
+    for row in rows:
+        mode = row.get("torch_mode") or ("eager" if row["runtime"] == "torch" else "jittor")
+        if row.get("jittor_mode"):
+            mode = f"jittor_{row['jittor_mode']}"
+        modes[mode] = row
     ok = {mode: row for mode, row in modes.items() if row["status"] == "ok"}
     case, round_id = rows[0]["case"], rows[0]["round"]
     statistic = "mean" if any(row.get("kind") == "training" for row in rows) else "median"
     times = {mode: row[f"{statistic}_s"] * 1000 for mode, row in ok.items()}
     summary = dict(case=case, round=round_id, statistic=statistic,
                    torch_eager_ms=times.get("eager"), torch_compiled_ms=times.get("compiled"),
-                   jittor_ms=times.get("jittor"), jittor_execution=ok.get("jittor", {}).get("execution"),
+                   jittor_eager_ms=times.get("jittor_eager"), jittor_compiled_ms=times.get("jittor_compiled"),
+                   jittor_ms=None, jittor_execution=None,
                    statuses={mode: row["status"] for mode, row in modes.items()})
     references = [mode for mode in ("eager", "compiled") if mode in ok]
     if "eager" in ok and "compiled" in ok:
@@ -1011,14 +1068,26 @@ def compare_results(rows):
         summary["torch_compile_check"] = compiled_check
         if not compiled_check["comparable"]:
             references.remove("compiled")
-    if not references:
-        return [summary]
-    best = min(references, key=times.__getitem__)
-    summary.update(torch_baseline_mode=best, torch_baseline_ms=times[best], torch_ms=times[best])
-    if "jittor" in ok:
-        summary.update(compare_pair(ok["eager"] if "eager" in ok else ok[best], ok["jittor"]))
-        if summary["comparable"]:
-            summary["jittor_over_torch"] = times["jittor"] / times[best]
+    candidates = [mode for mode in ("jittor_compiled", "jittor_eager", "jittor") if mode in ok]
+    checks = {}
+    if references:
+        best = min(references, key=times.__getitem__)
+        summary.update(torch_baseline_mode=best, torch_baseline_ms=times[best], torch_ms=times[best])
+        reference = ok.get("eager", ok[best])
+        checks = {mode: compare_pair(reference, ok[mode]) for mode in candidates}
+        summary["jittor_checks"] = checks
+    if candidates:
+        verified = [mode for mode in candidates if checks.get(mode, {}).get("comparable")]
+        # A refused capture ran eager. Prefer the separately measured eager mode.
+        if "jittor_eager" in verified and ok.get("jittor_compiled", {}).get("execution") == "eager-fallback":
+            verified = [mode for mode in verified if mode != "jittor_compiled"]
+        selected = min(verified or candidates, key=times.__getitem__)
+        summary.update(jittor_selected_mode=selected, jittor_ms=times[selected],
+                       jittor_execution=ok[selected]["execution"])
+        if checks:
+            summary.update(checks[selected])
+            if summary["comparable"]:
+                summary["jittor_over_torch"] = times[selected] / times[best]
     return [summary]
 
 
@@ -1069,13 +1138,33 @@ def main():
         return run_matrix(args, output)
 
 
+def execution_order(args, case):
+    torch_modes = ("compiled", "eager") if args.torch_mode == "both" else (args.torch_mode,)
+    stock = args.stock_cases.get(case)
+    if case in MODEL_CASES:
+        preference = args.model_mode
+    elif stock is not None and (stock["mode"] != "infer" or stock["compile_what"] is None):
+        preference = "eager"
+    elif stock is not None:
+        preference = args.stock_mode
+    else:
+        preference = None
+    if preference == "both":
+        jittor_modes = ("compiled", "eager")
+    elif preference == "reduce-overhead":
+        jittor_modes = ("compiled",)
+    else:
+        jittor_modes = (preference,)
+    modes = {"torch": torch_modes, "jittor": jittor_modes}
+    executions = []
+    for runtime in args.runtimes.split(","):
+        executions.extend((runtime, mode) for mode in modes[runtime])
+    return sorted(executions, key=lambda item: item[1] != "compiled")
+
+
 def run_matrix(args, output):
     rows = []
     comparisons = []
-    modes = ("eager", "compiled") if args.torch_mode == "both" else (args.torch_mode,)
-    executions = []
-    for runtime in args.runtimes.split(","):
-        executions.extend((runtime, mode) for mode in (modes if runtime == "torch" else (None,)))
     meta = {"state": "running", "pid": os.getpid(), "planned": args.case,
             "started": datetime.now(timezone.utc).isoformat()}
 
@@ -1084,18 +1173,21 @@ def run_matrix(args, output):
         write_json(output / "results.json", {"meta": meta, "runs": rows, "comparisons": comparisons})
 
     for name in args.case:
+        executions = execution_order(args, name)
         rounds = args.rounds or (1 if len(args.case) > 1 and name not in WAN_CASES else 2)
         for round_id in range(1, 2 if name == VIDEO else rounds + 1):
             budget = args.measurement_timeout
             round_rows = []
             for runtime, mode in executions:
-                publish(dict(case=name, runtime=runtime, torch_mode=mode, round=round_id))
+                phase = dict(case=name, runtime=runtime, round=round_id,
+                             torch_mode=mode if runtime == "torch" else None,
+                             jittor_mode=mode if runtime == "jittor" else None)
+                publish(phase)
                 try:
                     job = make_job(args, name, runtime, round_id, mode)
                 except (OSError, ValueError) as error:
                     status = "missing-assets" if isinstance(error, FileNotFoundError) else "invalid-input"
-                    row = dict(case=name, runtime=runtime, torch_mode=mode, round=round_id,
-                               status=status, error=str(error))
+                    row = dict(phase, status=status, error=str(error))
                     print(f"{name} {runtime}: {error}", flush=True)
                 else:
                     row = run_one(args, output, job, budget)
@@ -1107,6 +1199,7 @@ def run_matrix(args, output):
     failed = (any(row["status"] != "ok" for row in rows)
               or any(not summary.get("comparable", True)
                      or not summary.get("torch_compile_check", {}).get("comparable", True)
+                     or any(not check["comparable"] for check in summary.get("jittor_checks", {}).values())
                      for summary in comparisons))
     meta.update(state="completed-with-issues" if failed else "completed",
                 finished=datetime.now(timezone.utc).isoformat())

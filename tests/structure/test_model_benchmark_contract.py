@@ -48,11 +48,54 @@ def measurement(runtime):
 class TestModelBenchmarkContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        global report, runner, worker
+        global report, runner, worker, cuda_runner
         report = load("report")
         with mock.patch.dict(sys.modules, {"report": report}):
             runner = load("run")
         worker = load("worker")
+        with mock.patch.dict(sys.modules, {"run": runner, "worker": worker}), \
+                mock.patch.object(sys, "path", [str(HERE), *sys.path]):
+            cuda_runner = load("benchmark_cuda_models")
+
+    def test_cuda_inference_measures_compiled_before_eager(self):
+        argv = ["bench", "--torch-python", "reference-python", "--case", "resnet50_infer_b1",
+                "--case", "mobilenetv3-small", "--case", "qwen3_decode"]
+        with mock.patch.object(sys, "argv", argv):
+            args = cuda_runner.parse_args()
+        both = [("torch", "compiled"), ("jittor", "compiled"),
+                ("torch", "eager"), ("jittor", "eager")]
+        self.assertEqual(cuda_runner.execution_order(args, "resnet50_infer_b1"), both)
+        self.assertEqual(cuda_runner.execution_order(args, "mobilenetv3-small"), both)
+        self.assertEqual(cuda_runner.execution_order(args, "qwen3_decode"),
+                         [("torch", "compiled"), ("torch", "eager"), ("jittor", "eager")])
+
+    def test_cuda_stock_inference_excludes_fast_output_mismatch(self):
+        import numpy as np
+
+        with tempfile.TemporaryDirectory() as root:
+            rows = []
+            for runtime, mode, seconds, second_batch in (
+                ("torch", "compiled", 0.001, 2.0),
+                ("jittor", "compiled", 0.0005, 3.0),
+                ("torch", "eager", 0.002, 2.0),
+                ("jittor", "eager", 0.0015, 2.0),
+            ):
+                directory = Path(root) / f"{runtime}-{mode}"
+                directory.mkdir()
+                np.savez(directory / "outputs.npz",
+                         **{"batch.0.0": np.array([1.0], dtype=np.float32),
+                            "batch.1.0": np.array([second_batch], dtype=np.float32)})
+                row = dict(measurement(runtime), case="resnet50_infer_b1", kind="stock", round=1,
+                           median_s=seconds, checked_output_batches=2, directory=str(directory),
+                           execution="cuda-graph" if mode == "compiled" else "eager")
+                row["torch_mode" if runtime == "torch" else "jittor_mode"] = mode
+                rows.append(row)
+            result, = cuda_runner.compare_results(rows)
+        self.assertEqual(result["torch_baseline_mode"], "compiled")
+        self.assertEqual(result["jittor_selected_mode"], "jittor_eager")
+        self.assertEqual(result["jittor_compiled_ms"], 0.5)
+        self.assertEqual(result["jittor_over_torch"], 1.5)
+        self.assertFalse(result["jittor_checks"]["jittor_compiled"]["parity"])
 
     def test_matching_contract_produces_ratio(self):
         pair = {r: measurement(r) for r in ("torch", "jittor")}
