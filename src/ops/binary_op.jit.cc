@@ -31,18 +31,18 @@ void BinaryOp::jit_run() {
         @if(XSTRIDED, @for(d, 0, DIM, index_t xstride@d = x->storage_stride(@d);))
         @if(YSTRIDED, @for(d, 0, DIM, index_t ystride@d = y->storage_stride(@d);))
         @for(d, 0, DIM, for (index_t i@d=0; i@d < zshape@d; i@d++)) {
-            index_t zid = @for(d, 0, DIM, + i@d * zstride@d);
+            index_t i = @for(d, 0, DIM, + i@d * zstride@d);
             @if(XSTRIDED,
                 index_t xid = 0 @for(d, 0, DIM, @if(XSMASK>>d&1, + i@d * xstride@d));
             ,
-                index_t xid = zid;
+                index_t xid = i;
             )
             @if(YSTRIDED,
                 index_t yid = 0 @for(d, 0, DIM, @if(YSMASK>>d&1, + i@d * ystride@d));
             ,
-                index_t yid = zid;
+                index_t yid = i;
             )
-            zp[zid] = @expand_op(@OP, @Tz, xp[xid], @Tx, yp[yid], @Ty);
+            zp[i] = @expand_op(@OP, @Tz, xp[xid], @Tx, yp[yid], @Ty);
         }
     ,
         index_t num = z->num;
