@@ -1,6 +1,10 @@
 """Distribution installation binds stable implementation owners and module paths."""
 import types as _types_dist
-from ..distribution_api import CONSTRAINTS, _Constraint, Gumbel, RelaxedBernoulli, RelaxedOneHotCategorical, unsupported_register_kl
+from ..distribution_api import (
+    CONSTRAINTS, _Constraint, AffineTransform, ComposeTransform, Gumbel,
+    NegativeBinomial, RelaxedBernoulli, RelaxedOneHotCategorical, StudentT,
+    Transform, TransformedDistribution, unsupported_register_kl,
+)
 from ..fidelity import Fidelity, register_api_bindings
 
 
@@ -78,6 +82,30 @@ def _install_distribution_surface(ctx):
     _dist.Gumbel = getattr(_dist, "Gumbel", Gumbel)
     _dist.RelaxedBernoulli = getattr(_dist, "RelaxedBernoulli", RelaxedBernoulli)
     _dist.RelaxedOneHotCategorical = getattr(_dist, "RelaxedOneHotCategorical", RelaxedOneHotCategorical)
+    _dist.StudentT = getattr(_dist, "StudentT", StudentT)
+    _dist.NegativeBinomial = getattr(_dist, "NegativeBinomial", NegativeBinomial)
+    _dist.Transform = getattr(_dist, "Transform", Transform)
+    _dist.AffineTransform = getattr(_dist, "AffineTransform", AffineTransform)
+    _dist.ComposeTransform = getattr(_dist, "ComposeTransform", ComposeTransform)
+    _dist.TransformedDistribution = getattr(_dist, "TransformedDistribution", TransformedDistribution)
+    for _cls_name, _mod_suffix in (
+        ("StudentT", "studentT"),
+        ("NegativeBinomial", "negative_binomial"),
+    ):
+        _sub = ctx.registry.ensure("torch.distributions." + _mod_suffix)
+        setattr(_sub, _cls_name, getattr(_dist, _cls_name))
+        _modules[_sub.__name__] = _sub
+        setattr(_dist, _mod_suffix, _sub)
+    _transforms = _types_dist.ModuleType("torch.distributions.transforms")
+    _transforms.Transform = _dist.Transform
+    _transforms.AffineTransform = _dist.AffineTransform
+    _transforms.ComposeTransform = _dist.ComposeTransform
+    _modules["torch.distributions.transforms"] = _transforms
+    _dist.transforms = _transforms
+    _transformed = _types_dist.ModuleType("torch.distributions.transformed_distribution")
+    _transformed.TransformedDistribution = _dist.TransformedDistribution
+    _modules["torch.distributions.transformed_distribution"] = _transformed
+    _dist.transformed_distribution = _transformed
     for _cls_name, _mod_suffix in (
         ("Gumbel", "gumbel"),
         ("RelaxedBernoulli", "relaxed_bernoulli"),
@@ -89,12 +117,21 @@ def _install_distribution_surface(ctx):
         setattr(_dist, _mod_suffix, _sub)
     register_api_bindings(_dist, "torch.distributions",
         tuple(name for name in ("Gumbel", "RelaxedBernoulli", "RelaxedOneHotCategorical",
+                                "StudentT", "NegativeBinomial",
+                                "Transform", "AffineTransform", "ComposeTransform",
+                                "TransformedDistribution",
                                 "Normal", "Uniform", "Distribution", "Bernoulli", "Beta",
                                 "Categorical", "Dirichlet", "Exponential", "Gamma", "Geometric",
                                 "Independent", "LogNormal", "LogisticNormal", "MultivariateNormal",
                                 "OneHotCategorical", "Poisson", "Wishart") if hasattr(_dist, name)),
         Fidelity.APPROXIMATE,
         "Native distributions retain their backend limits; sampling fallbacks clamp random values and have limited validation")
+    register_api_bindings(_dist.transforms, "torch.distributions.transforms",
+        ("Transform", "AffineTransform", "ComposeTransform"),
+        Fidelity.APPROXIMATE, "Bijective transform surface over native tensor arithmetic")
+    register_api_bindings(_dist.transformed_distribution, "torch.distributions.transformed_distribution",
+        ("TransformedDistribution",),
+        Fidelity.APPROXIMATE, "Transformed distribution surface over native tensor arithmetic")
     register_api_bindings(_dist.constraints, "torch.distributions.constraints", ("Constraint",),
         Fidelity.APPROXIMATE, "Legacy permissive constraint objects do not validate mathematical support")
     for class_name in (
