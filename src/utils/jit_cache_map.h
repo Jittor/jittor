@@ -121,6 +121,34 @@ struct jit_cache_map {
         return &iter->second.value;
     }
 
+    /* Copy the cached value under the lock so concurrent insertions (e.g.,
+       background Tier-1 promotion) cannot invalidate a returned pointer. */
+    inline bool find_copy(const string& key, T& out) {
+        Guard guard(lock);
+        auto iter = entries.find(key);
+        if (iter == entries.end()) return false;
+        touch(iter->second);
+        out = iter->second.value;
+        return true;
+    }
+
+    /* Thread-safe insert-or-assign: writes `value` while holding `lock` so
+       concurrent readers/writers (e.g., background Tier-1 promotion) never
+       race on a reference invalidated by rehash or eviction. */
+    void set(const string& key, T value) {
+        Guard guard(lock);
+        auto iter = entries.find(key);
+        if (iter == entries.end()) {
+            size_t limit = max_entries();
+            evict_down_to(limit ? limit - 1 : 0);
+            iter = entries.emplace(std::piecewise_construct,
+                                   std::forward_as_tuple(key),
+                                   std::forward_as_tuple()).first;
+        }
+        touch(iter->second);
+        iter->second.value = std::move(value);
+    }
+
     /* Insert-or-get, evicting the least recently used entry first if the table
        is at capacity.
 

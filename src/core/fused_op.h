@@ -26,9 +26,12 @@ std::ostream& operator<<(std::ostream& os, const VarInfo& vi);
 // out, and `VarRelayManager` no longer keeps a `FusedOp*` at all (it used to,
 // pointing at a `run_sync` stack frame or at a compile-worker temporary that
 // was already gone -- see opt/var_relay.h).
+struct NvrtcFusedKernel;
+
 struct FusedOpContext {
     VarRelayManager vrm;
     jit_op_entry_t entry;
+    shared_ptr<NvrtcFusedKernel> nvrtc_kernel;
     // Node -> index within the fusion this context was compiled from. Read
     // during code generation only; the pointers are not dereferenced and mean
     // nothing after that fusion is gone.

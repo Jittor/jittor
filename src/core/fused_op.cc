@@ -7,10 +7,12 @@
 #include "core/fused_op.h"
 #include "core/var.h"
 #include "codegen/op_compiler.h"
+#include "codegen/nvrtc_compiler.h"
 #include "runtime/profiler/profiler.h"
 #include "utils/fast_shared_ptr.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "runtime/tier0_ops.h"
 #include "runtime/traversal_state.h"
 #include "ops/op_register.h"
 #include "utils/graph_build_profile.h"
@@ -413,13 +415,15 @@ void FusedOp::prepare_fused_key(JK& jk) {
 }
 
 void FusedOp::execute_fused_prepared(JK& jk) {
+    if (PREDICT_BRANCH_NOT_TAKEN(jit_tier_mode() == 0) && tier0_try_execute_fused(this, jk))
+        return;
     // Keep the cache lookup independent from JK's reusable thread-local
     // buffer; preparation of the next op may overwrite it immediately.
     string jit_key = jk.to_string();
-    if (auto* cached = jit_fused_ops.find(jit_key)) {
-        // Take a reference, not a bare pointer: the cache is bounded, and the
-        // kernel about to run may itself compile (relay ops) and evict.
-        context_owner = *cached;
+    if (jit_fused_ops.find_copy(jit_key, context_owner)) {
+        // Take a reference under the cache lock, not a bare pointer: the cache
+        // is bounded, and concurrent inserts or relay compiles may rehash or
+        // evict entries.
         context = context_owner.get();
         LOGvvv <<  "Jit fused op key found:" << jit_key << "jit op entry:" << (void*)context;
         // This used to also do `context->vrm.fop = this`, repointing the
@@ -430,6 +434,10 @@ void FusedOp::execute_fused_prepared(JK& jk) {
         Profiler::record_and_run(context->entry, this, jit_key.c_str());
         return;
     }
+    if (tier0_try_execute_fused(this, jk))
+        return;
+    if (nvrtc_try_compile_and_run(this, jk))
+        return;
     LOGvv << "Jit op key not found:" << jit_key;
     // compile JIT op
     context_owner = std::make_shared<FusedOpContext>();
@@ -438,10 +446,10 @@ void FusedOp::execute_fused_prepared(JK& jk) {
     string prev_jit_key = jit_key;
     context->entry = OpCompiler::do_compile(this);
     string new_jit_key = get_jit_key(jk);
-    // Two statements, not `t[a] = t[b] = ctx`: see the same spot in op.cc.
-    jit_fused_ops[prev_jit_key] = context_owner;
-    jit_fused_ops[new_jit_key] = context_owner;
-    jit_key_mapper[prev_jit_key] = new_jit_key;
+    // Thread-safe locked writes (background Tier-1 promotion may insert concurrently).
+    jit_fused_ops.set(prev_jit_key, context_owner);
+    jit_fused_ops.set(new_jit_key, context_owner);
+    jit_key_mapper.set(prev_jit_key, new_jit_key);
     LOGvv << "Get jit op entry:" << (void*)(context->entry);
     Profiler::record_and_run(context->entry, this, new_jit_key.c_str());
 }
