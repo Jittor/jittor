@@ -1,8 +1,27 @@
 """Stateful padding modules."""
 
 import jittor as jt
+from jittor.misc import _pair
 
 from ..functional.padding import pad as pad
+
+
+class ReflectionPad1d(jt.Module):
+    def __init__(self, padding):
+        self.padding = tuple(_pair(padding))
+        if len(self.padding) != 2:
+            raise ValueError("ReflectionPad1d needs two padding widths")
+
+    def execute(self, x):
+        if x.ndim not in (2, 3):
+            raise RuntimeError("ReflectionPad1d expects a 2D or 3D input")
+        left, right = self.padding
+        width = x.shape[-1]
+        if max(left, right) >= width:
+            raise RuntimeError("Padding size should be less than the input width")
+        if width + left + right <= 0:
+            raise RuntimeError("ReflectionPad1d output width must be positive")
+        return pad(x, self.padding, mode="reflect")
 
 
 class ReflectionPad2d(jt.Module):
