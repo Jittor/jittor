@@ -296,7 +296,7 @@ def make_job(args, name, runtime, round_id, mode=None):
             raise FileNotFoundError(f"{name} needs {case.checkpoint} at --model-assets/{name}")
         return dict(job, kind="model", mode=inference_mode, profile=args.profile_model,
                     group=case.group, scope=case.scope, model=case.model, model_assets=str(assets) if assets else None,
-                    dtype=case.dtype, warmup=args.warmup or 6, samples=args.samples or 12,
+                    dtype=case.dtype, shape=list(case.shape), warmup=args.warmup or 6, samples=args.samples or 12,
                     seed=args.seed if args.seed is not None else 0)
     if name in args.stock_cases:
         warmup, samples = (1, 2) if args.stock_size == "tiny" else (6, 12)
@@ -413,6 +413,22 @@ def stop_workers(processes):
             process.wait()
 
 
+def _worker_oom_error(directories):
+    for directory in directories:
+        log_path = directory / "worker.log"
+        try:
+            with log_path.open("rb") as stream:
+                stream.seek(max(0, log_path.stat().st_size - 8000))
+                lines = stream.read().decode(errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            lower = line.lower()
+            if "outofmemoryerror" in lower or "cuda out of memory" in lower or "out of memory" in lower:
+                return line.strip()[:350]
+    return None
+
+
 def run_one(args, output, job, budget):
     name, runtime = job["case"], job["runtime"]
     execution_label = "torch-compiled" if job.get("torch_mode") == "compiled" else runtime
@@ -454,6 +470,11 @@ def run_one(args, output, job, budget):
             status = "measurement-timeout"
     elif status == "ok":
         status = "missing-result"
+    elif status == "failed":
+        oom_line = _worker_oom_error(directories)
+        if oom_line is not None:
+            status = "oom"
+            result["error"] = oom_line
     result.update(status=status, returncodes=[p.returncode for p in processes],
                   directory=str(directory), measured_seconds=elapsed)
     if status == "ok":
@@ -469,9 +490,20 @@ def run_one(args, output, job, budget):
 def aggregate_training(job, records):
     samples = [max(step["total"] for step in steps) for steps in zip(*(row["records"] for row in records))]
     warm, measured = samples[:job["warmup"]], samples[job["warmup"]:]
+    peak_alloc = max((row.get("peak_memory_bytes") or 0 for row in records), default=0)
+    peak_reserved = max((row.get("peak_reserved_bytes") or 0 for row in records), default=0)
+    strategy = next((row.get("strategy") for row in records if row.get("strategy")), None)
+    if not strategy:
+        strategy = "DDP" if job.get("ranks", 1) > 1 else "single-gpu"
+    dtype = next((row.get("dtype") for row in records if row.get("dtype")), "float32")
     return dict(job, execution=job["mode"], mean_s=mean(measured), median_s=median(measured),
                 warmups=[{"total_s": seconds} for seconds in warm],
                 measurements=[{"total_s": seconds} for seconds in measured],
+                compile_warmup_s=sum(warm), first_call_s=warm[0] if warm else None,
+                peak_memory_bytes=peak_alloc or None,
+                peak_reserved_bytes=peak_reserved or None,
+                peak_vram_gb=round(peak_alloc / (1024 ** 3), 4) if peak_alloc else None,
+                strategy=strategy, dtype=dtype,
                 rank_results=records)
 
 
@@ -1036,6 +1068,7 @@ def run_worker(spec):
     job = json.loads(spec.read_text())
     directory = spec.parent
     torch, jt, guard = checked_runtime(job)
+    torch.cuda.reset_peak_memory_stats()
     before_fallback = jt.core.backend_fallback_count() if jt is not None else None
     with guard:
         if job["kind"] == "training":
@@ -1057,6 +1090,13 @@ def run_worker(spec):
                 result = run_wan(job, directory, torch, jt, np)
     if job["kind"] != "training":
         result["median_s"] = median(sample["total_s"] for sample in result["measurements"])
+        warmups = result.get("warmups") or ()
+        result["compile_warmup_s"] = sum(sample["total_s"] for sample in warmups)
+        result["first_call_s"] = warmups[0]["total_s"] if warmups else None
+    peak_alloc = int(torch.cuda.max_memory_allocated())
+    peak_reserved = int(torch.cuda.max_memory_reserved())
+    result.update(peak_memory_bytes=peak_alloc, peak_reserved_bytes=peak_reserved,
+                  peak_vram_gb=round(peak_alloc / (1024 ** 3), 4))
     packages = versions(torch, job["runtime"])
     if job.get("torch_mode") == "compiled":
         if not job.get("native_compile"):

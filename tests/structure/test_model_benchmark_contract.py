@@ -143,6 +143,31 @@ class TestModelBenchmarkContract(unittest.TestCase):
         self.assertEqual(result["max_rel_diff"], 0.5)
         self.assertAlmostEqual(result["cosine_similarity"], 18 / np.sqrt(340))
 
+    def test_cuda_training_aggregation_tracks_peak_vram_warmup_and_strategy(self):
+        job = dict(case="resnet50d-r2-b64", kind="training", mode="compiled-step", ranks=2, batch=64, warmup=2, samples=2)
+        records = [
+            dict(records=[dict(step=i, total=t) for i, t in enumerate((1.5, 0.5, 0.2, 0.2))],
+                 peak_memory_bytes=2 * 1024 ** 3, peak_reserved_bytes=3 * 1024 ** 3, dtype="float32"),
+            dict(records=[dict(step=i, total=t) for i, t in enumerate((1.2, 0.6, 0.25, 0.25))],
+                 peak_memory_bytes=4 * 1024 ** 3, peak_reserved_bytes=5 * 1024 ** 3, dtype="float32"),
+        ]
+        agg = cuda_runner.aggregate_training(job, records)
+        self.assertEqual(agg["peak_memory_bytes"], 4 * 1024 ** 3)
+        self.assertEqual(agg["peak_vram_gb"], 4.0)
+        self.assertAlmostEqual(agg["compile_warmup_s"], 2.1)
+        self.assertAlmostEqual(agg["first_call_s"], 1.5)
+        self.assertEqual(agg["strategy"], "DDP")
+
+    def test_cuda_worker_oom_error_detection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "worker.log"
+            log.write_text("Traceback\ntorch.OutOfMemoryError: CUDA out of memory. Tried to allocate 4.00 GiB\n")
+            detected = cuda_runner._worker_oom_error([Path(tmp)])
+            self.assertIsNotNone(detected)
+            self.assertIn("OutOfMemoryError", detected)
+            log.write_text("ValueError: bad shape\n")
+            self.assertIsNone(cuda_runner._worker_oom_error([Path(tmp)]))
+
     def test_cuda_training_parity_reports_first_failed_step(self):
         rank = dict(training_input_sha256="inputs", initial_state_sha256="weights",
                     records=[dict(step=0, loss=1.0), dict(step=1, loss=0.8), dict(step=2, loss=0.6)])
