@@ -727,7 +727,9 @@ def _nested_from_tensors(tensors, *a, layout=None, **k):
 
 
 def _nested_from_jagged(values, offsets, *a, **k):
-    return _NestedTensor.from_jagged(values, offsets, ragged_idx=k.pop("ragged_idx", None))
+    return _NestedTensor.from_jagged(
+        values, offsets, ragged_idx=k.pop("ragged_idx", None),
+        lengths=k.pop("lengths", None))
 
 
 def _check_to_pybool(cond):
