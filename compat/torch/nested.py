@@ -212,8 +212,20 @@ class _NestedTensor:
     def cpu(self):
         return _NestedTensor.from_tensors([cast(Any, t).cpu() for t in self._tensors], self._ragged_idx)
 
+    def bool(self):
+        from .tensor_state import compatibility_owner
+        return self.to(dtype=compatibility_owner(jt).bool)
+
     def to(self, *args, **kwargs):
-        return _NestedTensor.from_tensors([cast(Any, t).to(*args, **kwargs) for t in self._tensors], self._ragged_idx)
+        values = self._values.to(*args, **kwargs)
+        if values is self._values:
+            return self
+        # A values dtype conversion must not cast offsets or erase packed holes.
+        offsets = self._offsets.to(device=values.device)
+        lengths = (None if self._lengths is None else
+                   self._lengths.to(device=values.device))
+        return type(self).from_jagged(
+            values, offsets, ragged_idx=self._ragged_idx, lengths=lengths)
 
     def unsqueeze(self, dim):
         sample_dim = self._tensors[0].ndim
