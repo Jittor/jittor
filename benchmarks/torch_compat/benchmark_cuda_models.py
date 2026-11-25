@@ -126,9 +126,14 @@ TRAINING_CASES = {
 }
 TRAINING_CASES.update({
     f"deberta-v3-large-r{ranks}-b{batch}": ("nlp", "deberta-v3-large", ranks, batch)
-    for ranks, batch in ((1, 1), (1, 2), (2, 1))
+    for ranks in (1, 2)
+    for batch in (1, 2)
 })
-EAGER_TRAINING = {"bert-large-cased-r2-b4", "roberta-large-r2-b4"}
+EAGER_TRAINING = {
+    "bert-large-cased-r2-b4", "roberta-large-r2-b4",
+    # T5's training step reads back tensor values and cannot be replayed.
+    "t5-small-r1-b16", "t5-small-r2-b16",
+}
 
 
 def parse_args():

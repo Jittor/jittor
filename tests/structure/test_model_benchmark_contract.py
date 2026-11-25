@@ -69,6 +69,14 @@ class TestModelBenchmarkContract(unittest.TestCase):
         self.assertEqual(cuda_runner.execution_order(args, "qwen3_decode"),
                          [("torch", "compiled"), ("torch", "eager"), ("jittor", "eager")])
 
+    def test_cuda_training_profiles_cover_both_gpu_counts(self):
+        cases = cuda_runner.TRAINING_CASES
+        for family, model, _, batch in cases.values():
+            for ranks in (1, 2):
+                case = f"{model}-r{ranks}-b{batch}"
+                with self.subTest(case=case):
+                    self.assertEqual(cases.get(case), (family, model, ranks, batch))
+
     def test_cuda_stock_inference_excludes_fast_output_mismatch(self):
         import numpy as np
 
