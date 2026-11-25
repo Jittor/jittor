@@ -16,6 +16,7 @@
 #include "mem/allocator.h"
 #include "runtime/device.h"
 #include "runtime/jit_policy.h"
+#include "runtime/tier0_ops.h"
 #include "runtime/launch_diagnostics.h"
 #include "bindings/pybind/py_var_tracer.h"
 #include "core/executor.h"
@@ -53,10 +54,23 @@ jit_cache_map<string> jit_key_mapper;
 std::atomic<int64> Op::number_of_lived_ops{0};
 std::atomic<int64> Op::number_of_created_ops{0};
 
-static thread_local const BackwardStorageReadScope* backward_storage_reads = nullptr;
+std::atomic<int32> backward_storage_read_active_count{0};
+struct OpThreadState {
+    const BackwardStorageReadScope* backward_storage_reads = nullptr;
+    int execution_target_override = -1;
+    bool host_execution_forced = false;
+};
+static thread_local OpThreadState op_tls;
+
 BackwardStorageReadScope::BackwardStorageReadScope(const Op* op)
-    : op(op), previous(backward_storage_reads) { backward_storage_reads = this; }
-BackwardStorageReadScope::~BackwardStorageReadScope() { backward_storage_reads = previous; }
+    : op(op), previous(op_tls.backward_storage_reads) {
+    backward_storage_read_active_count.fetch_add(1, std::memory_order_relaxed);
+    op_tls.backward_storage_reads = this;
+}
+BackwardStorageReadScope::~BackwardStorageReadScope() {
+    op_tls.backward_storage_reads = previous;
+    backward_storage_read_active_count.fetch_sub(1, std::memory_order_relaxed);
+}
 
 void rebase_saved_storage_versions(Var* value) {
     if (!value) return;
@@ -76,17 +90,26 @@ void rebase_saved_storage_versions(Var* value) {
     for (Op* consumer : value->outputs()) rebase(consumer);
 }
 
-void check_backward_storage_read(Var* value) {
-    if (!backward_storage_reads || !value) return;
+void check_backward_storage_read_slow(Var* value) {
+    auto* reads = op_tls.backward_storage_reads;
+    if (!reads || !value) return;
     auto token = value->peek_storage_version();
     if (!token) return;
-    for (auto* scope = backward_storage_reads; scope; scope = scope->previous)
-        for (const auto& saved : scope->op->saved_storage_versions)
-            if (saved.token == token || saved.original_id == value->id)
-                USER_CHECK(saved.token == token &&
-                        saved.version == saved.token->value.load(std::memory_order_relaxed))
+    for (auto* scope = reads; scope; scope = scope->previous)
+        for (const auto& saved : scope->op->saved_storage_versions) {
+            if (saved.token) {
+                if (saved.token == token || saved.original_id == value->id)
+                    USER_CHECK(saved.token == token &&
+                            saved.version == saved.token->value.load(std::memory_order_relaxed))
+                        << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
+                        << saved.original_id << "read by" << scope->op->name();
+            } else if (saved.original_id == value->id || token->origin_var_id == saved.original_id) {
+                USER_CHECK(token->origin_var_id == saved.original_id &&
+                        token->value.load(std::memory_order_relaxed) == 0)
                     << "one of the variables needed for gradient computation has been modified by an inplace operation; saved Var"
                     << saved.original_id << "read by" << scope->op->name();
+            }
+        }
 }
 
 // Only Ops with disabled inputs have an entry. Node flag bits record whether
@@ -135,15 +158,15 @@ Op::Op() {
     // the amp field".
     set_flag(OpFlags::_prefer_32, amp_reg & ((1<<OpFlags::_amp_nbits)-1),
         OpFlags::_amp_nbits);
-    number_of_lived_ops++;
-    number_of_created_ops++;
+    number_of_lived_ops.fetch_add(1, std::memory_order_relaxed);
+    number_of_created_ops.fetch_add(1, std::memory_order_relaxed);
     notify_node_created(this);
 }
 
 Op::~Op() {
     if (flag(OpFlags::_requires_grad_disabled))
         requires_grad_disabled_edges().erase(id);
-    number_of_lived_ops--;
+    number_of_lived_ops.fetch_sub(1, std::memory_order_relaxed);
 }
 
 OpId Op::type_id() const {
@@ -163,13 +186,11 @@ const OpDef& Op::definition() const {
     return *registered_definition;
 }
 
-static thread_local int execution_target_override = -1;
-static thread_local bool host_execution_forced = false;
-
 BackendId execution_target_backend() {
-    return execution_target_override < 0
+    int ov = op_tls.execution_target_override;
+    return ov < 0
         ? (runtime_use_cuda() ? accelerator_backend_id() : BackendId::Cpu)
-        : static_cast<BackendId>(execution_target_override);
+        : static_cast<BackendId>(ov);
 }
 
 BackendId construction_target_backend(const Var* input) {
@@ -179,17 +200,17 @@ BackendId construction_target_backend(const Var* input) {
 }
 
 ExecutionBackendScope::ExecutionBackendScope(BackendId backend)
-    : previous(execution_target_override) {
-    execution_target_override = static_cast<int>(backend);
+    : previous(op_tls.execution_target_override) {
+    op_tls.execution_target_override = static_cast<int>(backend);
 }
 
-ExecutionBackendScope::~ExecutionBackendScope() { execution_target_override = previous; }
+ExecutionBackendScope::~ExecutionBackendScope() { op_tls.execution_target_override = previous; }
 
-HostExecutionScope::HostExecutionScope() : previous(host_execution_forced) {
-    host_execution_forced = true;
+HostExecutionScope::HostExecutionScope() : previous(op_tls.host_execution_forced) {
+    op_tls.host_execution_forced = true;
 }
 
-HostExecutionScope::~HostExecutionScope() { host_execution_forced = previous; }
+HostExecutionScope::~HostExecutionScope() { op_tls.host_execution_forced = previous; }
 
 TensorPlacement Op::graph_placement() const {
     // An op asks this several times per execution (requested and execution
@@ -211,12 +232,12 @@ BackendId Op::requested_backend() const {
 }
 
 BackendId Op::execution_backend() const {
-    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
+    if (PREDICT_BRANCH_NOT_TAKEN(op_tls.host_execution_forced)) return BackendId::Cpu;
     return execution_backend_for(requested_backend());
 }
 
 BackendId Op::execution_backend_for(BackendId requested) const {
-    if (PREDICT_BRANCH_NOT_TAKEN(host_execution_forced)) return BackendId::Cpu;
+    if (PREDICT_BRANCH_NOT_TAKEN(op_tls.host_execution_forced)) return BackendId::Cpu;
     return flag(OpFlags::_cuda) && requested != BackendId::Cpu
         ? requested : BackendId::Cpu;
 }
@@ -472,8 +493,9 @@ void Op::init() {
         }
     }
     infer_shape();
-    if (!flag(OpFlags::_no_input_storage))
-        for (Var* value : inputs()) check_backward_storage_read(value);
+    if (!flag(OpFlags::_no_input_storage) && PREDICT_BRANCH_NOT_TAKEN(
+            backward_storage_read_active_count.load(std::memory_order_relaxed) != 0))
+        for (Var* value : inputs()) check_backward_storage_read_slow(value);
     if (first_init && _inputs.size() && !flag(OpFlags::_manual_device))
         propagate_device();
     if (first_init && has_first_order_only_input)
@@ -510,13 +532,16 @@ void Op::init() {
     // Native assignment/rebinding remains unchanged.
     if (first_init && !no_grad && !all_inputs_stopped &&
             autograd_policy.preserve_requires_grad_on_assignment) {
+        saved_storage_versions.reserve(_inputs.size() + _outputs.size());
         for (Var* value : inputs()) {
-            auto token = value->storage_version_token();
-            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+            auto token = value->peek_storage_version();
+            uint64 ver = token ? token->value.load(std::memory_order_relaxed) : 0;
+            saved_storage_versions.push_back({move(token), ver, value->id});
         }
         for (Var* value : outputs()) {
-            auto token = value->storage_version_token();
-            saved_storage_versions.push_back({token, token->value.load(std::memory_order_relaxed), value->id});
+            auto token = value->peek_storage_version();
+            uint64 ver = token ? token->value.load(std::memory_order_relaxed) : 0;
+            saved_storage_versions.push_back({move(token), ver, value->id});
         }
     }
 }
@@ -778,12 +803,14 @@ void Op::prepare_codegen_key(JK& jk) {
         bool use_cuda_op = backend != BackendId::Cpu;
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
-                    || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
+                    || (var->storage_strides.size() && var->num
+                        && var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max()))
                 use_int64_t = true;
         }
         for (Var* var : outputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
-                    || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
+                    || (var->storage_strides.size() && var->num
+                        && var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max()))
                 use_int64_t = true;
         }
         jk << "«JIT:1";
@@ -864,8 +891,8 @@ void Op::run_registered() {
 void Op::do_run() { run_registered(); }
 
 string Op::get_filename_from_jit_key(const string& jit_key, const string& suffix) {
-    auto* tuned = jit_key_mapper.find(jit_key);
-    string s = tuned ? *tuned : jit_key;
+    string s;
+    if (!jit_key_mapper.find_copy(jit_key, s)) s = jit_key;
     std::stringstream ss;
     if (s.size() > 100) {
         ss << s.substr(0, 90) << "...hash_"
@@ -913,14 +940,24 @@ string Op::file_name_to_class_name(const string& s) {
 }
 
 void Op::jit_run(JK& jk) {
-    // Own the lookup key before any subsequent preparation can reuse JK's
-    // thread-local scratch buffer.  Cache keys must not borrow that storage.
-    string jit_key = jk.to_string();
-    if (auto* cached = jit_ops.find(jit_key)) {
-        LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)*cached;
-        Profiler::record_and_run(*cached, this, jit_key.c_str());
+    if (PREDICT_BRANCH_NOT_TAKEN(jit_tier_mode() == 0) && tier0_try_execute_op(this, jk))
+        return;
+    jit_op_entry_t entry = nullptr;
+    if (jit_ops.find_copy(jk.to_cstring(), (size_t)jk.size, entry)) {
+        if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable)) {
+            // Own the key before running: subsequent preparation can reuse `jk`.
+            string jit_key = jk.to_string();
+            LOGvvv <<  "Jit op key found:" << jit_key << "jit op entry:" << (void*)entry;
+            Profiler::record_and_run(entry, this, jit_key.c_str());
+            return;
+        }
+        LOGvvv <<  "Jit op key found:" << jk.to_cstring() << "jit op entry:" << (void*)entry;
+        entry(this);
         return;
     }
+    if (tier0_try_execute_op(this, jk))
+        return;
+    string jit_key = jk.to_string();
     LOGvv << "Jit op key not found:" << jit_key;
     // Serial compilation reaches this path without the parallel compiler's
     // operator context. Capture the name before compilation can release the
@@ -934,8 +971,8 @@ void Op::jit_run(JK& jk) {
             + " failed.\n\nReason: " + error.what());
     }
     CHECK(get_jit_key(jk) == jit_key) << "Non-fused compilation changed its JIT key";
-    jit_ops[jit_key] = op_entry;
-    jit_key_mapper[jit_key] = jit_key;
+    jit_ops.set(jit_key, op_entry);
+    jit_key_mapper.set(jit_key, jit_key);
     LOGvv << "Get jit op entry:" << (void*)op_entry;
     Profiler::record_and_run(op_entry, this, jit_key.c_str());
 }

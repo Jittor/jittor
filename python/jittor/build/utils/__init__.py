@@ -771,6 +771,10 @@ def get_build_config():
     # them does not export, so dlopen of a cached kernel would fail.
     if (os.environ.get("JT_GRAPH_BUILD_PROFILE") or "").strip() not in ("", "0"):
         config["JT_GRAPH_BUILD_PROFILE"] = "1"
+    # Fast-dev CUDA builds omit redundant PTX (compute_XX) generation and keep
+    # only local sm_XX SASS, so isolate their cache from production builds.
+    if (os.environ.get("JT_FAST_DEV") or "").strip().lower() not in ("", "0", "false", "off", "no"):
+        config["JT_FAST_DEV"] = "1"
     return config
 
 

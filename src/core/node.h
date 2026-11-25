@@ -466,7 +466,7 @@ struct Node {
     }
 
     inline Node() {
-        id = ++total_node;
+        id = total_node.fetch_add(1, std::memory_order_relaxed) + 1;
         #ifdef NODE_MEMCHECK
         bool track = true;
         #else
@@ -553,6 +553,13 @@ struct Node {
     void set_stop_grad();
 };
 
+// Batch liveness ownership helpers: acquire graph_mutation_mutex() once for
+// the whole span and fast-path nodes whose counters stay strictly above zero.
+void own_both_liveness_batch(Var* const* vars, size_t n);
+void own_both_liveness_batch_locked(Var* const* vars, size_t n);
+void release_both_liveness_batch(Var* const* vars, size_t n);
+void release_both_liveness_batch_locked(Var* const* vars, size_t n);
+
 inline Node::output_t& Node::input_t::reverse() {
     return node->_outputs[back_index];
 }
@@ -577,9 +584,18 @@ inline Node::input_t& Node::output_t::reverse() {
 class GraphMutationMutex {
     std::atomic<const void*> owner_{nullptr};
     int depth_ = 0;  // written by the owner only
-    static const void* thread_token() {
+    static inline const void* thread_token() {
+#if defined(__linux__) && defined(__x86_64__)
+        // Linux x86-64 ELF ABI stores the unique per-thread TCB self-pointer at
+        // %fs:0 (same value pthread_self() returns). Reading it directly is one
+        // instruction and avoids calling __tls_get_addr@plt on every lock/unlock.
+        const void* self;
+        asm("mov %%fs:0, %0" : "=r"(self));
+        return self;
+#else
         thread_local char token;
         return &token;
+#endif
     }
 public:
     void lock() {
@@ -589,10 +605,20 @@ public:
             return;
         }
         const void* expected = nullptr;
-        for (int spins = 0; !owner_.compare_exchange_weak(
-                expected, self, std::memory_order_acquire, std::memory_order_relaxed); ) {
+        for (int spins = 0; ; ) {
+            if (owner_.load(std::memory_order_relaxed) == nullptr
+                    && owner_.compare_exchange_weak(
+                        expected, self, std::memory_order_acquire, std::memory_order_relaxed)) {
+                break;
+            }
             expected = nullptr;
-            if (++spins > 64) std::this_thread::yield();
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#endif
+            if (++spins > 64) {
+                std::this_thread::yield();
+                spins = 0;
+            }
         }
         depth_ = 1;
     }

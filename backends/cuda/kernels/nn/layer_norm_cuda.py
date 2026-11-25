@@ -46,7 +46,7 @@ def _warp_rows(x, hidden):
 
 
 @functools.lru_cache(maxsize=256)
-def _warp_rows_source(hidden, eps, affine):
+def _warp_rows_source(hidden, affine):
     """A warp per row: the row in registers, both reductions by shuffles.
 
     The block-per-row kernel below gives a 320-wide row -- a Stable Diffusion
@@ -69,7 +69,7 @@ def _warp_rows_source(hidden, eps, affine):
         for (int o = 16; o > 0; o >>= 1) v += __shfl_xor_sync(0xffffffffu, v, o);
         return v;
     }}
-    __global__ static void kernel_warp_rows(in0_type* x, {args}out0_type* y, long long rows) {{
+    __global__ static void kernel_warp_rows(in0_type* x, {args}out0_type* y, long long rows, double eps) {{
         long long row = ((long long)blockIdx.x * blockDim.x + threadIdx.x) >> 5;
         int lane = threadIdx.x & 31;
         if (row >= rows) return;
@@ -95,7 +95,7 @@ def _warp_rows_source(hidden, eps, affine):
             }}
             var = jt_ln_allsum(var);
             use_double = !isfinite(var);
-            inv_std = rsqrtf(var / {hidden} + {eps:.9g}f);
+            inv_std = rsqrtf(var / {hidden} + static_cast<float>(eps));
         }}
         if (use_double) {{
             double dsum = 0.0;
@@ -106,7 +106,7 @@ def _warp_rows_source(hidden, eps, affine):
                 double d = static_cast<double>(xr[j]) - dmean;
                 dvar += d * d;
             }}
-            double dinv = 1.0 / sqrt(jt_ln_allsum_double(dvar) / {hidden} + {eps:.17g});
+            double dinv = 1.0 / sqrt(jt_ln_allsum_double(dvar) / {hidden} + eps);
             for (int j = lane; j < {hidden}; j += 32)
                 yr[j] = out0_type((static_cast<double>(xr[j]) - dmean) * dinv {scale_d});
             return;
@@ -123,13 +123,14 @@ def _warp_rows_source(hidden, eps, affine):
 @functools.lru_cache(maxsize=256)
 def _warp_rows_launch(hidden, pointers):
     return f"""
+    double eps = data["eps"];
     long long rows = in0->num / {hidden};
-    kernel_warp_rows<<<(unsigned)((rows + 7) / 8), 256>>>({pointers}, rows);
+    kernel_warp_rows<<<(unsigned)((rows + 7) / 8), 256>>>({pointers}, rows, eps);
     """
 
 
 @functools.lru_cache(maxsize=256)
-def _block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal):
+def _block_rows_source_scalar(hidden, offset_literal, scale_literal):
     # Formatted once per configuration: the source is a pure function
     # of these, and a BERT-base forward built it 25 times.
     return f"""
@@ -144,7 +145,7 @@ def _block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal):
                 return value;
             }}
             __global__ static void kernel(
-                    in0_type* x, out0_type* y, int hidden) {{
+                    in0_type* x, out0_type* y, int hidden, double eps) {{
                 int row = blockIdx.x;
                 int tid = threadIdx.x;
                 int lane = tid & 31;
@@ -209,7 +210,7 @@ def _block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal):
                             use_double = !isfinite(total);
                             if (!use_double)
                                 inv_std_shared = rsqrtf(
-                                    total / hidden + {eps_value:.9g}f);
+                                    total / hidden + static_cast<float>(eps));
                         }}
                     }}
                     __syncthreads();
@@ -244,7 +245,7 @@ def _block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal):
                         total = warp_sum_double(total);
                         if (lane == 0)
                             inv_std_double_shared = 1.0 / sqrt(
-                                total / hidden + {eps_value:.17g});
+                                total / hidden + eps);
                     }}
                     __syncthreads();
                     double double_inv_std = inv_std_double_shared;
@@ -267,13 +268,14 @@ def _block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal):
                     }}
                 }}
             }}
+            double eps = data["eps"];
             int rows = in0->num / {hidden};
-            kernel<<<rows, 128>>>(in0_p, out0_p, {hidden});
+            kernel<<<rows, 128>>>(in0_p, out0_p, {hidden}, eps);
             """
 
 
 @functools.lru_cache(maxsize=256)
-def _block_rows_source(eps_value, hidden):
+def _block_rows_source(hidden):
     # Formatted once per configuration: the source is a pure function
     # of these, and a BERT-base forward built it 25 times.
     return f"""
@@ -289,7 +291,7 @@ def _block_rows_source(eps_value, hidden):
         }}
         __global__ static void kernel(
                 in0_type* x, in1_type* weight, in2_type* bias,
-                out0_type* y, int hidden) {{
+                out0_type* y, int hidden, double eps) {{
             int row = blockIdx.x;
             int tid = threadIdx.x;
             int lane = tid & 31;
@@ -359,7 +361,7 @@ def _block_rows_source(eps_value, hidden):
                         use_double = !isfinite(total);
                         if (!use_double)
                             inv_std_shared = rsqrtf(
-                                total / hidden + {eps_value:.9g}f);
+                                total / hidden + static_cast<float>(eps));
                     }}
                 }}
                 __syncthreads();
@@ -394,7 +396,7 @@ def _block_rows_source(eps_value, hidden):
                     total = warp_sum_double(total);
                     if (lane == 0)
                         inv_std_double_shared = 1.0 / sqrt(
-                            total / hidden + {eps_value:.17g});
+                            total / hidden + eps);
                 }}
                 __syncthreads();
                 double double_inv_std = inv_std_double_shared;
@@ -420,9 +422,10 @@ def _block_rows_source(eps_value, hidden):
                 }}
             }}
         }}
+        double eps = data["eps"];
         int rows = in0->num / {hidden};
         kernel<<<rows, 128>>>(
-            in0_p, in1_p, in2_p, out0_p, {hidden});
+            in0_p, in1_p, in2_p, out0_p, {hidden}, eps);
         """
 
 
@@ -444,31 +447,40 @@ def _layer_norm_no_grad_cuda(
                       f"* {scale_value!r} + {offset_value!r}")
             return jt.code(
                 x.shape, x.dtype, [x],
-                cuda_src=_warp_rows_source(hidden, eps_value, affine)
-                + _warp_rows_launch(hidden, "in0_p, out0_p"))
+                cuda_src=_warp_rows_source(hidden, affine)
+                + _warp_rows_launch(hidden, "in0_p, out0_p"),
+                data={"eps": eps_value})
         y = jt.code(
             x.shape,
             x.dtype,
             [x],
-            cuda_src=_block_rows_source_scalar(eps_value, hidden, offset_literal, scale_literal),
+            cuda_src=_block_rows_source_scalar(hidden, offset_literal, scale_literal),
+            data={"eps": eps_value},
         )
         return y
     y = jt.code(x.shape, x.dtype, [x, weight, bias],
-                cuda_src=_affine_source(hidden, eps_value, _warp_rows(x, hidden)))
+                cuda_src=_affine_source(hidden, _warp_rows(x, hidden)),
+                data={"eps": eps_value})
     return _stop_grad_outputs(y)
 
 
 @functools.lru_cache(maxsize=256)
-def _affine_source(hidden, eps_value, warp):
+def _affine_source_cached(hidden, warp):
+    if warp:
+        affine = ("in1_type* weight, in2_type* bias, ",
+                  "* static_cast<float>(weight[j]) + static_cast<float>(bias[j])",
+                  "* static_cast<double>(weight[j]) + static_cast<double>(bias[j])")
+        return (_warp_rows_source(hidden, affine)
+                + _warp_rows_launch(hidden, "in0_p, in1_p, in2_p, out0_p"))
+    return _block_rows_source(hidden)
+
+
+def _affine_source(hidden, warp, _legacy_warp=None):
     """The kernel for a Var weight and bias: a warp a row, or a block.
 
     Also what the native module call builds a `LayerNorm`'s inference
     operator from (`src/bindings/pyjt/py_module_call.cc`).
     """
-    if warp:
-        affine = ("in1_type* weight, in2_type* bias, ",
-                  "* static_cast<float>(weight[j]) + static_cast<float>(bias[j])",
-                  "* static_cast<double>(weight[j]) + static_cast<double>(bias[j])")
-        return (_warp_rows_source(hidden, eps_value, affine)
-                + _warp_rows_launch(hidden, "in0_p, in1_p, in2_p, out0_p"))
-    return _block_rows_source(eps_value, hidden)
+    if _legacy_warp is not None:
+        warp = _legacy_warp
+    return _affine_source_cached(int(hidden), bool(warp))

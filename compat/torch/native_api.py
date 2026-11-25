@@ -4,11 +4,14 @@ Each exported operation is a stable module object. Its implementation remains
 the native backend's function, executed under the frontend's result-type and
 autograd policy. Native-only utilities are not exposed through missing reads.
 """
+from typing import Any
 from .api_delegates import bind_delegates
 from .context import get_install_context
 from .frontend import tensor_frontend
 from .fidelity import Fidelity, register_fidelity
 from .amp import _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
+
+_JITTOR_MOD: Any = None
 
 
 _NATIVE_NAMES = (
@@ -43,8 +46,14 @@ _NATIVE_MODULE_NAMES = {
 class NativeOperation:
     """An installation-independent identity for one native mathematical API."""
 
+    _SPECIAL_OPS = frozenset((
+        "pow", "rsqrt", "sqrt", "mul", "multiply", "sub", "subtract",
+        "linalg.svd", "fft.fftfreq", "fft.rfftfreq", "unique", "unique_consecutive",
+    ))
+
     def __init__(self, name):
         self._operation_key = name
+        self._is_plain = name not in self._SPECIAL_OPS
         self.__name__ = self.__qualname__ = name.replace(".", "_")
         self.__module__ = __name__
         self.__doc__ = "Native %s under the active Torch frontend policy." % name
@@ -57,9 +66,18 @@ class NativeOperation:
     _TORCH_DEFAULTS = {"linalg.svd": {"full_matrices": True}}
 
     def __call__(self, *args, **kwargs):
-        import jittor
-        context = get_install_context(jittor)
+        global _JITTOR_MOD
+        jittor_mod = _JITTOR_MOD
+        if jittor_mod is None:
+            import jittor as jittor_mod
+            _JITTOR_MOD = jittor_mod
+        context = get_install_context(jittor_mod)
         implementation = context.state["native_torch_operations"][self._operation_key]
+        if self._is_plain and not kwargs:
+            with tensor_frontend(context.state["Var"]):
+                if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
+                    implementation = implementation()
+                return implementation(*args)
         if self._operation_key in ("pow", "rsqrt", "sqrt") and "input" in kwargs:
             if args or "x" in kwargs:
                 raise TypeError("%s received input more than once" % self._operation_key)
@@ -112,7 +130,7 @@ class NativeOperation:
                 if self._operation_key in ("pow", "rsqrt"):
                     args = tuple(_cuda_autocast_fp32_input(value) for value in args)
                     kwargs = {name: _cuda_autocast_fp32_input(value) for name, value in kwargs.items()}
-                with jittor.flag_scope(amp_reg=jittor.amp_flags.disabled):
+                with jittor_mod.flag_scope(amp_reg=jittor_mod.amp_flags.disabled):
                     return implementation(*args, **kwargs)
             if unique_operation:
                 if self._operation_key == "unique_consecutive" and args:
@@ -123,12 +141,12 @@ class NativeOperation:
                     first = args[0]
                     backend = int(first.placement_backend) if isinstance(first, context.state["Var"]) else -1
                     if backend >= 0:
-                        token = jittor.core._set_tensor_placement(
+                        token = jittor_mod.core._set_tensor_placement(
                             backend, max(int(first.device_id), 0))
                         try:
                             result = implementation(*args, **kwargs)
                         finally:
-                            jittor.core._reset_tensor_placement(token)
+                            jittor_mod.core._reset_tensor_placement(token)
                     else:
                         result = implementation(*args, **kwargs)
                 else:

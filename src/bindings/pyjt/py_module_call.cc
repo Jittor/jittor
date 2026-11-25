@@ -177,8 +177,8 @@ std::map<std::tuple<int64, int64, int64, bool>, string> lt_linear_sources;
 string lt_linear_header_text;
 auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
-// Source per (hidden size, epsilon), as `_rms_norm_source` formats it.
-std::map<pair<int64, double>, string> rms_sources;
+// Source per hidden size, as `_rms_norm_source` formats it (eps passed via DataMap).
+std::map<int64, string> rms_sources;
 // `jittor.nn.LayerNorm.execute`, the implementation registered for
 // "nn.layer_norm.inference" and `layer_norm_cuda._affine_source`; see
 // `layer_norm_inference`.
@@ -186,7 +186,7 @@ PyObject* layer_norm_execute = nullptr;
 PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
-std::map<std::tuple<int64, double, bool>, string> layer_norm_sources;
+std::map<std::pair<int64, bool>, string> layer_norm_sources;
 
 // Keep fixed dictionary keys, never the values: hooks and module attributes
 // may change between calls and must be read from the live dictionary.
@@ -930,7 +930,8 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     if (!lt_linear_source_fn || lt_linear_header_text.empty() || !no_grad || amp_reg
             || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Cuda
             || !dict || !is_var(x))
-        return nullptr;    PyObject* weight = PyDict_GetItem(dict, name_weight());
+        return nullptr;
+    PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!weight || !is_var(weight) || !bias || !is_var(bias)) return nullptr;
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
@@ -1090,19 +1091,19 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     int64 hidden = a->shape[a->shape.size() - 1];
     int64 threads = 32;
     while (threads < std::min<int64>(hidden, 1024)) threads *= 2;
-    auto key = std::make_pair(hidden, epsilon);
-    auto found = rms_sources.find(key);
+    auto found = rms_sources.find(hidden);
     if (found == rms_sources.end()) {
         PyObjHolder src(PyObject_CallFunction(rms_source_fn, "LLLd",
             (long long)hidden, (long long)threads, (long long)(threads / 32), epsilon));
+        if (!src.obj) return nullptr;
         Py_ssize_t size;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
         if (!text) return nullptr;
-        found = rms_sources.emplace(key, string(text, size)).first;
+        found = rms_sources.emplace(hidden, string(text, size)).first;
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma},
-        "", {}, "", string(found->second), {}, "", {}, "")));
+        "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
@@ -1148,11 +1149,12 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
         return nullptr;
     }
     bool warp = hidden <= 1024 && a->num / hidden >= 1024;
-    auto key = std::make_tuple(hidden, epsilon, warp);
+    auto key = std::make_pair(hidden, warp);
     auto found = layer_norm_sources.find(key);
     if (found == layer_norm_sources.end()) {
-        PyObjHolder src(PyObject_CallFunction(layer_norm_source_fn, "LdO",
-            (long long)hidden, epsilon, warp ? Py_True : Py_False));
+        PyObjHolder src(PyObject_CallFunction(layer_norm_source_fn, "LO",
+            (long long)hidden, warp ? Py_True : Py_False));
+        if (!src.obj) return nullptr;
         Py_ssize_t length;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &length);
         if (!text) return nullptr;
@@ -1160,7 +1162,7 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma, beta},
-        "", {}, "", string(found->second), {}, "", {}, "")));
+        "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }

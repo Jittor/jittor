@@ -319,6 +319,7 @@ include backends/cuda/libraries/cutt/src/cutt_wrapper.cc
 include backends/cuda/runtime/driver.cc
 include backends/cuda/runtime/nan_checker.cc
 include backends/cuda/runtime/strided_copy.cu
+include backends/cuda/runtime/tier0_cuda.cu
 include backends/cuda/src/fp16_emu.cc
 include backends/cuda/src/helper_cuda.cc
 include backends/rocm/libraries/hipblas/gemm_layout.h
@@ -590,6 +591,8 @@ include src/codegen/jit_compiler.cc
 include src/codegen/jit_compiler.h
 include src/codegen/jit_key.cc
 include src/codegen/jit_key.h
+include src/codegen/nvrtc_compiler.cc
+include src/codegen/nvrtc_compiler.h
 include src/codegen/op_compiler.cc
 include src/codegen/op_compiler.h
 include src/codegen/opt/expr.cc
@@ -705,6 +708,7 @@ include src/core/memory_profiler.cc
 include src/core/memory_profiler.h
 include src/core/node.cc
 include src/core/node.h
+include src/core/node_pool.h
 include src/core/numpy_func.h
 include src/core/op.cc
 include src/core/op.h
@@ -773,6 +777,8 @@ include src/ops/composite/contiguous_op.cc
 include src/ops/composite/contiguous_op.h
 include src/ops/composite/copy_op.cc
 include src/ops/composite/copy_op.h
+include src/ops/composite/cuda_launch_op.cc
+include src/ops/composite/cuda_launch_op.h
 include src/ops/composite/device_copy_op.cc
 include src/ops/composite/device_copy_op.h
 include src/ops/composite/empty_op.cc
@@ -825,6 +831,8 @@ include src/ops/composite/tape_op.cc
 include src/ops/composite/tape_op.h
 include src/ops/composite/transpose_op.cc
 include src/ops/composite/transpose_op.h
+include src/ops/composite/tvm_ffi_launch_op.cc
+include src/ops/composite/tvm_ffi_launch_op.h
 include src/ops/composite/where_op.cc
 include src/ops/composite/where_op.h
 include src/ops/composite/write_back_op.cc
@@ -918,6 +926,8 @@ include src/runtime/runtime.h
 include src/runtime/submission_pipeline.h
 include src/runtime/tensor_placement.cc
 include src/runtime/tensor_placement.h
+include src/runtime/tier0_ops.cc
+include src/runtime/tier0_ops.h
 include src/runtime/traversal_epoch.cc
 include src/runtime/traversal_epoch.h
 include src/runtime/traversal_state.h

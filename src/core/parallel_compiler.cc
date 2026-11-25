@@ -25,8 +25,10 @@
 #include "runtime/launch_diagnostics.h"
 #include "bindings/pyjt/gil.h"
 #include "codegen/op_compiler.h"
+#include "codegen/nvrtc_compiler.h"
 #include "core/executor.h"
 #include "runtime/lock.h"
+#include "runtime/tier0_ops.h"
 #include "codegen/opt/jit_searcher.h"
 #include "core/fused_op.h"
 #include "runtime/backend.h"
@@ -239,11 +241,12 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         op->prepare_execution_on(jkl, op->execution_backend_for(requested_backend));
         if (jkl.empty()) continue;
 
-        // Copy the key before consulting caches; JK is reusable scratch
-        // storage and must not escape this preparation step.
-        string jit_key = jkl.to_string();
-        if (jit_key_mapper.find(jit_key)) continue;
+        if (jit_key_mapper.contains(jkl.to_cstring(), (size_t)jkl.size)) continue;
+        if (tier0_should_skip_parallel_compile(op, is_fused_op)) continue;
 
+        // Copy the key only on cache miss; JK is reusable scratch storage
+        // and must not escape this preparation step.
+        string jit_key = jkl.to_string();
         if (!seen_jit_keys.emplace(jit_key).second) continue;
 
         int task_rid;
@@ -287,7 +290,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
             const char* named = op_desc.size() ? op_desc.c_str()
                 : op_kind ? op_kind : "(operator not yet identified)";
             LOGf << "Compiling" << (is_fused_op ? "fused operator" : "operator")
-                << named << "(" >> rid+1 << "of" << queue.size() >> ") failed."
+                << named << "(" >> (rid+1) << "of" << queue.size() >> ") failed."
                 << "\n\nReason: " >> e.what() >> source_note;
         }
     }
@@ -357,9 +360,16 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 LOGvv << "Compile FusedOp:" << op;
                 LOGV(11) << "FusedOps:" << fused_op.ops;
                 auto context = std::make_shared<FusedOpContext>();
-                context->setup(&fused_op);
                 fused_op.context = context.get();
                 fused_op.context_owner = context;
+                if (nvrtc_try_compile(&fused_op, *context, task.previous_jit_key)) {
+                    CompileResult result;
+                    result.previous_jit_key = task.previous_jit_key;
+                    result.fused_context = std::move(context);
+                    result.new_jit_key = task.previous_jit_key;
+                    entries.emplace_back(std::move(result));
+                } else {
+                context->setup(&fused_op);
                 fused_op.do_prepare(jkl);
                 auto op_entry = OpCompiler::do_compile(op);
                 context->entry = op_entry;
@@ -373,14 +383,14 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                         bool needs_compile;
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            needs_compile = !jit_ops.find(relay_jit_key)
+                            needs_compile = !jit_ops.contains(relay_jit_key)
                                 && relay_keys_compiling.emplace(relay_jit_key).second;
                         }
                         if (!needs_compile) continue;
                         auto op_entry = OpCompiler::do_compile(orc.op);
                         {
                             std::lock_guard<std::mutex> lock(entry_lock);
-                            jit_ops[relay_jit_key] = op_entry;
+                            jit_ops.set(relay_jit_key, op_entry);
                         }
                     }
                 }
@@ -389,6 +399,7 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
                 result.fused_context = std::move(context);
                 result.new_jit_key = std::move(new_jit_key);
                 entries.emplace_back(std::move(result));
+                }
             }
             } catch (const std::exception& e) {
                 cancelled.store(true, std::memory_order_release);
@@ -446,16 +457,15 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
     // fill all op entry
     for (auto& entries : worker_results) {
         for (auto& result : entries) {
-            // One assignment per key. The tables are bounded, so an
-            // insertion can evict the entry the previous subscript returned a
-            // reference to -- which `t[a] = t[b] = v` would then read.
             if (result.fused_context) {
-                jit_fused_ops[result.previous_jit_key] = result.fused_context;
-                jit_fused_ops[result.new_jit_key] = result.fused_context;
+                if (result.fused_context->nvrtc_kernel)
+                    nvrtc_preload_kernel(*result.fused_context->nvrtc_kernel);
+                jit_fused_ops.set(result.previous_jit_key, result.fused_context);
+                jit_fused_ops.set(result.new_jit_key, result.fused_context);
             } else {
-                jit_ops[result.previous_jit_key] = result.op_entry;
+                jit_ops.set(result.previous_jit_key, result.op_entry);
             }
-            jit_key_mapper[result.previous_jit_key] = result.new_jit_key;
+            jit_key_mapper.set(result.previous_jit_key, result.new_jit_key);
         }
     }
 } 
