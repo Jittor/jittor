@@ -931,16 +931,31 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         trace_op.named(op, is_fused_op,
                        requested_backend == BackendId::Cpu ? -1 : execution_device);
-        LaunchRecord launch;
-        launch.origin = op->launch_origin;
-        launch.op_id = is_fused_op ? 0 : op->type_id();
-        std::strncpy(launch.name, is_fused_op ? "fused_op" : op->name(), sizeof(launch.name)-1);
-        if (is_fused_op) {
-            launch.fused_count = fused_op.ops.size();
-            for (size_t member=0; member<std::min(fused_op.ops.size(), size_t(8)); ++member)
-                launch.fused_ids[member] = fused_op.ops[member]->type_id();
+        const bool need_launch_record = execution_backend != BackendId::Cpu
+            || requested_backend != BackendId::Cpu
+            || op->flag(OpFlags::_manual_device);
+        LaunchRecord launch(LaunchRecord::uninitialized);
+        if (need_launch_record) {
+            launch.origin = op->launch_origin;
+            if (is_fused_op) {
+                launch.op_id = 0;
+                std::memcpy(launch.name, "fused_op", 9);
+                const size_t fcount = fused_op.ops.size();
+                launch.fused_count = fcount;
+                const size_t fcap = fcount < 8 ? fcount : 8;
+                for (size_t member = 0; member < fcap; ++member)
+                    launch.fused_ids[member] = fused_op.ops[member]->type_id();
+            } else {
+                launch.op_id = op->type_id();
+                launch.fused_count = 0;
+                const char* oname = op->name();
+                size_t nlen = 0;
+                while (nlen < sizeof(launch.name) - 1 && oname[nlen]) ++nlen;
+                std::memcpy(launch.name, oname, nlen);
+                launch.name[nlen] = '\0';
+            }
         }
-        LaunchOperationScope launch_scope(launch);
+        LaunchOperationScope launch_scope(need_launch_record ? &launch : nullptr);
         Device allocation_target{execution_backend, execution_device};
         #ifdef HAS_ACCELERATOR
         // A genuine accelerator fallback may execute a CPU kernel against

@@ -112,7 +112,7 @@ struct FusedOp final : Op {
     inline Snapshot<Var*> snapshot_outputs(Op* op) const {
         if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan || op->batch_stamp != batch_stamp_wanted))
             return snapshot_outputs_slow(op);
-        int idx = op->batch_index_at(batch_stamp_wanted);
+        int idx = op->batch_index;
         if (PREDICT_BRANCH_NOT_TAKEN(idx < 0 || idx + 1 >= (int)batch_plan->op_outputs_begin.size()))
             return snapshot_outputs_slow(op);
         auto* base = batch_plan->op_outputs.data();
@@ -124,7 +124,7 @@ struct FusedOp final : Op {
     inline Snapshot<pair<Var*, int>> snapshot_inputs(Op* op) const {
         if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan || op->batch_stamp != batch_stamp_wanted))
             return snapshot_inputs_slow(op);
-        int idx = op->batch_index_at(batch_stamp_wanted);
+        int idx = op->batch_index;
         if (PREDICT_BRANCH_NOT_TAKEN(idx < 0 || idx + 1 >= (int)batch_plan->op_inputs_begin.size()))
             return snapshot_inputs_slow(op);
         auto* base = batch_plan->op_inputs.data();
@@ -135,12 +135,17 @@ struct FusedOp final : Op {
 
     // {producing op, slot in its output list}
     inline pair<Op*, int> snapshot_producer(Var* v) const {
-        if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan || v->batch_stamp != batch_stamp_wanted))
+        if (PREDICT_BRANCH_NOT_TAKEN(!batch_plan))
             return snapshot_producer_slow(v);
-        int idx = v->batch_index_at(batch_stamp_wanted);
+        // Any var not belonging to this batch is an external boundary input;
+        // its producer cannot be inside this fused segment, and reading live
+        // `_inputs` here would race with concurrent graph mutations.
+        if (v->batch_stamp != batch_stamp_wanted)
+            return {nullptr, 0};
+        int idx = v->batch_index;
         if (PREDICT_BRANCH_NOT_TAKEN(idx < 0 || idx >= (int)batch_plan->var_producer.size()
                 || batch_plan->all_vars[idx] != v))
-            return snapshot_producer_slow(v);
+            return {nullptr, 0};
         return batch_plan->var_producer[idx];
     }
 
@@ -156,12 +161,13 @@ struct FusedOp final : Op {
     inline bool var_stays_in_memory(Node* v) const {
         if (!batch_var_fused) return false;
         if (v->batch_stamp != batch_stamp_wanted) return true;
-        return (*batch_var_fused)[v->batch_index_at(batch_stamp_wanted)] == 1;
+        return (*batch_var_fused)[v->batch_index] == 1;
     }
 
     int get_node_id(Node* node);
     int has(Node* node);
     void update_ops();
+    void update_ops_and_edges();
     TensorPlacement graph_placement() const override {
         // Compiler copies borrow the constituent graph but intentionally do
         // not copy Node edges. Their placement must still match the segment.

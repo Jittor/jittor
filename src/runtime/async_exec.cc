@@ -3,6 +3,7 @@
 // This file is subject to the terms and conditions defined in
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
+#include <algorithm>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
@@ -52,6 +53,8 @@ struct Worker {
     std::function<void()> pending;
     uint8 pending_node_order = 0;
     bool ready = false, stopping = false;
+    bool worker_sleeping = false;
+    int waiters = 0;
     std::exception_ptr error;
     std::thread* thread = nullptr;
 };
@@ -154,7 +157,9 @@ void wait_before_flag_set(const char* name) {
     if (!async_exec_inflight.load(std::memory_order_acquire) || async_tls.is_worker) return;
     if (!strcmp(name, "no_grad") || !strcmp(name, "amp_reg")
             || !strcmp(name, "auto_mixed_precision_level")
-            || !strcmp(name, "node_order"))
+            || !strcmp(name, "node_order")
+            || !strcmp(name, "auto_convert_64_to_32")
+            || !strcmp(name, "transpose_storage_view"))
         return;
     async_exec_wait();
 }
@@ -196,30 +201,61 @@ void note_caller_work() {
     caller_work_ns = caller_work_ns < 0 ? ns : (caller_work_ns * 3 + ns) / 4;
 }
 
-// Up to ~100 us of polling before the caller falls back to blocking.
-template <class Ready>
-void spin_until(Ready ready) {
-    auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(100);
-    for (int i = 0; !ready(); i++) {
-        if ((i & 63) == 63 && std::chrono::steady_clock::now() > until) return;
+// Adaptive spin-wait: check immediately without reading the clock, do a short
+// unclocked poll for ultra-fast handovers, then spin up to an adaptive budget
+// that backs off smoothly (down to kMinUs so it can still catch and recover on
+// fast handovers) when waits sleep and ramps back up on hits.
+struct SpinBudget {
+    static constexpr int kMinUs = 4;
+    static constexpr int kMaxUs = 50;
+    int current_us = 25;
+
+    template <class Ready>
+    bool spin_until(Ready ready) {
+        if (ready()) return true;
+        for (int i = 0; i < 64; i++) {
+            if (ready()) {
+                current_us = std::min(kMaxUs, std::max(current_us * 2, 16));
+                return true;
+            }
 #if defined(__x86_64__) || defined(__i386__)
-        __builtin_ia32_pause();
+            __builtin_ia32_pause();
 #endif
+        }
+        auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(current_us);
+        for (int i = 0; ; i++) {
+            if (ready()) {
+                current_us = std::min(kMaxUs, std::max(current_us * 2, 16));
+                return true;
+            }
+            if ((i & 63) == 63 && std::chrono::steady_clock::now() > until) {
+                current_us = std::max(kMinUs, current_us / 2);
+                return false;
+            }
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#endif
+        }
     }
-}
+};
 
 void worker_main() {
     async_tls.is_worker = true;
+    SpinBudget worker_spin;
     for (;;) {
         std::function<void()> job;
         uint8 submitted_order;
         {
             // A step hands over a batch every few hundred microseconds; waking
             // from a condition variable costs tens of them on a loaded host,
-            // so the worker spins a little before it sleeps.
-            spin_until([] { return job_posted.load(std::memory_order_acquire); });
+            // so the worker spins adaptively before it sleeps.
+            worker_spin.spin_until([] { return job_posted.load(std::memory_order_acquire); });
             std::unique_lock<std::mutex> lock(worker->mutex);
-            worker->wake.wait(lock, [] { return worker->ready || worker->stopping; });
+            if (!worker->ready && !worker->stopping) {
+                worker->worker_sleeping = true;
+                worker->wake.wait(lock, [] { return worker->ready || worker->stopping; });
+                worker->worker_sleeping = false;
+            }
             if (!worker->ready) return;
             job_posted.store(false, std::memory_order_relaxed);
             job = std::move(worker->pending);
@@ -249,6 +285,7 @@ void worker_main() {
                 if (!error) error = std::current_exception();
             }
         }
+        bool need_notify;
         {
             std::lock_guard<std::mutex> lock(worker->mutex);
             if (error) {
@@ -257,15 +294,21 @@ void worker_main() {
             }
             batches_run.fetch_add(1, std::memory_order_relaxed);
             async_exec_inflight.store(0, std::memory_order_release);
+            need_notify = worker->waiters > 0;
         }
-        worker->done.notify_all();
+        if (need_notify) worker->done.notify_all();
     }
 }
 
 void wait_for_worker() {
-    spin_until([] { return !async_exec_inflight.load(std::memory_order_acquire); });
+    thread_local SpinBudget waiter_spin;
+    if (waiter_spin.spin_until([] { return !async_exec_inflight.load(std::memory_order_acquire); }))
+        return;
     std::unique_lock<std::mutex> lock(worker->mutex);
+    if (!async_exec_inflight.load(std::memory_order_acquire)) return;
+    worker->waiters++;
     worker->done.wait(lock, [] { return !async_exec_inflight.load(std::memory_order_acquire); });
+    worker->waiters--;
 }
 
 // Waiting for the batch while holding either the graph lock or the GIL
@@ -284,15 +327,20 @@ void wait_for_worker_unlocked() {
 void stop_worker() {
     if (!worker->thread) return;
     wait_for_worker_unlocked();
+    bool need_wake;
     {
         std::lock_guard<std::mutex> lock(worker->mutex);
         worker->stopping = true;
+        job_posted.store(true, std::memory_order_release);
+        need_wake = worker->worker_sleeping;
     }
-    worker->wake.notify_all();
+    if (need_wake) worker->wake.notify_all();
     if (worker->thread->joinable()) worker->thread->join();
     delete worker->thread;
     worker->thread = nullptr;
     worker->stopping = false;
+    worker->worker_sleeping = false;
+    job_posted.store(false, std::memory_order_relaxed);
 }
 
 #ifdef __linux__
@@ -306,6 +354,7 @@ void in_child() {
     placement->pinned = -2;
     placement->affinity_valid = false;
     async_exec_inflight.store(0);
+    job_posted.store(false, std::memory_order_relaxed);
     error_pending.store(false);
 }
 #endif
@@ -447,14 +496,17 @@ void async_exec_run_python_releases() {
 
 void async_exec_submit(std::function<void()>&& job) {
     submitted_at = std::chrono::steady_clock::now();
-    std::unique_lock<std::mutex> lock(worker->mutex);
-    worker->pending = std::move(job);
-    worker->pending_node_order = construction_node_order();
-    worker->ready = true;
-    job_posted.store(true, std::memory_order_release);
-    async_exec_inflight.store(1, std::memory_order_release);
-    lock.unlock();
-    worker->wake.notify_one();
+    bool need_wake;
+    {
+        std::lock_guard<std::mutex> lock(worker->mutex);
+        worker->pending = std::move(job);
+        worker->pending_node_order = construction_node_order();
+        worker->ready = true;
+        job_posted.store(true, std::memory_order_release);
+        async_exec_inflight.store(1, std::memory_order_release);
+        need_wake = worker->worker_sleeping;
+    }
+    if (need_wake) worker->wake.notify_one();
 }
 
 void async_exec_wait() {

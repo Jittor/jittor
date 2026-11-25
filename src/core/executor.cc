@@ -232,6 +232,7 @@ void Executor::submit_pending(Var* target, bool force) {
 }
 
 void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+    (void)tt;
     fused_op.ops.clear();
     fused_op.edges.clear();
     // Membership through the segment's own index rather than a traversal
@@ -243,50 +244,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
         fused_op.ops.push_back(op);
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
-    fused_op.update_ops();
-    for (Op* op : fused_op.ops) {
-        uint fid1 = fused_op.op_index.get(op);
-        int iid = 0;
-        for (auto& edge : fused_op.snapshot_inputs(op)) {
-            Var* v = edge.first;
-            // this is a control dependency edge, dont used
-            if (edge.second < 0) continue;
-            iid++;
-            int iop_id;
-            int iv_id;
-            pair<Op*, int> producer = fused_op.snapshot_producer(v);
-            int producer_id = producer.first ? fused_op.op_index.get(producer.first) : -1;
-            if (producer_id >= 0) {
-                iop_id = producer_id;
-                iv_id = producer.second;
-            } else {
-                iv_id = fused_op.var_index.get(v);
-                ASSERT(iv_id >= 0) << "input var of a fused op was not indexed by update_ops";
-                // add iv_id, prevent iv_id jit key overflow
-                iop_id = fused_op.ops.size() + iv_id;
-            }
-            fused_op.edges.emplace_back(iop_id, iv_id, fid1, iid-1);
-        }
-        // TODO: can we remove this?
-        // uint oid = 0;
-        // for (Var* v : op->outputs()) {
-        //     oid++;
-        //     if (v->tflag != tt) {
-        //         // this var node not belong to current execution
-        //         // this will happend in multiple outputs fuseable op
-        //         // v->custom_data = 0 represents this var cannot be fused
-        //         v->custom_data = 0;
-        //         continue;
-        //     }
-        //     // for (auto o : v->outputs_with_index()) {
-        //     //     Op* op2 = o.op;
-        //     //     uint iid = o.index;
-        //     //     if (op2->tflag != ntt) continue;
-        //     //     uint fid2 = op2->custom_data;
-        //     //     fused_op.edges.emplace_back(fid1, oid-1, fid2, iid);
-        //     // }
-        // }
-    }
+    fused_op.update_ops_and_edges();
 }
 
 static void top_weak_sync(vector<Var*>& vars) {

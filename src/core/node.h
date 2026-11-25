@@ -605,10 +605,20 @@ public:
             return;
         }
         const void* expected = nullptr;
-        for (int spins = 0; !owner_.compare_exchange_weak(
-                expected, self, std::memory_order_acquire, std::memory_order_relaxed); ) {
+        for (int spins = 0; ; ) {
+            if (owner_.load(std::memory_order_relaxed) == nullptr
+                    && owner_.compare_exchange_weak(
+                        expected, self, std::memory_order_acquire, std::memory_order_relaxed)) {
+                break;
+            }
             expected = nullptr;
-            if (++spins > 64) std::this_thread::yield();
+#if defined(__x86_64__) || defined(__i386__)
+            __builtin_ia32_pause();
+#endif
+            if (++spins > 64) {
+                std::this_thread::yield();
+                spins = 0;
+            }
         }
         depth_ = 1;
     }

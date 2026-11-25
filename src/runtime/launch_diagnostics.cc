@@ -156,9 +156,19 @@ void LaunchHistory::record(const LaunchRecord& record, Device device, uintptr_t 
     auto& ring = *lease.slot;
     std::lock_guard<std::mutex> guard(ring.mutex);
     auto& slot = ring.records[ring.written++ % capacity];
-    slot = record;
+    slot.origin = record.origin;
     slot.device = device;
     slot.stream = stream;
+    slot.op_id = record.op_id;
+    slot.fused_count = record.fused_count;
+    size_t nlen = 0;
+    while (nlen < sizeof(slot.name) - 1 && record.name[nlen]) ++nlen;
+    std::memcpy(slot.name, record.name, nlen);
+    slot.name[nlen] = '\0';
+    if (record.fused_count) {
+        const size_t fc = std::min<size_t>(record.fused_count, 8);
+        std::memcpy(slot.fused_ids, record.fused_ids, fc * sizeof(uint32));
+    }
     slot.sequence = ++impl->sequence;
 }
 
@@ -236,10 +246,20 @@ void leave_launch_origin_entry(bool outer_active, uint64 outer_origin) {
 }
 LaunchOriginScope::LaunchOriginScope(uint64 origin) : previous(launch_tls.active_origin) { launch_tls.active_origin = origin; }
 LaunchOriginScope::~LaunchOriginScope() { launch_tls.active_origin = previous; }
-LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record) : previous(launch_tls.active_launch) {
+LaunchOperationScope::LaunchOperationScope(const LaunchRecord& record)
+    : previous(launch_tls.active_launch), active(true) {
     launch_tls.active_launch = &record;
 }
-LaunchOperationScope::~LaunchOperationScope() { launch_tls.active_launch = previous; }
+LaunchOperationScope::LaunchOperationScope(const LaunchRecord* record)
+    : previous(nullptr), active(record != nullptr) {
+    if (active) {
+        previous = launch_tls.active_launch;
+        launch_tls.active_launch = record;
+    }
+}
+LaunchOperationScope::~LaunchOperationScope() {
+    if (active) launch_tls.active_launch = previous;
+}
 namespace {
 // Trivial process-lifetime storage: teardown may consult it after runtime owners
 // are destroyed. Every backend has its own mask; no device suppresses another.

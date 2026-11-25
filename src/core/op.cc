@@ -802,12 +802,14 @@ void Op::prepare_codegen_key(JK& jk) {
         bool use_cuda_op = backend != BackendId::Cpu;
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
-                    || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
+                    || (var->storage_strides.size() && var->num
+                        && var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max()))
                 use_int64_t = true;
         }
         for (Var* var : outputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
-                    || var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max())
+                    || (var->storage_strides.size() && var->num
+                        && var->storage_span_bytes() / var->dsize() >= std::numeric_limits<int32_t>::max()))
                 use_int64_t = true;
         }
         jk << "«JIT:1";
