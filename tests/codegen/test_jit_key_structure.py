@@ -154,21 +154,18 @@ class TestJitKeyIdentifiesTheKernel(unittest.TestCase):
         self._check_fused_array_keys(1)
 
     def test_a_300_op_fusion_does_not_share_a_key_with_a_200_op_one(self):
-        keys_200 = fused_keys(lambda: chain_sum(200).sync())
-        keys_300 = fused_keys(lambda: chain_sum(300).sync())
-        self.assertTrue(keys_200, "no fused segment ran for n=200")
-        self.assertTrue(keys_300, "no fused segment ran for n=300")
-        # No key from either run may appear in the other: the two fusions
-        # differ in op count, var count and edge structure alike.
-        self.assertTrue(
-            set(keys_200).isdisjoint(set(keys_300)),
-            "a 200-op fusion and a 300-op fusion share a jit key, so the edge "
-            "encoding is not injective")
-        # And the arithmetic is right, which is what a collision would break.
-        np.testing.assert_allclose(chain_sum(200).numpy(),
-                                   np.full((4,), 200 * 201 // 2, "float32"))
-        np.testing.assert_allclose(chain_sum(300).numpy(),
-                                   np.full((4,), 300 * 301 // 2, "float32"))
+        # With the default fusion limits, both chains can contain an identical
+        # segment. Compare the keys of the complete, differently sized groups.
+        with jt.flag_scope(fuse_op_hard_limit=0, fuse_tiny_op_limit=0):
+            keys_200 = fused_keys(lambda: chain_sum(200).sync())
+            keys_300 = fused_keys(lambda: chain_sum(300).sync())
+            self.assertEqual(len(keys_200), 1)
+            self.assertEqual(len(keys_300), 1)
+            self.assertNotEqual(keys_200[0], keys_300[0])
+            np.testing.assert_allclose(chain_sum(200).numpy(),
+                                       np.full((4,), 200 * 201 // 2, "float32"))
+            np.testing.assert_allclose(chain_sum(300).numpy(),
+                                       np.full((4,), 300 * 301 // 2, "float32"))
 
     def test_two_edge_structures_of_the_same_size_get_different_keys(self):
         # The stronger form of the case above, and the one the fixed-width

@@ -1194,7 +1194,8 @@ void KernelIR::remove_all_unused() {
     }
 }
 
-void KernelIR::remove_intermediate(const unordered_set<string>& names) {
+void KernelIR::remove_intermediate(const unordered_set<string>& names,
+                                   const unordered_map<string, string>& stored_types) {
     const char* ss[] = {"code", "lvalue", "rvalue"};
     bool need_re_parse = false;
     for (const char* s : ss) {
@@ -1220,14 +1221,15 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
             }
             if (code[j-1] == ']') {
                 // xxxp[...] -> xxxd
-                if (k>=i && code[k]=='p' && names.count(code.substr(i,k-i))) {
+                if (code[k]=='p' && names.count(code.substr(i, k-i))) {
                     code[k] = 'd';
                     for (uint l=k+1; l<j; l++) code[l] = ' ';
                     if (i==0 && s==string("code")) {
-                        // xxxd = xxx -> auto xxxd = xxx
-                        code = "auto " + code;
+                        auto stored = stored_types.find(code.substr(i, k-i));
+                        string declaration = stored == stored_types.end() ? "auto " : stored->second + " ";
+                        code = declaration + code;
                         need_re_parse = true;
-                        j += 5;
+                        j += declaration.size();
                     }
                 }
                 i = k+1;
@@ -1254,7 +1256,7 @@ void KernelIR::remove_intermediate(const unordered_set<string>& names) {
         return;
     }
     for_each_rev([&](unique_ptr<KernelIR>& c) {
-        c->remove_intermediate(names);
+        c->remove_intermediate(names, stored_types);
     });
 }
 

@@ -261,7 +261,8 @@ struct KernelIR {
     // xxxp[...] -> xxxd
     // xxxd = xxx -> auto xxxd = xxx
     // xxxp -> 0
-    void remove_intermediate(const unordered_set<string>& names);
+    void remove_intermediate(const unordered_set<string>& names,
+                             const unordered_map<string, string>& stored_types = {});
 
     // remove definitions which attr[used]==1, return remove or not
     bool remove_unused();
