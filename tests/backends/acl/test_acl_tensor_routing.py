@@ -141,7 +141,7 @@ class IndexingRouting(unittest.TestCase):
         # ``import jittor``) instead of a ``jt`` global, so the stand-in has
         # to be injected under that name for the stub Var to be the one
         # patched.
-        self.owner = definitions("ops/indexing.py", jt=self.jt, _jt=self.jt, np=np,
+        self.owner = definitions("ops/indexing.py", Var=Var, jt=self.jt, _jt=self.jt, np=np,
                                  try_dispatch=dispatch,
                                  dispatch_context=lambda *args: SimpleNamespace(backend="cpu"),
                                  _native_var_getitem=Var.getitem,
