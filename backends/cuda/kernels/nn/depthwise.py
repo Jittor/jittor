@@ -4,6 +4,77 @@ import jittor as jt
 from jittor._runtime.backend_libraries import library_resource
 
 
+def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, dilation):
+    """Channels-last (NHWC) depthwise conv2d kernel avoiding NCHW<->NHWC copies."""
+    Kh, Kw = int(weight.shape[-2]), int(weight.shape[-1])
+    sh, sw = int(stride[0]), int(stride[1])
+    ph, pw = int(padding[0]), int(padding[1])
+    dh, dw = int(dilation[0]), int(dilation[1])
+    return jt.code(
+        output_shape_nhwc,
+        x_nhwc.dtype,
+        [x_nhwc, weight],
+        cuda_header="""
+        template <typename T, int KH, int KW, int SH, int SW, int DH, int DW>
+        __global__ void KernelDepthwiseConvNHWC(
+            const T* __restrict__ input_data,
+            const T* __restrict__ filter_data,
+            int N, int H, int W, int C,
+            int OH, int OW, int PH, int PW,
+            T* __restrict__ output_data) {
+            int total = N * OH * OW * C;
+            int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= total) return;
+            int c = idx % C;
+            int tmp = idx / C;
+            int ow = tmp % OW;
+            tmp /= OW;
+            int oh = tmp % OH;
+            int n = tmp / OH;
+            int h_in_start = oh * SH - PH;
+            int w_in_start = ow * SW - PW;
+            const T* w_ptr = filter_data + c * (KH * KW);
+            const T* x_batch = input_data + ((size_t)n * H * W) * C + c;
+            float acc = 0.0f;
+            #pragma unroll
+            for (int kh = 0; kh < KH; ++kh) {
+                int h_in = h_in_start + kh * DH;
+                if ((unsigned)h_in < (unsigned)H) {
+                    const T* x_row = x_batch + ((size_t)h_in * W) * C;
+                    #pragma unroll
+                    for (int kw = 0; kw < KW; ++kw) {
+                        int w_in = w_in_start + kw * DW;
+                        if ((unsigned)w_in < (unsigned)W) {
+                            acc = fmaf(
+                                static_cast<float>(w_ptr[kh * KW + kw]),
+                                static_cast<float>(x_row[(size_t)w_in * C]),
+                                acc);
+                        }
+                    }
+                }
+            }
+            output_data[idx] = static_cast<T>(acc);
+        }
+        """,
+        cuda_src=f"""
+            const int N = in0_shape0;
+            const int H = in0_shape1;
+            const int W = in0_shape2;
+            const int C = in0_shape3;
+            const int OH = out0_shape1;
+            const int OW = out0_shape2;
+            const int total = N * OH * OW * C;
+            if (total > 0) {{
+                const int threads = 256;
+                const int blocks = (total + threads - 1) / threads;
+                KernelDepthwiseConvNHWC<in0_type, {Kh}, {Kw}, {sh}, {sw}, {dh}, {dw}>
+                    <<<blocks, threads>>>(
+                        in0_p, in1_p, N, H, W, C, OH, OW, {ph}, {pw}, out0_p);
+            }}
+        """,
+    )
+
+
 def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
     Kh, Kw = weight.shape[-2:]
     return jt.code(

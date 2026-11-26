@@ -13,7 +13,10 @@ from jittor import nn
 from jittor import Function
 from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor.nn.functional._amp import bias_for_compute_dtype
-from jittor.backends.cuda.kernels.nn.depthwise import depthwise_forward, depthwise_backward
+from jittor.nn.functional._layout import channels_last_source, channels_last_view, records_no_grad
+from jittor.backends.cuda.kernels.nn.depthwise import (
+    depthwise_forward, depthwise_forward_nhwc, depthwise_backward,
+)
 
 class DepthwiseConv(Function):
     def __init__(self, stride=1, padding=0, dilation=1):
@@ -36,6 +39,12 @@ class DepthwiseConv(Function):
         ow = (W+self.padding[1]*2-Kw*self.dilation[1]+self.dilation[1]-1)//self.stride[1]+1
         self.Khw = Kh, Kw
         assert oh>0 and ow>0
+        if records_no_grad(x, weight):
+            nhwc_x = channels_last_source(x)
+            if nhwc_x is not None:
+                out_nhwc = depthwise_forward_nhwc(
+                    nhwc_x, weight, [N, oh, ow, C], self.stride, self.padding, self.dilation)
+                return channels_last_view(out_nhwc)
         output = depthwise_forward(
             x, weight, [N, C, oh, ow], self.stride, self.padding, self.dilation)
         return output
