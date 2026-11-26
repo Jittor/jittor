@@ -261,6 +261,15 @@ def _bias_dims(bias):
     return (0, 0) if bias is None else (int(bias.shape[0]), int(bias.shape[1]))
 
 
+def _bias_uses_io_dtype(library):
+    if "bias_uses_io_dtype" not in _state:
+        probe = library.jt_cudnn_sdpa_bias_uses_io_dtype
+        probe.argtypes = []
+        probe.restype = ctypes.c_int
+        _state["bias_uses_io_dtype"] = bool(probe())
+    return _state["bias_uses_io_dtype"]
+
+
 def _supported(query, key, scale, causal, training, bias=None, layout=0):
     bias_b, bias_h = _bias_dims(bias)
     shape = (tuple(query.shape), tuple(key.shape), _jittor_dtype_name(query.dtype),
@@ -526,7 +535,12 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         # Inference mask preparation is pure device graph ops and capture-safe.
         if step_capture.tracing() and training:
             return None
-    if _library() is None:
+    library = _library()
+    if library is None:
+        return None
+    io_bias = attn_mask is not None and _bias_uses_io_dtype(library)
+    if io_bias and _jittor_dtype_name(attn_mask.dtype) not in ("bool", dtype):
+        # The public mask may carry more precision than Q/K/V.
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
     packed_qkv = None if training else _packed_qkv_view(query, key, value)
@@ -554,9 +568,12 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                                 layout=layout)[0])
     # Constant masks can use cuDNN's biased backward.
     bias, live = _mask_terms(attn_mask, _logical(query, q_seq), _logical(key, k_seq),
-                             query.dtype, bool(is_causal), check_absorbed=training)
+                             query.dtype, bool(is_causal), check_absorbed=training,
+                             replace_infinity=not io_bias)
     if bias is None or not _supported(query, key, scale, is_causal, training, bias, layout):
         return None
+    if io_bias:
+        bias = bias.cast(query.dtype)
     if training:
         out = logical(_CudnnAttention.apply(
             query, key, value, bias, scale, bool(is_causal), layout))
@@ -573,7 +590,8 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
 _MASK_TERMS = []
 
 
-def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *, check_absorbed=True):
+def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *,
+                check_absorbed=True, replace_infinity=True):
     """The additive bias for `attn_mask` and which query rows keep a key.
 
     Built once per mask, not once per layer. A decoder hands every layer the
@@ -588,7 +606,7 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *, check_a
     from jittor._runtime import step_capture
     tracing = step_capture.tracing()
     base = attn_mask._view_base_id() if attn_mask._is_view() else -1
-    key = (base, attn_mask.var_ptr if base < 0 else 0, bool(causal), bool(check_absorbed),
+    key = (base, attn_mask.var_ptr if base < 0 else 0, bool(causal), bool(check_absorbed), replace_infinity,
            tuple(attn_mask.shape), attn_mask._storage_offset(),
            tuple(attn_mask._storage_strides()), _jittor_dtype_name(attn_mask.dtype),
            _jittor_dtype_name(dtype), tuple(query_dims), tuple(key_dims))
@@ -620,14 +638,11 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *, check_a
                 if not tracing:
                     _MASK_TERMS.append((key, attn_mask if base < 0 else None, None, None))
                 return None, None
-        # cuDNN does not define an all -inf row, and cuDNN 9.10 BF16/FP16 SDPA
-        # additive bias produces NaNs on -inf entries (e.g. captured boolean
-        # causal masks where causal_mask_rewrite is skipped). Replace -inf with
-        # finite -1e9f after computing `live`, so masked keys still get exact
-        # zero softmax weight (exp(-1e9) == 0.0) without NaN, and zero all-masked
-        # rows outside the custom function.
-        neg_inf = jt.isinf(bias) & (bias < 0)
-        bias = jt.ternary(neg_inf, jt.array(-1e9).float32().broadcast(bias.shape), bias)
+        # Preserve the FP32-bias path's finite sentinel. The IO-typed path
+        # accepts -inf and can preserve it exactly, including in float16.
+        if replace_infinity:
+            neg_inf = jt.isinf(bias) & (bias < 0)
+            bias = jt.ternary(neg_inf, jt.array(-1e9).float32().broadcast(bias.shape), bias)
         bias = jt.ternary(live, bias, jt.zeros_like(bias))
     if not tracing:
         _MASK_TERMS.append((key, attn_mask if base < 0 else None, bias, live))

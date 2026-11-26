@@ -57,12 +57,13 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def setUp(self):
         from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda
         self.kernel = cudnn_attention_cuda
-        self.kernel._supported_shapes.clear()
-        # A masked call leaves its mask's bias cached for the next layer.
-        self.addCleanup(self.kernel._MASK_TERMS.clear)
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
+        self.io_bias = self.kernel._bias_uses_io_dtype(self.kernel._library())
+        self.kernel._supported_shapes.clear()
+        # A masked call leaves its mask's bias cached for the next layer.
+        self.addCleanup(self.kernel._MASK_TERMS.clear)
 
     def _ran_on_cudnn(self):
         # The kernel asks cuDNN once per shape; an answer of True is a call
@@ -178,7 +179,9 @@ class TestCudnnFusedAttention(unittest.TestCase):
             self.assertEqual(len(self.kernel._MASK_TERMS), 1)
             self.assertIs(self.kernel._MASK_TERMS[0][2],
                           self.kernel._mask_terms(base[:, :, :, :64], (1, 4, 48, 64),
-                                                  (1, 4, 64, 64), qkv[0].dtype)[0])
+                                                  (1, 4, 64, 64), qkv[0].dtype,
+                                                  check_absorbed=False,
+                                                  replace_infinity=not self.io_bias)[0])
             third = scaled_dot_product_attention(*qkv, attn_mask=jt.array(other))
             self.assertEqual(len(self.kernel._MASK_TERMS), 1)
         want = _reference(q, k, v, full[..., :64], False, np.zeros_like(q))[0]
@@ -193,7 +196,26 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def test_a_two_dimensional_mask(self):
         self._check_mask((np.random.RandomState(4).randn(48, 64) * 0.5).astype("float32"))
 
+    def test_square_causal_bias_is_finite_in_half_precision(self):
+        for dtype, shape, tolerance in (
+                ("float16", (4, 3, 49, 32), 2e-3),
+                ("bfloat16", (1, 16, 128, 128), 2e-2)):
+            with self.subTest(dtype=dtype), jt.no_grad(), forbid_backend_fallbacks():
+                rng = np.random.default_rng(62)
+                qkv = [jt.array(rng.standard_normal(shape, dtype=np.float32)).cast(dtype)
+                       for _ in range(3)]
+                mask = np.tril(np.ones((shape[2], shape[2]), dtype=bool))
+                mask[3, :] = False
+                inputs = [tensor.float32().numpy() for tensor in qkv]
+                want = _reference(*inputs, mask, False, np.zeros(shape))[0]
+                out = self.kernel._cudnn_fused_attention(*qkv, attn_mask=jt.array(mask))
+                self.assertIsNotNone(out)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                np.testing.assert_allclose(out.float32().numpy(), want, atol=tolerance, rtol=tolerance)
+
     def _check_mask_training(self, dtype, mask, causal=False, grouped=False, expect_fused=True):
+        expect_fused = expect_fused and (mask.dtype != np.float32 or not self.io_bias)
         rng = np.random.RandomState(41)
         heads, key_heads = (4, 2) if grouped else (2, 2)
         q = rng.randn(1, heads, 33, 64).astype("float32") * 0.5
@@ -267,8 +289,8 @@ class TestCudnnFusedAttention(unittest.TestCase):
                 mask[5, :] = np.finfo(np.float32).min
                 self._check_mask_training(dtype, mask, expect_fused=False)
 
-    def test_autocast_keeps_the_float32_bias_abi(self):
-        mask = np.where(np.arange(47) < 31, 0., -1e9).astype("float32")
+    def test_autocast_keeps_mask_preparation_in_float32(self):
+        mask = np.arange(47) < 31
         for dtype, preference in (("float16", jt.amp_flags.prefer16),
                                   ("bfloat16", jt.amp_flags.prefer_bfloat16)):
             with self.subTest(dtype=dtype), jt.flag_scope(amp_reg=preference):

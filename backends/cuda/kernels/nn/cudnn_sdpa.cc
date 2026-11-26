@@ -64,6 +64,17 @@ fe::DataType_t io_type(int dtype) {
     return dtype == DTYPE_BF16 ? fe::DataType_t::BFLOAT16 : fe::DataType_t::HALF;
 }
 
+bool bias_uses_io_dtype() {
+    // The 9.10.2 SDPA engines on CUDA can read a declared FP32 bias as
+    // the Q/K/V dtype. Describing the actual input type avoids that mismatch.
+    static const bool required = cudnnGetVersion() == 91002;
+    return required;
+}
+
+fe::DataType_t bias_type(int dtype) {
+    return bias_uses_io_dtype() ? io_type(dtype) : fe::DataType_t::FLOAT;
+}
+
 std::vector<int64_t> dims(int64_t b, int64_t h, int64_t s, int64_t d) { return {b, h, s, d}; }
 std::vector<int64_t> dense(int64_t h, int64_t s, int64_t d) { return {h * s * d, s * d, d, 1}; }
 // Strides of a [b, h, s, d] tensor stored as [b, s, h, d] when `seq_major`,
@@ -130,7 +141,7 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
         entry->bias = graph.tensor(fe::graph::Tensor_attributes()
             .set_name("bias").set_dim({bias_b, bias_h, sq, skv})
             .set_stride({bias_h * sq * skv, sq * skv, skv, 1})
-            .set_data_type(fe::DataType_t::FLOAT));
+            .set_data_type(bias_type(dtype)));
         options.set_bias(entry->bias);
     }
     auto outputs = graph.sdpa(entry->q, entry->k, entry->v, options);
@@ -179,7 +190,7 @@ std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_
         entry->bias = graph.tensor(fe::graph::Tensor_attributes()
             .set_name("bias").set_dim({bias_b, bias_h, sq, skv})
             .set_stride({bias_h * sq * skv, sq * skv, skv, 1})
-            .set_data_type(fe::DataType_t::FLOAT));
+            .set_data_type(bias_type(dtype)));
         options.set_bias(entry->bias);
     }
     auto grads = graph.sdpa_backward(entry->q, entry->k, entry->v, entry->o, entry->dout,
@@ -215,6 +226,10 @@ int run(fe::graph::Graph& graph, cudnnHandle_t handle,
 } // namespace
 
 extern "C" {
+
+int jt_cudnn_sdpa_bias_uses_io_dtype() {
+    return bias_uses_io_dtype();
+}
 
 const char* jt_cudnn_sdpa_last_error() { return last_error.c_str(); }
 
