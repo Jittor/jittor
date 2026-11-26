@@ -1704,13 +1704,7 @@ void nvrtc_fused_entry(Op* op) {
     if (grid > 65535u) grid = 65535u;
 
     auto& api = nvrtc_api();
-    CUresult rc = CUDA_SUCCESS;
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_active())) {
-        GILReleaseScope gil_release;
-        rc = api.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, 0, stream, params, nullptr);
-    } else {
-        rc = api.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, 0, stream, params, nullptr);
-    }
+    CUresult rc = api.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, 0, stream, params, nullptr);
     if (rc != CUDA_SUCCESS) {
         const char* err = "unknown";
         if (api.cuGetErrorString) api.cuGetErrorString(rc, &err);
@@ -1753,8 +1747,13 @@ bool nvrtc_try_compile_and_run(FusedOp* fop, JK& jk) {
 
     std::string jit_key = jk.to_string();
     auto ctx = std::make_shared<FusedOpContext>();
-    if (!nvrtc_try_compile(fop, *ctx, jit_key)) return false;
-    if (ctx->nvrtc_kernel) ctx->nvrtc_kernel->preload_if_context_active();
+    {
+        // Charge in-process NVRTC first-run compilation to compile_ns rather
+        // than operator_launch in jt.profile / torch.profiler.
+        StepTraceCompileScope trace_compile;
+        if (!nvrtc_try_compile(fop, *ctx, jit_key)) return false;
+        if (ctx->nvrtc_kernel) ctx->nvrtc_kernel->preload_if_context_active();
+    }
 
     fop->context_owner = ctx;
     fop->context = ctx.get();

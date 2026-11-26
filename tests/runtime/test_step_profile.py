@@ -24,7 +24,7 @@ import warnings
 
 import jittor as jt
 from jittor import nn
-from jittor.profiling import _cupti
+from jittor.profiling import _cupti, _report
 
 from _helpers import capability as _test_capability
 
@@ -78,6 +78,91 @@ class TestHostOnly(unittest.TestCase):
         self.assertEqual(mem.peak_allocated, jt.core.device_memory_peak(-1))
         self.assertGreaterEqual(mem.peak_allocated - mem.start[0], 4 * MiB)
         self.assertIn("runs on the host", prof.summary())
+        table = prof.table(sort_by="device_time")
+        self.assertIn("n/a", table)
+
+    def test_nested_batch_host_split_and_waits_inside_ops(self):
+        res = _report.ProfileResult(
+            t0=0, t1=1000,
+            strings=["", "op_outer", "op_inner"],
+            ops=[
+                {"seq": 0, "kind": 0, "batch": 0, "name": 1, "t_start": 200, "t_alloc": 210,
+                 "t_end": 900, "device": 0, "fused": 0, "shapes": 0, "site": -1, "out_bytes": 0,
+                 "stack": 0, "range": -1, "t_compile": 0, "compile_ns": 0, "stacks": 0},
+                {"seq": 1, "kind": 0, "batch": 1, "name": 2, "t_start": 300, "t_alloc": 305,
+                 "t_end": 400, "device": 0, "fused": 0, "shapes": 0, "site": -1, "out_bytes": 0,
+                 "stack": 0, "range": -1, "t_compile": 0, "compile_ns": 0, "stacks": 0},
+            ],
+            batches=[
+                {"batch": 0, "parent": -1, "t_begin": 0, "t_planned": 100, "t_compiled": 200,
+                 "t_launched": 900, "t_end": 1000},
+                {"batch": 1, "parent": 0, "t_begin": 250, "t_planned": 280, "t_compiled": 300,
+                 "t_launched": 450, "t_end": 500},
+            ],
+            waits=[{"t_begin": 600, "t_end": 700, "batch": 0}],
+            kernels=[], copies=[], correlation={}, device_note="off", memory=None,
+            python=None, replay={"graph_launches": 0, "sources": []}, steps=[], truncated=False,
+        )
+        h = res.host
+        parts = (h["python_and_graph_build"] + h["executor_planning"] + h["executor_compile"]
+                 + h["operator_launch"] + h["device_wait"] + h["graph_launch"])
+        self.assertEqual(parts, res.wall_ns)
+        self.assertEqual(h["executor_planning"], 130)
+        self.assertEqual(res._op_wait.get(0, 0), 100)
+
+    def test_device_utilization_clamped_and_unmatched_seq_attributed_outside(self):
+        res = _report.ProfileResult(
+            t0=100, t1=200,
+            strings=["", "op_a"],
+            ops=[
+                {"seq": 0, "kind": 0, "batch": 0, "name": 1, "t_start": 110, "t_alloc": 112,
+                 "t_end": 150, "device": 0, "fused": 0, "shapes": 0, "site": -1, "out_bytes": 0,
+                 "stack": 0, "range": -1, "t_compile": 0, "compile_ns": 0, "stacks": 0},
+            ],
+            batches=[
+                {"batch": 0, "parent": -1, "t_begin": 100, "t_planned": 105, "t_compiled": 110,
+                 "t_launched": 150, "t_end": 160},
+            ],
+            waits=[],
+            kernels=[
+                {"start": 50, "end": 250, "device": 0, "stream": 7, "correlation": 1,
+                 "name": "k_wide", "grid": (1, 1, 1), "block": (1, 1, 1), "registers": 16,
+                 "shared_memory": 0, "graph": 0},
+                {"start": 120, "end": 140, "device": 0, "stream": 7, "correlation": 2,
+                 "name": "k_orphan", "grid": (1, 1, 1), "block": (1, 1, 1), "registers": 16,
+                 "shared_memory": 0, "graph": 0},
+            ],
+            copies=[], correlation={1: 0, 2: 999}, device_note=None, memory=None,
+            python=None, replay={"graph_launches": 0, "sources": []}, steps=[], truncated=False,
+        )
+        self.assertLessEqual(res.device["busy"], res.wall_ns)
+        self.assertLessEqual(res.device["utilization"], 1.0)
+        outside = [r for r in res.op_stats() if "outside any operator" in r.name]
+        self.assertEqual(len(outside), 1)
+        self.assertEqual(outside[0].device_ns, 20)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "trace.json")
+            res.export_chrome_trace(path)
+            events = json.load(open(path, encoding="utf-8"))["traceEvents"]
+        starts = [e["id"] for e in events if e.get("ph") == "s"]
+        ends = [e["id"] for e in events if e.get("ph") == "f"]
+        self.assertEqual(len(starts), len(set(starts)))
+        self.assertEqual(set(starts), set(ends))
+
+    def test_invalid_sample_interval_is_refused(self):
+        for bad in (0, -0.01):
+            with self.assertRaises(ValueError):
+                jt.profile(python=True, sample_interval=bad)
+
+    def test_partial_enter_failure_cleans_up_step_trace(self):
+        from unittest import mock
+        with jt.flag_scope(use_cuda=0):
+            with mock.patch("jittor.profiling._sampler.PythonSampler.start",
+                            side_effect=RuntimeError("boom")):
+                with self.assertRaisesRegex(RuntimeError, "boom"):
+                    with jt.profile(device=False, memory=False, python=True):
+                        pass
+            self.assertEqual(jt.core.step_trace_active(), 0)
 
 
 @unittest.skipIf(not HAS_CUDA, NO_CUDA)
@@ -246,6 +331,26 @@ class TestMemory(unittest.TestCase):
         self.assertGreaterEqual(first, 256 * MiB, (first, second))
         self.assertLess(second, 16 * MiB, (first, second))
 
+    def test_existing_sliced_view_is_tracked_at_full_block_size(self):
+        with jt.flag_scope(use_cuda=1):
+            jt.sync_all(True)
+            jt.gc()
+            big = jt.randn(4096, 4096)          # 64 MiB
+            big.sync()
+            sl = big[:1, :1]                    # tiny view retaining the 64 MiB block
+            sl.sync()
+            del big
+            jt.sync_all(True)
+            with jt.profile(device=False, memory=True) as prof:
+                z = sl + 1.0
+                z.sync()
+            del sl, z
+        mem = prof.memory
+        self.assertEqual(mem.untracked_at_start, 0)
+        self.assertEqual(mem.unattributed_at_peak, 0)
+        self.assertEqual(mem.peak_allocated, mem.pool_peak_allocated)
+        self.assertGreaterEqual(mem.existing_bytes, 64 * MiB)
+
 
 @unittest.skipIf(not HAS_CUDA, NO_CUDA)
 class TestReplay(unittest.TestCase):
@@ -287,6 +392,20 @@ class TestReplay(unittest.TestCase):
                     jt.sync_all(True)
         messages = [str(w.message) for w in caught]
         self.assertTrue(any("device-graph" in m and "jt.profile" in m for m in messages), messages)
+
+    def test_graph_capture_fence_allocations_match_pool_peak(self):
+        with jt.flag_scope(use_cuda=1):
+            m = nn.Sequential(nn.Linear(256, 512), nn.GELU(), nn.Linear(512, 256))
+            m.eval()
+            x = jt.randn(32, 256)
+            x.sync()
+            jt.sync_all(True)
+            with jt.profile(device=False, memory=True) as prof:
+                rep = jt.graph_replay(m, x)
+                for _ in range(5):
+                    rep(x).sync()
+            del rep
+        self.assertEqual(prof.memory.peak_allocated, prof.memory.pool_peak_allocated)
 
 
 class TestStacksAndRanges(unittest.TestCase):
@@ -352,6 +471,18 @@ class TestStacksAndRanges(unittest.TestCase):
         for r in compiled:
             self.assertGreaterEqual(r["t_compile"], r["t_start"])
             self.assertLessEqual(r["t_compile"] + r["compile_ns"], r["t_end"])
+        self.assertGreaterEqual(prof.result.host["executor_compile"],
+                                sum(r["compile_ns"] for r in compiled))
+
+    @unittest.skipIf(not HAS_CUDA, NO_CUDA)
+    def test_nvrtc_lazy_compile_is_attributed_to_compile_not_launch(self):
+        with jt.flag_scope(use_cuda=1, use_nvrtc=1, use_parallel_op_compiler=0):
+            x = jt.randn(64, 64)
+            x.sync()
+            with jt.profile(device=False, memory=False) as prof:
+                (x * 0.7071067 - 0.5772156).tanh().sync()
+        compiled = [r for r in prof.op_records if r["compile_ns"] > 0]
+        self.assertTrue(compiled, prof.op_records)
         self.assertGreaterEqual(prof.result.host["executor_compile"],
                                 sum(r["compile_ns"] for r in compiled))
 

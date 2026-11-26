@@ -145,9 +145,9 @@ bool lookup_unrecorded_view_edge(Node* source, Node* target) {
 Op::Op() {
     rematerialization_owner = rematerialization_construction_owner();
     launch_origin = capture_launch_origin();
-    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks.load(std::memory_order_relaxed)))
         memory_stack = capture_memory_stack();
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops))
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops))
         step_trace_note_op_built(this);
     float32_precision = current_float32_precision_policy();
     flags.set(NodeFlags::_var, 0);
