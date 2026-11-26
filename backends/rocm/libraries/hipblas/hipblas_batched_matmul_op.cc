@@ -85,6 +85,14 @@ void HipblasBatchedMatmulOp::run() {
 }
 
 VarPtr HipblasBatchedMatmulOp::grad(Var*, Var* dout, Var*, int v_index) {
+    // A FP32 consumer (e.g. autocast LayerNorm or cross entropy) can
+    // supply a wider upstream gradient than the saved half GEMM operands.
+    VarPtr cast_dout;
+    if (dout->dtype() != a->dtype()) {
+        auto cast = op_constructor<VarPtr, Var*, NanoString>("unary");
+        cast_dout = cast(dout, a->dtype());
+        dout = cast_dout.ptr;
+    }
     auto matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("hipblas_batched_matmul");
     if (v_index == 0)
         return trans_a ? matmul(b, dout, trans_b, true)

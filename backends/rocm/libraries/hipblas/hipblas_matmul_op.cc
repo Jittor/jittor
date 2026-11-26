@@ -25,6 +25,9 @@ int64 dense_rows(Var* a, Var* b, bool trans_a) {
 
 
 HipblasMatmulOp::HipblasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
+    : HipblasMatmulOp(a, b, trans_a, trans_b, false) {}
+
+HipblasMatmulOp::HipblasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     USER_CHECK(a->dtype() == b->dtype()
                && (a->dtype() == ns_float32 || a->dtype() == ns_float64
@@ -37,7 +40,10 @@ HipblasMatmulOp::HipblasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     set_flag(OpFlags::_manual_set_vnbb);
     a->set_flag(VarFlags::_needed_by_backward);
     b->set_flag(VarFlags::_needed_by_backward);
-    c = create_output(nullptr, a->dtype() == ns_int8 ? ns_int32 : a->dtype());
+    USER_CHECK(!fp32_output || a->dtype() == ns_float16 || a->dtype() == ns_bfloat16)
+        << "hipBLAS FP32 accumulator output requires FP16 or BF16 operands";
+    c = create_output(nullptr, fp32_output ? ns_float32
+        : (a->dtype() == ns_int8 ? ns_int32 : a->dtype()));
 }
 
 void HipblasMatmulOp::infer_shape() {
@@ -96,12 +102,20 @@ void HipblasMatmulOp::run() {
         check_hipblas(hipblasGemmEx(handle, left, right,
             layout.columns, layout.rows, layout.inner, &alpha,
             b->mem_ptr, type, layout.lda, a->mem_ptr, type, layout.ldb,
-            &beta, c->mem_ptr, type, layout.ldc, HIPBLAS_R_32F,
-            HIPBLAS_GEMM_DEFAULT), "hipblasGemmEx half");
+            &beta, c->mem_ptr, c->dtype() == ns_float32 ? HIPBLAS_R_32F : type,
+            layout.ldc, HIPBLAS_R_32F, HIPBLAS_GEMM_DEFAULT), "hipblasGemmEx half");
     }
 }
 
 VarPtr HipblasMatmulOp::grad(Var*, Var* dout, Var*, int v_index) {
+    // A FP32 consumer (e.g. autocast LayerNorm or cross entropy) can
+    // supply a wider upstream gradient than the saved half GEMM operands.
+    VarPtr cast_dout;
+    if (dout->dtype() != a->dtype()) {
+        auto cast = op_constructor<VarPtr, Var*, NanoString>("unary");
+        cast_dout = cast(dout, a->dtype());
+        dout = cast_dout.ptr;
+    }
     auto matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("hipblas_matmul");
     if (v_index == 0)
         return trans_a ? matmul(b, dout, trans_b, true)

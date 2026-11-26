@@ -183,6 +183,17 @@ def _interpolate(input=None, size=None, scale_factor=None,
 def _cross_entropy(input, target, weight=None, size_average=None,
                    ignore_index=-100, reduce=None, reduction="mean",
                    label_smoothing=0.0):
+    from jittor._runtime.amp_context import torch_autocast_active
+    from jittor.nn.functional._amp import prefers_half
+    # Cross entropy is a float32 autocast operation, including its reduction
+    # and log-softmax. Merely casting the input leaves the AMP register able
+    # to lower the intermediates again.
+    if (torch_autocast_active() and prefers_half()
+            and _jittor_dtype_name(input.dtype) in ("float32", "float16", "bfloat16")):
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            return _cross_entropy(input.float32(), target,
+                None if weight is None else weight.float32(), size_average,
+                ignore_index, reduce, reduction, label_smoothing)
     # torch: a floating-point target with the SAME shape as input is a
     # class-probability ("soft label") target (mixup / distillation / soft
     # label-smoothing). jittor's cross_entropy_loss only understands integer

@@ -88,6 +88,19 @@ def test_optional_miopen_requires_header_and_library(tmp_path):
     assert "HAS_ROCM_MIOPEN" not in missing_header.defines
 
 
+def test_optional_hipblaslt_requires_header_and_library(tmp_path):
+    build = load_build()
+    sdk = sdk_fixture(tmp_path)
+    header = sdk / "include/hipblaslt/hipblaslt.h"
+    header.parent.mkdir(parents=True)
+    header.touch()
+    assert "hipblaslt" not in build.library_build(sdk, ROCM, "hipblas").libraries
+    (sdk / "lib64/libhipblaslt.so").touch()
+    enabled = build.library_build(sdk, ROCM, "hipblas")
+    assert "hipblaslt" in enabled.libraries
+    assert any(path.endswith("hipblas_linear_bias_op.cc") for path in enabled.sources)
+
+
 def test_missing_sdk_and_unknown_provider_fail_before_build(tmp_path):
     build = load_build()
     with pytest.raises(RuntimeError, match="development header"):
@@ -156,8 +169,11 @@ def test_provider_hooks_reach_the_native_library_installer(tmp_path, monkeypatch
     kernels = ModuleType(name + ".kernels")
     kernels.install_kernels = lambda: calls.append("native")
     monkeypatch.setitem(sys.modules, kernels.__name__, kernels)
+    optim = ModuleType(name + ".kernels.optim")
+    optim.install_kernels = lambda: calls.append("optim")
+    monkeypatch.setitem(sys.modules, optim.__name__, optim)
     provider.post_process(context)
-    assert calls == ["registered", "native"]
+    assert calls == ["registered", "native", "optim"]
 
 
 def test_compilation_failure_is_not_published_or_swallowed(tmp_path, monkeypatch):
@@ -194,7 +210,7 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     assert all(args[1] == "rocm" for args, _ in calls)
     assert calls[0][1]["dtypes"] == {"float32", "float64", "float16", "bfloat16"}
     assert calls[1][1]["dtypes"] == {"int8"}
-    assert calls[2][1]["dtypes"] == {"float32"}
+    assert calls[2][1]["dtypes"] == {"float32", "float16", "bfloat16"}
     assert calls[2][1]["supports"] is installer._supports_linear_bias
     assert rules == [
         ("rocm_linear_bias", installer._supports_linear_bias),

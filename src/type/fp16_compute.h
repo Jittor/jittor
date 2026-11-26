@@ -20,7 +20,7 @@
 #ifdef IS_ROCM
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
-#include <hip/hip_bfloat16.h>
+#include "type/rocm_bfloat16.h"
 #else
 #include <driver_types.h>
 #include <cuda_fp16.h>
@@ -30,9 +30,7 @@
 namespace jittor {
 
 typedef __half float16;
-#ifdef IS_ROCM
-typedef hip_bfloat16 bfloat16;
-#else
+#ifndef IS_ROCM
 typedef __nv_bfloat16 bfloat16;
 #endif
 

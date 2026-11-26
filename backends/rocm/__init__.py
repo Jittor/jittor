@@ -82,3 +82,5 @@ def post_process(context: BuildContext) -> None:
     install_kernels()
     from .kernels import install_kernels as install_native_kernels
     install_native_kernels()
+    from .kernels.optim import install_kernels as install_optim_kernels
+    install_optim_kernels()

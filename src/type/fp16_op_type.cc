@@ -35,6 +35,11 @@ struct FP16OpType : OpByType {
                 found_bf16 = 1;
         }
         if (!found_fp16) return "";
+#ifdef IS_ROCM
+        const bool rocm_bf16 = is_cuda && found_bf16;
+#else
+        const bool rocm_bf16 = false;
+#endif
         static unordered_map<string,string> cuda_map = {
             {"logical_not", "(!($2))"},
             {"bitwise_not", "(~($2))"},
@@ -208,6 +213,23 @@ struct FP16OpType : OpByType {
             if (args[1] == "float32" && !both_map.count(args.at(0))) {
                 ret = lookup(common_op_type_cuda_map, args.at(0));
             }
+            if (rocm_bf16) {
+                // HIP's hlog/hexp/hsqrt/__habs are __half intrinsics, not
+                // hip_bfloat16 overloads. Keep BF16 opmath in FP32.
+                if (args[0] == "log") ret = "(($1)::logf(float32($2)))";
+                else if (args[0] == "exp") ret = "(($1)::expf(float32($2)))";
+                else if (args[0] == "sqrt") ret = "(($1)::sqrtf(float32($2)))";
+                else if (args[0] == "abs") ret = "(($1)::fabsf(float32($2)))";
+            }
+            auto cast_arg = [&](const string& target, int i) {
+                string arg = "$"+S(i-1);
+                // HIP half and bfloat16 have distinct converting constructors.
+                // A cross-half cast must explicitly pass through float32.
+                if (rocm_bf16 && ((target == "float16" && args[i] == "bfloat16")
+                        || (target == "bfloat16" && args[i] == "float16")))
+                    return target+"(float32("+arg+"))";
+                return target+"("+arg+")";
+            };
             // A logical operation is defined on its operands' truth value, so
             // neither the half conversion below nor a cast of the accumulator
             // is needed: `&&`/`||`/`!=` already convert both sides to bool.
@@ -229,7 +251,7 @@ struct FP16OpType : OpByType {
                     for (int i=3; i<args.size(); i+=2) {
                         if (args[i] != args[1]) {
                             ret = replace(ret, "$"+S(i-1),
-                                args[1]+"($"+S(i-1)+")");
+                                cast_arg(args[1], i));
                         }
                     }
                 } else {
@@ -237,7 +259,7 @@ struct FP16OpType : OpByType {
                     for (int i=3; i<args.size(); i+=2) {
                         if (args[i] != target) {
                             ret = replace(ret, "$"+S(i-1),
-                                target+"($"+S(i-1)+")");
+                                cast_arg(target, i));
                         }
                     }
                 }

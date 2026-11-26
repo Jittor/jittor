@@ -304,3 +304,56 @@ def test_bfloat16_amp_reduction_atomic_add():
     with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16 | jt.amp_flags.keep_reduce):
         result = (a * b).sum(2)
         assert_device_value(result, np.full((2, 8, 17), 64), rtol=0, atol=0)
+
+
+def test_rocm_bfloat16_unary_math_and_cross_half_casts():
+    raw = np.array([0.25, 0.5, 1., 2., 4.], dtype="float32")
+    with jt.no_grad():
+        x = jt.array(raw).bfloat16()
+        with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16):
+            for op, ref in ((jt.log, np.log), (jt.sqrt, np.sqrt), (jt.exp, np.exp)):
+                result = op(x)
+                assert_device_value(result, ref(raw), rtol=0.008, atol=0.002)
+        assert_device_value(x.float16().bfloat16(), raw, rtol=0, atol=0)
+
+
+def test_rocm_fused_adamw_host_corrections_and_outputs():
+    from jittor._runtime.dispatch import select_kernel
+    rng = np.random.RandomState(195)
+    entries, refs = [], []
+    for size, steps in ((17, 0), (32, 4), (9, 0)):
+        p = rng.normal(size=size).astype("float32")
+        m = rng.normal(size=size).astype("float32") / 10
+        v = rng.uniform(.01, .1, size=size).astype("float32")
+        g = rng.normal(size=size).astype("float32") / 10
+        entries.append((*[jt.array(t).stop_grad() for t in (p, m, v, g)], steps))
+        step = steps + 1
+        new_m = .9*m + .1*g
+        new_v = .999*v + .001*g*g
+        new_p = p*(1-.001*.01) - new_m*(.001/(1-.9**step))/(np.sqrt(new_v)/np.sqrt(1-.999**step)+1e-8)
+        refs.append((new_p, new_m, new_v))
+    with jt.no_grad():
+        provider = select_kernel("optim.adamw_fused", entries)
+        assert provider is not None
+        result = provider(entries, .001, .9, .999, .01, 1e-8)
+        for triplet, expected in zip(result, refs):
+            for actual, ref in zip(triplet, expected):
+                assert_device_value(actual, ref, rtol=2e-6, atol=2e-7)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("batched", [False, True])
+def test_rocm_half_gemm_accepts_wide_upstream_gradient(dtype, batched):
+    a = np.arange(24, dtype="float32").reshape(2,3,4) / 16
+    b = np.arange(40, dtype="float32").reshape(2,4,5) / 32
+    if not batched:
+        b = b[0]
+    x, y = jt.array(a).cast(dtype), jt.array(b).cast(dtype)
+    prod = jt.matmul(x, y)
+    seed = jt.array(np.ones((2,3,5), dtype="float32"))
+    dx, dy = jt.grad((prod * seed).sum(), [x, y])
+    expected_x = np.ones((2,3,5), dtype="float32") @ np.swapaxes(b,-1,-2)
+    expected_y = (np.swapaxes(a,-1,-2) @ np.ones((2,3,5),dtype="float32")
+                  if batched else a.reshape(-1,4).T @ np.ones((6,5),dtype="float32"))
+    assert_device_value(dx, expected_x, rtol=0.008, atol=0.001)
+    assert_device_value(dy, expected_y, rtol=0.008, atol=0.001)

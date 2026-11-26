@@ -10,9 +10,10 @@ from ..base import (
 )
 
 
-def _all_same_cuda_device(active):
+def _all_same_gpu_device(active):
     first = active[0][0]
-    if dispatch_context(first).backend != "cuda":
+    backend = dispatch_context(first).backend
+    if backend not in ("cuda", "rocm"):
         return False
     pb0 = first.placement_backend
     dev0 = first.device_id
@@ -24,7 +25,7 @@ def _all_same_cuda_device(active):
             if eff0 is None:
                 eff0 = _effective_device(first)
             if (_effective_device(tensor) != eff0
-                    or dispatch_context(tensor).backend != "cuda"):
+                    or dispatch_context(tensor).backend != backend):
                 return False
     return True
 
@@ -205,7 +206,7 @@ class AdamW(Optimizer):
                 if active and (
                     requested_fused is True
                     or (not isinstance(lr, jt.Var)
-                        and _all_same_cuda_device(active))
+                        and _all_same_gpu_device(active))
                 ):
                     fused = select_kernel("optim.adamw_fused", active)
             if fused is not None:

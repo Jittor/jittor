@@ -669,7 +669,7 @@ PyObject* rocm_linear_inference(PyObject* x, PyObject* weight, PyObject* bias) {
         if (kernel.obj != rocm_linear_kernel) return nullptr;
     } else {
         // FP16/BF16 use the ordinary matmul and bias semantics of linear().
-        // The guarded accumulator registration is FP32-only.
+        // The guarded accumulator registration serves FP32 inference only.
         if (!rocm_matmul_kernel) return nullptr;
         PyObjHolder call_args(PyTuple_Pack(4, x, weight, Py_False, Py_True));
         PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));

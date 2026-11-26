@@ -78,7 +78,7 @@ def test_noncontiguous_inputs_and_second_derivative():
     np.testing.assert_array_equal(base.numpy(), raw.transpose(0,1,3,2))
 
 
-def test_grouped_and_amp_keep_existing_device_path():
+def test_grouped_and_amp_use_the_supported_device_path():
     from jittor.backends.rocm.kernels.convolution import supported
     x, w = jt.ones((1, 4, 5, 5)), jt.ones((4, 2, 3, 3))
     assert not supported(x, w, groups=2)
@@ -87,7 +87,7 @@ def test_grouped_and_amp_keep_existing_device_path():
     assert y.location() == 'device'
     x, w = jt.ones((1, 4, 5, 5)), jt.ones((4, 4, 3, 3))
     with jt.flag_scope(amp_reg=18):
-        assert not supported(x, w)
+        assert supported(x, w)
 
 
 def test_noncontiguous_weight_and_bias_values_and_base_gradients():

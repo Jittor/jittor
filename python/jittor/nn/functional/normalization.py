@@ -124,6 +124,14 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
     with the statistics (the module updates its running buffers, the functional
     updates the buffers it was handed).
     """
+    input_dtype = _jittor_dtype_name(x.dtype)
+    if (_amp_prefers_half() and _torch_autocast_active()
+            and input_dtype in ("float32", "float16", "bfloat16")):
+        # BatchNorm's statistics and affine use FP32 opmath. Torch preserves
+        # the activation dtype at the output, even inside autocast.
+        with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+            wide, mean, var = _batch_norm_train(x.float32(), dims, weight, bias, eps, sync)
+            return (wide if input_dtype == "float32" else wide.cast(input_dtype)), mean, var
     if not sync:
         # Fused CUDA kernel for the local case. It computes its own statistics,
         # so it cannot serve the all-reduced ones; it is a backend accelerator
@@ -462,8 +470,10 @@ def layer_norm(
             raise ValueError("layer_norm {} must match normalized_shape".format(name))
     weight = 1.0 if weight is None else weight
     bias = 0.0 if bias is None else bias
+    input_dtype = _jittor_dtype_name(x.dtype)
     if (_amp_prefers_half()
-            and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")):
+            and (input_dtype in ("float16", "bfloat16")
+                 or (input_dtype == "float32" and _torch_autocast_active()))):
         # Widen the whole body, not just the input: every float op built while
         # the register is set is lowered again, so an fp32-spelled intermediate
         # does not survive. ATen keeps layer_norm on its float32 autocast list

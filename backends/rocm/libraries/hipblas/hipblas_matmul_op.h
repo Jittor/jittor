@@ -12,6 +12,7 @@ struct HipblasMatmulOp : Op {
     bool trans_a, trans_b;
 
     HipblasMatmulOp(Var* a, Var* b, bool trans_a=false, bool trans_b=false);
+    HipblasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool fp32_output);
     const char* name() const override { return "hipblas_matmul"; }
     void infer_shape() override;
     void run() override;

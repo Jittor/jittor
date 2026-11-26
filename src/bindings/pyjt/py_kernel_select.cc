@@ -189,13 +189,18 @@ Verdict rocm_linear_bias_rule(PyObject* args) {
         if (!is_var(value)) return unknown;
         values[i] = GET_RAW_PTR(VarHolder, value)->var;
         if (values[i]->num < 0) return unknown;
-        if (values[i]->dtype() != ns_float32 || !values[i]->is_contiguous()
-                || (!no_grad && requires_grad(values[i]))) return declines;
+        if (!values[i]->is_contiguous()) return declines;
+        // The FP16/BF16 training provider computes autocast dtype and keeps
+        // a differentiable FP32 accumulator, so its Python predicate owns
+        // those cases.
+        if (values[i]->dtype() != ns_float32 || (!no_grad && requires_grad(values[i])))
+            return unknown;
     }
     Var* x = values[0];
     Var* w = values[1];
     Var* b = values[2];
-    if (amp_reg || x->shape.size() < 2 || w->shape.size() != 2 || b->shape.size() != 1
+    if (amp_reg) return unknown;
+    if (x->shape.size() < 2 || w->shape.size() != 2 || b->shape.size() != 1
             || x->num <= 0 || w->num <= 0) return declines;
     return x->shape[x->shape.size()-1] == w->shape[1] && b->shape[0] == w->shape[0]
         ? accepts : declines;

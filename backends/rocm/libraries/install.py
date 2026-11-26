@@ -48,20 +48,40 @@ def _supports_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _hipblas_linear_bias(x, weight, bias):
-    from jittor._runtime.core_api import _stop_grad_outputs
-    return _stop_grad_outputs(_hipblas_matmul(x, weight, False, True) + bias)
+    import jittor as jt
+    from jittor._core.dtypes import dtype_name
+    from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
+    if not _output_requires_grad(x, weight, bias):
+        return _stop_grad_outputs(_hipblas_matmul(x, weight, False, True) + bias)
+    from jittor._runtime.backend_libraries import get_library_ops
+    dtype = jt.binary_dtype_infer("multiply", x.dtype, weight.dtype)
+    x, weight, bias = x.cast(dtype), weight.cast(dtype), bias.cast(dtype)
+    # A training Linear rounds the GEMM+bias only once. Exposing the FP32
+    # accumulator avoids the extra half rounding before adding the bias.
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+        ops = get_library_ops("hipblas")
+        fused = getattr(ops, "hipblas_linear_bias", None)
+        if fused is not None:
+            return fused(x, weight, bias)
+        accumulated = ops.hipblas_matmul(x, weight, False, True, True)
+        return (accumulated + bias.float32()).cast(dtype)
 
 
 def _supports_linear_bias(x, weight, bias):
     import jittor as jt
     from jittor._core.dtypes import dtype_name
     from jittor._runtime.core_api import _output_requires_grad
-    return (all(isinstance(v, jt.Var) and dtype_name(v.dtype) == "float32"
+    if not (all(isinstance(v, jt.Var) and dtype_name(v.dtype) in ("float32", "float16", "bfloat16")
                 and v._storage_is_contiguous() for v in (x, weight, bias))
-            and not jt.flags.amp_reg and not _output_requires_grad(x, weight, bias)
             and x.ndim >= 2 and weight.ndim == 2 and bias.ndim == 1
             and x.numel() > 0 and weight.numel() > 0
-            and x.shape[-1] == weight.shape[1] and bias.shape[0] == weight.shape[0])
+            and x.shape[-1] == weight.shape[1] and bias.shape[0] == weight.shape[0]):
+        return False
+    if _output_requires_grad(x, weight, bias):
+        dtype = dtype_name(jt.binary_dtype_infer("multiply", x.dtype, weight.dtype))
+        return (dtype in ("float16", "bfloat16")
+                and (jt.flags.amp_reg or all(dtype_name(v.dtype) == dtype for v in (x, weight, bias))))
+    return not jt.flags.amp_reg and all(dtype_name(v.dtype) == "float32" for v in (x, weight, bias))
 
 
 def _rocprim_scan(x, reverse=False):
@@ -96,7 +116,7 @@ def install_kernels():
     register_kernel("int8_matmul", "rocm", _hipblas_int8_matmul,
                     dtypes={"int8"}, supports=_supports_matmul, priority=100)
     register_kernel("linear_bias_accumulator", "rocm", _hipblas_linear_bias,
-                    dtypes={"float32"}, supports=_supports_linear_bias, priority=100)
+                    dtypes={"float32", "float16", "bfloat16"}, supports=_supports_linear_bias, priority=100)
     # A typed dgemm entry alone does not establish full-precision FP64 math
     # on every SDK; admit only the independently validated FP32 batch path.
     register_kernel("batched_matmul", "rocm", _hipblas_batched_matmul,

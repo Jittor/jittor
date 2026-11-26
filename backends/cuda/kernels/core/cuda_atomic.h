@@ -8,7 +8,7 @@
 #ifdef IS_ROCM
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
-#include <hip/hip_bfloat16.h>
+#include "type/rocm_bfloat16.h"
 #else
 #include <cuda_fp16.h>
 #include <cuda_bf16.h>
@@ -29,29 +29,29 @@ __device__ inline long long atomicAdd(long long* a, long long b) {
 #endif
 
 #ifdef IS_ROCM
-// hip_bfloat16 has no native atomicAdd overload on all supported HIP SDKs.
+// jittor::bfloat16 has no native atomicAdd overload on all supported HIP SDKs.
 // Update its packed halfword with a 32-bit CAS, preserving the adjacent value.
 template<int op>
-__device__ inline hip_bfloat16 rocm_bf16_atomic_update(hip_bfloat16* address, hip_bfloat16 value) {
+__device__ inline jittor::bfloat16 rocm_bf16_atomic_update(jittor::bfloat16* address, jittor::bfloat16 value) {
     auto* base = reinterpret_cast<unsigned int*>(reinterpret_cast<size_t>(address) & ~size_t(3));
     unsigned int shift = (reinterpret_cast<size_t>(address) & 3) * 8;
     unsigned int mask = 0xffffu << shift;
     unsigned int old = atomicCAS(base, 0u, 0u), assumed;
-    hip_bfloat16 current;
+    jittor::bfloat16 current;
     do {
         assumed = old;
         current.data = (assumed & mask) >> shift;
         float a = float(current), b = float(value);
         float next = op == 0 ? a + b : op == 1 ? a * b :
             (a != a ? a : (b != b ? b : (op == 2 ? (a > b ? a : b) : (a < b ? a : b))));
-        hip_bfloat16 converted(next);
+        jittor::bfloat16 converted(next);
         unsigned int merged = (assumed & ~mask) | (unsigned(converted.data) << shift);
         old = atomicCAS(base, assumed, merged);
     } while (old != assumed);
     return current;
 }
 
-__device__ inline hip_bfloat16 atomicAdd(hip_bfloat16* a, hip_bfloat16 b) {
+__device__ inline jittor::bfloat16 atomicAdd(jittor::bfloat16* a, jittor::bfloat16 b) {
     return rocm_bf16_atomic_update<0>(a, b);
 }
 #endif
@@ -202,19 +202,19 @@ __device__ inline unsigned long atomicXor(unsigned long* a, unsigned long b) {
 namespace jittor {
 
 #ifdef IS_ROCM
-__device__ inline hip_bfloat16 cuda_atomic_mul(hip_bfloat16* a, hip_bfloat16 b) {
+__device__ inline bfloat16 cuda_atomic_mul(bfloat16* a, bfloat16 b) {
     return rocm_bf16_atomic_update<1>(a, b);
 }
-__device__ inline hip_bfloat16 cuda_atomic_max(hip_bfloat16* a, hip_bfloat16 b) {
+__device__ inline bfloat16 cuda_atomic_max(bfloat16* a, bfloat16 b) {
     return rocm_bf16_atomic_update<2>(a, b);
 }
-__device__ inline hip_bfloat16 cuda_atomic_min(hip_bfloat16* a, hip_bfloat16 b) {
+__device__ inline bfloat16 cuda_atomic_min(bfloat16* a, bfloat16 b) {
     return rocm_bf16_atomic_update<3>(a, b);
 }
-__device__ inline hip_bfloat16 cuda_atomic_max_rmw(hip_bfloat16* a, hip_bfloat16 b) {
+__device__ inline bfloat16 cuda_atomic_max_rmw(bfloat16* a, bfloat16 b) {
     return rocm_bf16_atomic_update<2>(a, b);
 }
-__device__ inline hip_bfloat16 cuda_atomic_min_rmw(hip_bfloat16* a, hip_bfloat16 b) {
+__device__ inline bfloat16 cuda_atomic_min_rmw(bfloat16* a, bfloat16 b) {
     return rocm_bf16_atomic_update<3>(a, b);
 }
 #endif

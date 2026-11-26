@@ -103,3 +103,30 @@ def test_rocm_linear_bias_inference_and_gradient_boundary(shape):
     with jt.flag_scope(no_grad=0):
         w.start_grad()
         assert select_kernel("linear_bias_accumulator", x, w, b) is None
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+def test_rocm_training_linear_bias_uses_single_rounding(dtype):
+    rng = np.random.RandomState(199)
+    x = jt.array(rng.normal(size=(2, 3, 9)).astype("float32")).cast(dtype)
+    w = jt.array(rng.normal(size=(7, 9)).astype("float32")).cast(dtype)
+    b = jt.array(rng.normal(size=7).astype("float32")).cast(dtype)
+    assert select_kernel("linear_bias_accumulator", x, w, b) is not None
+    xh, wh, bh = (v.numpy().astype("float32") for v in (x,w,b))
+    expected = xh @ wh.T + bh
+    if dtype == "float16":
+        expected = expected.astype("float16").astype("float32")
+    else:
+        bits = expected.view(np.uint32)
+        expected = ((bits + 0x7fff + ((bits >> 16) & 1)) & 0xffff0000).view(np.float32)
+    out = jt.nn.linear(x, w, b)
+    out.sync()
+    assert out.location() == "device" and str(out.dtype) == dtype
+    np.testing.assert_allclose(out.numpy(), expected, rtol=0.002, atol=0.002)
+    gradients = jt.grad(out.sum(), [x,w,b])
+    seed = np.ones((2,3,7), dtype="float32")
+    references = (seed @ wh, seed.reshape(-1,7).T @ xh.reshape(-1,9), seed.sum((0,1)))
+    for g, reference in zip(gradients, references):
+        g.sync()
+        assert g.location() == "device" and np.isfinite(g.numpy()).all()
+        np.testing.assert_allclose(g.numpy(), reference, rtol=0.008, atol=0.004)

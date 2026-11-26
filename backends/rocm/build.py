@@ -78,6 +78,18 @@ def library_build(rocm_home, backend_root, name):
     # A complete SDK enables it; otherwise hipBLAS remains self-contained.
     defines = ()
     if name == "hipblas":
+        lt_include = next((path for path in (sdk / "include", sdk / "hipblaslt/include")
+                           if (path / "hipblaslt/hipblaslt.h").is_file()), None)
+        lt_lib = next((path for path in (sdk / "lib", sdk / "lib64",
+                                         sdk / "hipblaslt/lib", sdk / "hipblaslt/lib64")
+                       if (path / "libhipblaslt.so").is_file()), None)
+        if lt_include is not None and lt_lib is not None:
+            includes += (str(lt_include),)
+            if str(lt_lib) not in library_dirs:
+                library_dirs.append(str(lt_lib))
+            libraries += ("hipblaslt",)
+            relative_sources += ("hipblas/hipblas_linear_bias_op.h", "hipblas/hipblas_linear_bias_op.cc",
+                                 "hipblas/linear_bias.h", "hipblas/linear_bias.cu")
         miopen_include = next((path for path in (sdk / "include", sdk / "miopen/include")
                                if (path / "miopen/miopen.h").is_file()), None)
         miopen_lib = next((path for path in (sdk / "lib", sdk / "lib64",
