@@ -98,18 +98,24 @@ class profile_scope(_call_no_record_scope):
         assert not _flag_state.flags.profiler_enable
         self.report = []
         self._graph_launches = core.graph_launch_count()
+        fs_entered = False
         try:
             self.fs.__enter__()
+            fs_entered = True
             _core_profiler.start(self.warmup, self.rerun)
             return self.report
         except:
             _core_profiler.stop()
+            if fs_entered:
+                self.fs.__exit__(*sys.exc_info())
             raise
 
     def __exit__(self, *exc):
-        _core_profiler.stop()
-        self.report.extend(_core_profiler.report())
-        self.fs.__exit__(*exc)
+        try:
+            _core_profiler.stop()
+            self.report.extend(_core_profiler.report())
+        finally:
+            self.fs.__exit__(*exc)
         # A report with a header and no operators is not "it ran fast"; it is
         # "nothing was measured", and the two used to be indistinguishable.
         # Anything dividing by the total then gets a zero -- which is how
@@ -169,8 +175,8 @@ class profile_mark(_call_no_record_scope):
         '''
         self.mark_name = mark_name
     def __enter__(self):
-        self.options = _flag_state.flags.compile_options
-        new_options = _flag_state.flags.compile_options
+        self.options = dict(_flag_state.flags.compile_options)
+        new_options = dict(self.options)
         prev_marks = "_marks:"
         for x in self.options:
             if x.startswith(prev_marks):

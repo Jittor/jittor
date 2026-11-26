@@ -598,7 +598,6 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     VarPtrBatch& planning_hold = state->planning_hold;
     planning_hold = std::move(root_hold);
     build_exec_plan(vars, weak_sync, plan, planning_hold);
-    trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
     // produce them, since an op's liveness comes from its outputs, so an op
     // whose output var is held cannot be freed either.
@@ -659,6 +658,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     fused_op.batch_plan = &plan;
 
     // compile all ops, prevent compiling during running
+    trace_batch.mark(stb_planned);
     try {
         parallel_compile_all_ops(plan.queue, plan.range, fused_op,
                                  plan.fuse_ops, plan.ops, plan.stamp);

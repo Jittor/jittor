@@ -68,7 +68,7 @@ _RECORDING = (ProfilerAction.RECORD, ProfilerAction.RECORD_AND_SAVE)
 
 def schedule(*, wait, warmup, active, repeat=0, skip_first=0, skip_first_wait=0):
     """PyTorch's cyclic wait/warmup/active schedule."""
-    if wait < 0 or warmup < 0 or active <= 0 or repeat < 0 or skip_first < 0:
+    if wait < 0 or warmup < 0 or active <= 0 or repeat < 0 or skip_first < 0 or skip_first_wait < 0:
         raise ValueError("invalid profiler schedule arguments")
 
     def action(step):
@@ -143,11 +143,12 @@ class profile:
                                            stacks=bool(self.with_stack))
         self._session.__enter__()
 
-    def _end(self):
+    def _end(self, exc=(None, None, None)):
         session, self._session = self._session, None
-        session.__exit__(None, None, None)
-        self._result = session.result
-        self._events = None
+        session.__exit__(*exc)
+        if exc[0] is None:
+            self._result = session.result
+            self._events = None
 
     def start(self):
         if self.enabled and self.current_action in _RECORDING:
@@ -165,6 +166,10 @@ class profile:
         return self.start()
 
     def __exit__(self, *exc):
+        if exc[0] is not None:
+            if self._session is not None:
+                self._end(exc)
+            return False
         self.stop()
         return False
 
@@ -207,6 +212,11 @@ class profile:
 
     def events(self):
         if self._events is None:
+            if not self.enabled and self._result is None:
+                self._events = self._event_list(
+                    [], use_device=None, profile_memory=self.profile_memory,
+                    with_flops=self.with_flops, profiler=self)
+                return self._events
             self._events = self._event_list(
                 _build_events(self.result, self._use_device(), self.record_shapes, self.with_stack,
                               self.profile_memory),
@@ -221,6 +231,9 @@ class profile:
         """The recording as PyTorch's Kineto writes it (``.json`` or ``.json.gz``)."""
         trace = _kineto_trace(self)
         trace["traceName"] = path
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         if path.endswith(".gz"):
             import gzip
             with gzip.open(path, "wt") as f:
@@ -231,17 +244,26 @@ class profile:
         return path
 
     def export_stacks(self, path, metric="self_cpu_time_total"):
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         return self.events().export_stacks(path, metric)
 
     def export_memory_timeline(self, path, device=None):
         """PyTorch's memory timeline (``.json``, ``.json.gz`` or ``.html``) of the
         device's allocated bytes; jittor does not classify them, so all are "Unknown"."""
         timeline = _memory_timeline(self.result)
-        index = self.result.memory.device
+        mem = self.result.memory
+        index = mem.device
         if device is not None and ":" in str(device):
             index = int(str(device).rsplit(":", 1)[1])
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         if path.endswith(".html"):
-            html = _timeline_html(timeline, index)
+            html = _timeline_html(timeline, index,
+                                  peak_allocated=mem.pool_peak_allocated,
+                                  peak_reserved=mem.pool_peak_reserved)
             if html is not None:
                 with open(path, "w", encoding="utf-8") as f:
                     f.write(html)

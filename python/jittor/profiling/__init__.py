@@ -104,12 +104,14 @@ class Profile:
                  sample_interval=0.001, nvml=True, stacks=False):
         if device not in ("auto", True, False):
             raise ValueError("device must be 'auto', True or False, not %r" % (device,))
+        if float(sample_interval) <= 0:
+            raise ValueError("sample_interval must be positive, not %r" % (sample_interval,))
         self.want_device = device
         self.want_memory = bool(memory)
         self.want_python = bool(python)
         self.want_shapes = bool(shapes)
         self.sync = bool(sync)
-        self.sample_interval = sample_interval
+        self.sample_interval = float(sample_interval)
         self.want_nvml = bool(nvml)
         self.want_stacks = bool(stacks)
         self.result = None
@@ -138,49 +140,99 @@ class Profile:
         self._sources = [(obj, dict(getattr(obj, "stats", {}) or {})) for obj in list(_replay_sources)]
         self._graph_launches = _core.graph_launch_count()
         self._nvml = None
-        if self.want_memory:
-            _core.reset_device_memory_peak(self._device_index)
-            self._mem_start = list(_core.device_pool_stats(self._device_index))
-            if self.want_nvml and self._device_index >= 0:
-                self._nvml = NvmlSampler(self._device_index).start()
-        if self._cupti is not None:
-            self._cupti.start()
-            _core.step_trace_set_correlation(self._cupti.push, self._cupti.pop)
-            self._offset = self._clock_offset()
-        mode = _ST_OPS | (_ST_MEMORY if self.want_memory else 0) | (_ST_SHAPES if self.want_shapes else 0)
-        if self.want_stacks:
-            _core.set_op_stack_capture(_STACKS_FOR_PROFILE, True)
-        _core.step_trace_start(mode)
-        self._sampler = PythonSampler(self.sample_interval).start() if self.want_python else None
-        _active.append(self)
-        self._t0 = _core.step_trace_now()
-        if self._sampler is not None:
-            self._sampler.armed = True
+        self._sampler = None
+        cupti_started = False
+        corr_set = False
+        stacks_on = False
+        trace_started = False
+        try:
+            if self.want_memory:
+                _core.reset_device_memory_peak(self._device_index)
+                self._mem_start = list(_core.device_pool_stats(self._device_index))
+                if self.want_nvml and self._device_index >= 0:
+                    self._nvml = NvmlSampler(self._device_index).start()
+            if self._cupti is not None:
+                self._cupti.start()
+                cupti_started = True
+                _core.step_trace_set_correlation(self._cupti.push, self._cupti.pop)
+                corr_set = True
+                self._offset = self._clock_offset()
+            mode = _ST_OPS | (_ST_MEMORY if self.want_memory else 0) | (_ST_SHAPES if self.want_shapes else 0)
+            if self.want_stacks:
+                _core.set_op_stack_capture(_STACKS_FOR_PROFILE, True)
+                stacks_on = True
+            _core.step_trace_start(mode)
+            trace_started = True
+            if self.want_python:
+                self._sampler = PythonSampler(self.sample_interval).start()
+            _active.append(self)
+            self._t0 = _core.step_trace_now()
+            if self._sampler is not None:
+                self._sampler.armed = True
+        except Exception:
+            if self in _active:
+                _active.remove(self)
+            if self._sampler is not None:
+                self._sampler.armed = False
+                try:
+                    self._sampler.stop()
+                except Exception:
+                    pass
+            if trace_started:
+                _core.step_trace_stop()
+            if stacks_on:
+                _core.set_op_stack_capture(_STACKS_FOR_PROFILE, False)
+            if corr_set:
+                _core.step_trace_set_correlation(0, 0)
+            if cupti_started:
+                try:
+                    self._cupti.stop()
+                except Exception:
+                    pass
+            if self._nvml is not None:
+                try:
+                    self._nvml.stop()
+                except Exception:
+                    pass
+            raise
         return self
 
     def __exit__(self, *exc):
         import jittor as jt
+        teardown_error = None
+        kernels, copies, correlation, dropped = [], [], {}, 0
         try:
             if self.sync and exc[0] is None:
                 jt.sync_all(True)
         finally:
             t1 = _core.step_trace_now()
-            _active.remove(self)
+            if self in _active:
+                _active.remove(self)
             if self._sampler is not None:
                 self._sampler.armed = False
-                self._sampler.stop()
+                try:
+                    self._sampler.stop()
+                except Exception as err:
+                    teardown_error = teardown_error or err
             _core.step_trace_stop()
             if self.want_stacks:
                 _core.set_op_stack_capture(_STACKS_FOR_PROFILE, False)
             if self._cupti is not None:
                 _core.step_trace_set_correlation(0, 0)
-                kernels, copies, correlation = self._cupti.stop()
-            else:
-                kernels, copies, correlation = [], [], {}
+                try:
+                    kernels, copies, correlation = self._cupti.stop()
+                    dropped = getattr(self._cupti, "last_dropped", 0)
+                except Exception as err:
+                    teardown_error = teardown_error or err
             if self._nvml is not None:
-                self._nvml.stop()
+                try:
+                    self._nvml.stop()
+                except Exception as err:
+                    teardown_error = teardown_error or err
         if exc[0] is None:
-            self.result = self._build(t1, kernels, copies, correlation)
+            if teardown_error is not None:
+                raise teardown_error
+            self.result = self._build(t1, kernels, copies, correlation, dropped)
         return False
 
     def step(self):
@@ -198,7 +250,7 @@ class Profile:
         return best[1]
 
     # -- results ----------------------------------------------------------------
-    def _build(self, t1, kernels, copies, correlation):
+    def _build(self, t1, kernels, copies, correlation, dropped=0):
         layout = _layout()
         strings = list(_core.step_trace_strings())
         ops = _records(_core.step_trace_ops(), layout["ops"])
@@ -247,7 +299,8 @@ class Profile:
             device_note=self._device_note, memory=memory, python=self._sampler,
             replay=replay, steps=list(self._steps), truncated=truncated,
             on_host=self._device_index < 0,
-            stacks=_stack_table() if self.want_stacks else None)
+            stacks=_stack_table() if self.want_stacks else None,
+            dropped_device_records=dropped)
 
     def _require(self):
         if self.result is None:

@@ -7,29 +7,31 @@ graph launch) that issued it. ``src/runtime/profiler/step_trace.cc`` pushes
 the operator's trace sequence number as the external correlation id around
 each launch; here the id is read back from the activity records.
 
+Buffer request and completion callbacks run directly in C++
+(``step_trace_cupti_init`` in ``src/runtime/profiler/step_trace.cc``) so CUPTI's
+background delivery thread never acquires the Python GIL (eliminating GIL vs.
+CUPTI deadlocks on large steps) and record parsing runs at native speed.
+
 CUPTI is not a jittor dependency. It is found, in order, at
 ``$JITTOR_CUPTI_LIB``, in the ``nvidia-cuda-cupti-cu12`` wheel, next to the
 CUDA toolkit jittor compiles with, and on the loader path. When none is
 found :func:`load` says why, and the profile reports device time as
 unavailable instead of inventing it.
-
-Record layouts are CUPTI's packed ``CUpti_ActivityKernel*`` /
-``CUpti_ActivityMemcpy*`` / ``CUpti_ActivityMemset*`` /
-``CUpti_ActivityExternalCorrelation`` structs. Only fields whose offsets have
-been stable since CUPTI 11 are read.
 """
 
 import ctypes
 import glob
 import os
 import sys
-import threading
+
+import jittor_core as _core
 
 KIND_MEMCPY = 1
 KIND_MEMSET = 2
 KIND_DRIVER = 4
 KIND_RUNTIME = 5
 KIND_CONCURRENT_KERNEL = 10
+KIND_MEMCPY2 = 22
 KIND_EXTERNAL_CORRELATION = 39
 EXTERNAL_KIND_CUSTOM0 = 3
 # CUPTI emits external correlation for enabled API activity records. Libraries
@@ -37,7 +39,7 @@ EXTERNAL_KIND_CUSTOM0 = 3
 # collect both domains so those kernels retain their issuing operator's id.
 _ENABLED_KINDS = (KIND_CONCURRENT_KERNEL, KIND_MEMCPY, KIND_MEMSET,
                   KIND_RUNTIME, KIND_DRIVER, KIND_EXTERNAL_CORRELATION)
-_BUFFER_BYTES = 8 << 20
+_OPTIONAL_KINDS = (KIND_MEMCPY2,)
 
 _MEMCPY_KINDS = {1: "HtoD", 2: "DtoH", 3: "HtoA", 4: "AtoH", 5: "AtoA",
                  6: "AtoD", 7: "DtoA", 8: "DtoD", 9: "HtoH", 10: "PtoP"}
@@ -57,10 +59,14 @@ def _candidates():
     except ImportError:
         roots = []
     roots.append(os.environ.get("CUDA_HOME"))
+    seen = set()
     for root in filter(None, roots):
-        for pattern in ("extras/CUPTI/lib64/libcupti.so*", "lib64/libcupti.so*", "lib/libcupti.so*"):
+        for pattern in ("extras/CUPTI/lib64/libcupti.so*", "targets/x86_64-linux/lib/libcupti.so*",
+                        "lib64/libcupti.so*", "lib/libcupti.so*"):
             for path in sorted(glob.glob(os.path.join(root, pattern))):
-                yield path
+                if path not in seen:
+                    seen.add(path)
+                    yield path
     yield "libcupti.so"
 
 
@@ -70,78 +76,33 @@ class _Cupti:
     def __init__(self, lib, path):
         self.lib = lib
         self.path = path
-        self.lock = threading.Lock()
-        self.kernels = []
-        self.copies = []
-        self.correlation = {}
-        self._buffers = {}
-        # Buffers are handed to CUPTI from inside CUDA calls on the profiled
-        # thread; making them there would put Python allocation work inside
-        # the measured launch. A few are made ahead, and refilled at start.
-        self._spare = []
-        req = ctypes.CFUNCTYPE(None, ctypes.POINTER(ctypes.c_void_p),
-                               ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t))
-        done = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p,
-                                ctypes.c_size_t, ctypes.c_size_t)
-        self._req = req(self._request)
-        self._done = done(self._complete)
-        lib.cuptiActivityGetNextRecord.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
-                                                   ctypes.POINTER(ctypes.c_void_p)]
+        lib.cuptiActivityRegisterCallbacks.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        lib.cuptiActivityRegisterCallbacks.restype = ctypes.c_int
         lib.cuptiGetTimestamp.argtypes = [ctypes.POINTER(ctypes.c_uint64)]
-        self._check(lib.cuptiActivityRegisterCallbacks(self._req, self._done),
+        lib.cuptiGetTimestamp.restype = ctypes.c_int
+        lib.cuptiActivityEnable.argtypes = [ctypes.c_int]
+        lib.cuptiActivityEnable.restype = ctypes.c_int
+        lib.cuptiActivityDisable.argtypes = [ctypes.c_int]
+        lib.cuptiActivityDisable.restype = ctypes.c_int
+        lib.cuptiActivityFlushAll.argtypes = [ctypes.c_uint32]
+        lib.cuptiActivityFlushAll.restype = ctypes.c_int
+
+        get_next_addr = ctypes.cast(lib.cuptiActivityGetNextRecord, ctypes.c_void_p).value
+        get_dropped_fn = getattr(lib, "cuptiActivityGetNumDroppedRecords", None)
+        get_dropped_addr = ctypes.cast(get_dropped_fn, ctypes.c_void_p).value if get_dropped_fn else 0
+        req_cb, done_cb = _core.step_trace_cupti_init(get_next_addr, get_dropped_addr)
+        self._check(lib.cuptiActivityRegisterCallbacks(ctypes.c_void_p(req_cb),
+                                                       ctypes.c_void_p(done_cb)),
                     "cuptiActivityRegisterCallbacks")
         self.push = ctypes.cast(lib.cuptiActivityPushExternalCorrelationId, ctypes.c_void_p).value
         self.pop = ctypes.cast(lib.cuptiActivityPopExternalCorrelationId, ctypes.c_void_p).value
+        self._active_kinds = []
         self.active = False
+        self.last_dropped = 0
 
     def _check(self, result, what):
         if result != 0:
             raise RuntimeError("%s failed with CUPTI error %d (library %s)" % (what, result, self.path))
-
-    def _request(self, pbuf, psize, pmax):
-        raw = self._spare.pop() if self._spare else ctypes.create_string_buffer(_BUFFER_BYTES + 8)
-        address = (ctypes.addressof(raw) + 7) & ~7
-        self._buffers[address] = raw
-        pbuf[0] = address
-        psize[0] = _BUFFER_BYTES
-        pmax[0] = 0
-
-    def _complete(self, context, stream, buffer, size, valid):
-        record = ctypes.c_void_p()
-        u32 = ctypes.c_uint32.from_address
-        u64 = ctypes.c_uint64.from_address
-        kernels, copies, correlation = [], [], {}
-        while self.lib.cuptiActivityGetNextRecord(buffer, valid, ctypes.byref(record)) == 0:
-            a = record.value
-            kind = u32(a).value
-            if kind == KIND_CONCURRENT_KERNEL:
-                name = ctypes.c_char_p.from_address(a + 104).value
-                # CUpti_ActivityKernel: registersPerThread (u16 @6), grid
-                # @52..60, block @64..72, static/dynamic shared memory @76/80.
-                launch = (tuple(u32(a + o).value for o in (52, 56, 60)),
-                          tuple(u32(a + o).value for o in (64, 68, 72)),
-                          ctypes.c_uint16.from_address(a + 6).value,
-                          u32(a + 76).value + u32(a + 80).value)
-                kernels.append((u64(a + 16).value, u64(a + 24).value, u32(a + 40).value,
-                                u32(a + 48).value, u32(a + 92).value,
-                                name.decode("utf-8", "replace") if name else "?",
-                                u32(a + 156).value, launch))
-            elif kind == KIND_MEMCPY:
-                copies.append((u64(a + 16).value, u64(a + 24).value, u32(a + 32).value,
-                               u32(a + 40).value, u32(a + 44).value,
-                               "memcpy " + _MEMCPY_KINDS.get(ctypes.c_uint8.from_address(a + 4).value, "?"),
-                               u64(a + 8).value))
-            elif kind == KIND_MEMSET:
-                copies.append((u64(a + 16).value, u64(a + 24).value, u32(a + 32).value,
-                               u32(a + 40).value, u32(a + 44).value, "memset", u64(a + 8).value))
-            elif kind == KIND_EXTERNAL_CORRELATION:
-                if u32(a + 4).value == EXTERNAL_KIND_CUSTOM0:
-                    correlation[u32(a + 16).value] = u64(a + 8).value
-        with self.lock:
-            self.kernels.extend(kernels)
-            self.copies.extend(copies)
-            self.correlation.update(correlation)
-        self._buffers.pop(buffer, None)
 
     def timestamp(self):
         value = ctypes.c_uint64()
@@ -150,23 +111,67 @@ class _Cupti:
 
     def start(self):
         self.flush()
-        while len(self._spare) < 4:
-            self._spare.append(ctypes.create_string_buffer(_BUFFER_BYTES + 8))
-        with self.lock:
-            self.kernels, self.copies, self.correlation = [], [], {}
-        for kind in _ENABLED_KINDS:
-            self._check(self.lib.cuptiActivityEnable(kind), "cuptiActivityEnable(%d)" % kind)
+        _core.step_trace_cupti_reset()
+        self.last_dropped = 0
+        enabled = []
+        try:
+            for kind in _ENABLED_KINDS:
+                self._check(self.lib.cuptiActivityEnable(kind), "cuptiActivityEnable(%d)" % kind)
+                enabled.append(kind)
+            for kind in _OPTIONAL_KINDS:
+                if self.lib.cuptiActivityEnable(kind) == 0:
+                    enabled.append(kind)
+        except Exception:
+            for kind in reversed(enabled):
+                self.lib.cuptiActivityDisable(kind)
+            raise
+        self._active_kinds = enabled
         self.active = True
 
     def stop(self):
-        self.flush()
-        for kind in _ENABLED_KINDS:
-            self._check(self.lib.cuptiActivityDisable(kind), "cuptiActivityDisable(%d)" % kind)
+        first_error = None
+        try:
+            self.flush()
+        except Exception as exc:
+            first_error = exc
+        kinds, self._active_kinds = self._active_kinds, []
+        for kind in reversed(kinds):
+            rc = self.lib.cuptiActivityDisable(kind)
+            if rc != 0 and first_error is None:
+                first_error = RuntimeError(
+                    "cuptiActivityDisable(%d) failed with CUPTI error %d (library %s)"
+                    % (kind, rc, self.path))
+        try:
+            self.flush()
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
         self.active = False
-        with self.lock:
-            out = self.kernels, self.copies, self.correlation
-            self.kernels, self.copies, self.correlation = [], [], {}
-        return out
+        names = list(_core.step_trace_cupti_take_names())
+        raw_kernels = _core.step_trace_cupti_take_kernels()
+        raw_copies = _core.step_trace_cupti_take_copies()
+        raw_corrs = _core.step_trace_cupti_take_correlations()
+        self.last_dropped = int(_core.step_trace_cupti_dropped())
+        if first_error is not None:
+            raise first_error
+
+        kernels = [
+            (raw_kernels[i], raw_kernels[i + 1], raw_kernels[i + 2], raw_kernels[i + 3],
+             raw_kernels[i + 4], names[raw_kernels[i + 5]], raw_kernels[i + 6],
+             ((raw_kernels[i + 7], raw_kernels[i + 8], raw_kernels[i + 9]),
+              (raw_kernels[i + 10], raw_kernels[i + 11], raw_kernels[i + 12]),
+              raw_kernels[i + 13], raw_kernels[i + 14]))
+            for i in range(0, len(raw_kernels), 15)
+        ]
+        copies = [
+            (raw_copies[i], raw_copies[i + 1], raw_copies[i + 2], raw_copies[i + 3],
+             raw_copies[i + 4],
+             "memset" if raw_copies[i + 5] == 0 else ("memcpy " + _MEMCPY_KINDS.get(raw_copies[i + 5], "?")),
+             raw_copies[i + 6])
+            for i in range(0, len(raw_copies), 7)
+        ]
+        correlation = {raw_corrs[i]: raw_corrs[i + 1] for i in range(0, len(raw_corrs), 2)}
+        return kernels, copies, correlation
 
     def flush(self):
         self._check(self.lib.cuptiActivityFlushAll(1), "cuptiActivityFlushAll")
@@ -185,15 +190,15 @@ def load():
     for path in _candidates():
         try:
             lib = ctypes.CDLL(path)
-        except OSError as exc:
+            _instance = _Cupti(lib, path)
+            return _instance
+        except (OSError, RuntimeError, AttributeError) as exc:
             tried.append("%s (%s)" % (path, exc))
             continue
-        _instance = _Cupti(lib, path)
-        return _instance
-    _failure = ("CUPTI was not found; pip install \"jittor[profile]\" (the "
-                "nvidia-cuda-cupti-cu12 wheel for Jittor's CUDA 12.2), or set "
-                "JITTOR_CUPTI_LIB to a libcupti matching your CUDA runtime. Tried: "
-                + "; ".join(tried[-4:]))
+    _failure = ("CUPTI was not found or failed to initialize; install "
+                "nvidia-cuda-cupti-cu12 matching your CUDA runtime (or "
+                "`pip install \"jittor[profile]\"`), or set JITTOR_CUPTI_LIB "
+                "to a compatible libcupti.so. Tried: " + "; ".join(tried[-4:]))
     return None
 
 

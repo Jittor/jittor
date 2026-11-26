@@ -156,5 +156,21 @@ class TestMemoryStats(unittest.TestCase):
                          len(lines) - 2 * 9)
 
 
+class TestCpuMemoryStats(unittest.TestCase):
+    def test_cpu_mode_defaults_to_host_pool_and_accepts_cpu_device(self):
+        with jt.flag_scope(use_cuda=0):
+            x = jt.randn(1024, 1024)
+            x.sync()
+            default_stats = profiling.memory_stats()
+            host_stats = profiling.memory_stats(-1)
+            cpu_stats = profiling.memory_stats("cpu")
+            self.assertEqual(default_stats["allocated_bytes.all.current"],
+                             host_stats["allocated_bytes.all.current"])
+            self.assertEqual(cpu_stats["allocated_bytes.all.current"],
+                             host_stats["allocated_bytes.all.current"])
+            self.assertGreaterEqual(default_stats["allocated_bytes.all.current"], 4 << 20)
+            del x
+
+
 if __name__ == "__main__":
     unittest.main()
