@@ -987,3 +987,40 @@ def test_graph_replay_does_not_fold_unguarded_external_tensor():
             np.testing.assert_allclose(replay(x).numpy(), np.full((4, 4), 21.0, dtype="float32"))
         finally:
             replay.invalidate()
+
+
+def test_step_capture_folds_stateless_inference_constants_and_guards_mutation():
+    from jittor._runtime.step_capture import StepCapture
+
+    table = jt.array(np.arange(16, dtype="float32").reshape(4, 4))
+    idx = jt.array(np.array([0, 2, 1, 3], dtype="int32"))
+    jt.sync([table, idx], True, False)
+
+    def forward(x):
+        bias = table[idx].transpose(1, 0).contiguous()
+        mask = jt.zeros((4, 4), dtype="float32")
+        mask[2:, :2] = -10.0
+        return x + bias + mask
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0), jt.no_grad():
+        x1 = jt.array(np.ones((4, 4), dtype="float32"))
+        x2 = jt.array(np.full((4, 4), 2.0, dtype="float32"))
+        want1 = forward(x1).numpy()
+        want2 = forward(x2).numpy()
+        step = StepCapture(forward, record=False)
+        try:
+            # First call is eager warmup, second captures and folds constants.
+            np.testing.assert_allclose(step(x1).numpy(), want1, rtol=1e-5, atol=1e-5)
+            np.testing.assert_allclose(step(x2).numpy(), want2, rtol=1e-5, atol=1e-5)
+            assert step.stats["captured"] == 1
+            out = step._capture.outputs[0]
+            assert not out.is_finished
+            assert out._input(1).is_finished
+            assert out._input(0)._input(1).is_finished
+            # In-place mutation of a folded leaf invalidates the capture.
+            table._write_inplace(np.full((4, 4), 5.0, dtype="float32"))
+            want3 = forward(x2).numpy()
+            np.testing.assert_allclose(step(x2).numpy(), want3, rtol=1e-5, atol=1e-5)
+            assert step.stats["captured"] == 2
+        finally:
+            step.invalidate()
