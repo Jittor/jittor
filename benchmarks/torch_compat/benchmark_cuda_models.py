@@ -141,8 +141,7 @@ TRAINING_CASES.update({
 })
 EAGER_TRAINING = {
     "bert-large-cased-r2-b4", "roberta-large-r2-b4",
-    # T5's training step reads back tensor values and cannot be replayed.
-    "t5-small-r1-b16", "t5-small-r2-b16",
+    "t5-small-r2-b16",
 }
 
 

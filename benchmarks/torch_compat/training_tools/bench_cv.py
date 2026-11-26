@@ -181,6 +181,15 @@ def main():
         parameter.requires_grad = True
     mean = torch.tensor(model.default_cfg['mean'], device=device)[None, :, None, None]
     std = torch.tensor(model.default_cfg['std'], device=device)[None, :, None, None]
+    # A device divisor preserves NumPy's float32 division for every pixel.
+    # Native Torch can multiply by a rounded reciprocal for a Python scalar.
+    pixel_divisor = (torch.tensor(255.0, dtype=torch.float32, device=device)
+                     if args.shared_input_pipeline else None)
+
+    def image_values(batch):
+        images = batch['image']
+        return images.float() / pixel_divisor if pixel_divisor is not None else images
+
     runners = {}
     if args.execution == 'compiled-features':
         from model_profile import install_compiled_features
@@ -241,7 +250,8 @@ def main():
                 if args.audit_training:
                     used_hyperparameters = dict(lr=float(optimizer.param_groups[0]['lr']),
                                                 betas=[float(v) for v in optimizer.param_groups[0]['betas']])
-                inputs = (batch['image'] - mean) / std
+                images = image_values(batch)
+                inputs = (images - mean) / std
                 if args.execution == 'compiled-step':
                     signature = ('step', tuple(inputs.shape), str(inputs.dtype))
                     if signature not in runners:
@@ -271,7 +281,7 @@ def main():
                            forward=forwarded-fetched, backward=backwarded-forwarded, update=end-backwarded,
                            loss=float(loss.item()), batch_size=int(batch['label'].shape[0]))
                 if args.audit_training:
-                    pixels = np.ascontiguousarray(batch['image'].detach().cpu().numpy())
+                    pixels = np.ascontiguousarray(images.detach().cpu().numpy())
                     targets = np.ascontiguousarray(batch['label'].detach().cpu().numpy(), dtype=np.int64)
                     row['input_sha256'] = hashlib.sha256(pixels.tobytes() + targets.tobytes()).hexdigest()
                     row['used_hyperparameters'] = used_hyperparameters
@@ -299,7 +309,7 @@ def main():
             with torch.no_grad():
                 for batch in evaluation:
                     batch = {key: value.to(device) for key, value in batch.items()}
-                    outputs = model((batch['image'] - mean) / std)
+                    outputs = model((image_values(batch) - mean) / std)
                     if args.save_evaluation:
                         gathered, references = accelerator.gather_for_metrics((outputs.detach(), batch['label']))
                         predictions = gathered.argmax(-1)

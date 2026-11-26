@@ -207,6 +207,14 @@ def publish_gradients(leaves):
         _ACTIVE.published_gradients.extend(leaves)
 
 
+def keep_shape_dependency(indices):
+    # Some dynamic outputs are used only through their Python shape. Their
+    # coordinate producers still need to run during replay preflight, before
+    # optimizer hooks or graph launch, so a changed extent re-enters Python.
+    if _ACTIVE is not None:
+        _ACTIVE.shape_dependencies.append(indices)
+
+
 def guard(read):
     """Re-capture whenever `read()` differs from its value now."""
     if _ACTIVE is not None:
@@ -507,7 +515,7 @@ class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
-                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix")
+                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix", "shape_dependencies")
 
     def __init__(self):
         self.prologue = []
@@ -520,6 +528,7 @@ class _Capture:
         self.gradient_leaves = []
         self.differentiable_leaves = []
         self.dynamic_prefix = None
+        self.shape_dependencies = []
 
 
 def _finish_normally(roots):
@@ -781,7 +790,7 @@ class StepCapture:
         gradient_sources = [(holder, _core._snapshot_step_gradient(holder))
                             for holder in published.values()]
         roots = _unique([source for _, source in gradient_sources]
-                        + outputs + [new for _, _, new in records])
+                        + outputs + [new for _, _, new in records] + cap.shape_dependencies)
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --
         # running it kept, then putting the state back and running it again --

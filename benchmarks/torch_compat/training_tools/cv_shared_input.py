@@ -2,7 +2,7 @@
 
 Keep JPEG decoding and log-uniform RandomResizedCrop on CPU. A sample's
 crop depends on its pass and index, so worker assignment cannot change it.
-Tensor conversion remains an operation of the framework under test.
+Workers transport RGB bytes. The benchmark scales them on the accelerator.
 """
 import hashlib
 import json
@@ -40,7 +40,7 @@ def image_array(filename, sample, pass_index=0, seed=42, training=True):
         top, left, height, width = crop_box(image.height, image.width, rng)
         image = image.crop((left, top, left+width, top+height))
     image = image.resize((224, 224), Image.Resampling.BILINEAR)
-    return np.ascontiguousarray(np.asarray(image, dtype=np.float32).transpose(2, 0, 1) / np.float32(255))
+    return np.ascontiguousarray(np.asarray(image, dtype=np.uint8).transpose(2, 0, 1))
 
 
 class SharedPets:
