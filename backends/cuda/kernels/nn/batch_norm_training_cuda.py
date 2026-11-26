@@ -177,6 +177,8 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act="", residual
     if residual:
         assert act == "relu", act
         grad_act = _ACTIVATIONS[""][1]
+    # Center before scaling. Expanding the affine around zero can lose
+    # the learned bias or change the sign at a ReLU threshold.
     header = _header(_WELFORD, _PAIR) + f"""
     __device__ __forceinline__ float jt_bn_act(float z) {{ {forward_act} }}
     __device__ __forceinline__ float jt_bn_act_grad(float gs, float z) {{ {grad_act} }}
@@ -184,45 +186,45 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act="", residual
     parts = segments * channels
     apply_v4 = """
         float4 v = reinterpret_cast<const float4*>(x)[i];
-        float k = coef[c], b = coef[%d + c];
+        float k = coef[c], b = coef[%d + c], m = coef[%d + c];
         reinterpret_cast<float4*>(y)[i] = make_float4(
-            jt_bn_act(v.x * k + b), jt_bn_act(v.y * k + b),
-            jt_bn_act(v.z * k + b), jt_bn_act(v.w * k + b));
-    """ % channels
+            jt_bn_act((v.x - m) * k + b), jt_bn_act((v.y - m) * k + b),
+            jt_bn_act((v.z - m) * k + b), jt_bn_act((v.w - m) * k + b));
+    """ % (channels, 2 * channels)
     apply_body = """
-        y[i] = out0_type(jt_bn_act(static_cast<float>(x[i]) * coef[c] + coef[%d + c]));
-    """ % channels
+        y[i] = out0_type(jt_bn_act((static_cast<float>(x[i]) - coef[%d + c]) * coef[c] + coef[%d + c]));
+    """ % (2 * channels, channels)
     residual_v4 = """
         float4 v = reinterpret_cast<const float4*>(x)[i];
         float4 s = reinterpret_cast<const float4*>(r)[i];
-        float k = coef[c], b = coef[%d + c];
+        float k = coef[c], b = coef[%d + c], m = coef[%d + c];
         reinterpret_cast<float4*>(y)[i] = make_float4(
-            jt_bn_act(v.x * k + b + s.x), jt_bn_act(v.y * k + b + s.y),
-            jt_bn_act(v.z * k + b + s.z), jt_bn_act(v.w * k + b + s.w));
-    """ % channels
+            jt_bn_act((v.x - m) * k + b + s.x), jt_bn_act((v.y - m) * k + b + s.y),
+            jt_bn_act((v.z - m) * k + b + s.z), jt_bn_act((v.w - m) * k + b + s.w));
+    """ % (channels, 2 * channels)
     residual_body = """
-        y[i] = out0_type(jt_bn_act(static_cast<float>(x[i]) * coef[c] + coef[%d + c]
+        y[i] = out0_type(jt_bn_act((static_cast<float>(x[i]) - coef[%d + c]) * coef[c] + coef[%d + c]
                                    + static_cast<float>(r[i])));
-    """ % channels
+    """ % (2 * channels, channels)
     # The backward takes the gradient through the activation from the value it
     # had, recomputed from x and the forward's coefficients (`fcoef`).
     grad_v4 = """
         float4 gs = reinterpret_cast<const float4*>(grad_y)[i];
         float4 v = reinterpret_cast<const float4*>(x)[i];
-        float fk = fcoef[c], fb = fcoef[%d + c];
+        float fk = fcoef[c], fb = fcoef[%d + c], m = fcoef[%d + c];
         float4 g = make_float4(
-            jt_bn_act_grad(gs.x, v.x * fk + fb), jt_bn_act_grad(gs.y, v.y * fk + fb),
-            jt_bn_act_grad(gs.z, v.z * fk + fb), jt_bn_act_grad(gs.w, v.w * fk + fb));
+            jt_bn_act_grad(gs.x, (v.x - m) * fk + fb), jt_bn_act_grad(gs.y, (v.y - m) * fk + fb),
+            jt_bn_act_grad(gs.z, (v.z - m) * fk + fb), jt_bn_act_grad(gs.w, (v.w - m) * fk + fb));
         float k1 = coef[c], k2 = coef[%d + c], k3 = coef[%d + c];
         reinterpret_cast<float4*>(grad_x)[i] = make_float4(
             k1 * g.x + k2 * v.x + k3, k1 * g.y + k2 * v.y + k3,
             k1 * g.z + k2 * v.z + k3, k1 * g.w + k2 * v.w + k3);
-    """ % (channels, channels, 2 * channels)
+    """ % (channels, 2 * channels, channels, 2 * channels)
     grad_body = """
         float v = static_cast<float>(x[i]);
-        float g = jt_bn_act_grad(static_cast<float>(grad_y[i]), v * fcoef[c] + fcoef[%d + c]);
+        float g = jt_bn_act_grad(static_cast<float>(grad_y[i]), (v - fcoef[%d + c]) * fcoef[c] + fcoef[%d + c]);
         grad_x[i] = out0_type(coef[c] * g + coef[%d + c] * v + coef[%d + c]);
-    """ % (channels, channels, 2 * channels)
+    """ % (2 * channels, channels, channels, 2 * channels)
 
     statistics_launch = f"batch_norm_statistics<<<dim3({channels}, {segments}), {_THREADS}>>>(in0_p, out3_p);"
     statistics_v4 = ""
@@ -266,10 +268,10 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act="", residual
             f"else {statistics_launch}")
         sums_body = """
             float4 v = x[index], g = grad_y[index];
-            float d0 = jt_bn_act_grad(g.x, v.x * fk + fb);
-            float d1 = jt_bn_act_grad(g.y, v.y * fk + fb);
-            float d2 = jt_bn_act_grad(g.z, v.z * fk + fb);
-            float d3 = jt_bn_act_grad(g.w, v.w * fk + fb);
+            float d0 = jt_bn_act_grad(g.x, (v.x - center) * fk + fb);
+            float d1 = jt_bn_act_grad(g.y, (v.y - center) * fk + fb);
+            float d2 = jt_bn_act_grad(g.z, (v.z - center) * fk + fb);
+            float d3 = jt_bn_act_grad(g.w, (v.w - center) * fk + fb);
             local.a += (d0 + d1) + (d2 + d3);
             local.b += (d0 * (v.x - center) + d1 * (v.y - center))
                 + (d2 * (v.z - center) + d3 * (v.w - center));
@@ -299,9 +301,9 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act="", residual
             f"else {sums_launch}")
 
     def statistics(x, weight, bias):
-        """mean, var, rstd and the (scale, shift) the apply uses."""
+        """mean, var, rstd and the (scale, bias, center) the apply uses."""
         mean, var, rstd, partial, coef = jt.code(
-            [(channels,), (channels,), (channels,), (3 * parts,), (2 * channels,)],
+            [(channels,), (channels,), (channels,), (3 * parts,), (3 * channels,)],
             ["float32", "float32", "float32", "float32", "float32"],
             [x, weight, bias],
             cuda_header=header,
@@ -350,7 +352,8 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act="", residual
                 var[c] = variance;
                 rstd[c] = r;
                 coef[c] = k;
-                coef[{channels} + c] = static_cast<float>(bias[c]) - total.mean * k;
+                coef[{channels} + c] = static_cast<float>(bias[c]);
+                coef[{2 * channels} + c] = total.mean;
             }}
             {statistics_launch}
             batch_norm_finish<<<{_per_channel(channels)}>>>(
@@ -432,7 +435,7 @@ def _batch_norm_cuda_cls(batch, channels, spatial, eps, vector, act="", residual
                     {_channel_loop(channels, spatial, count, per_segment, '''
                         float v = static_cast<float>(x[index]);
                         float dy = jt_bn_act_grad(static_cast<float>(grad_y[index]),
-                                                  v * fk + fb);
+                                                  (v - center) * fk + fb);
                         local.a += dy;
                         local.b += dy * (v - center);
                     ''')}
@@ -564,6 +567,8 @@ def _batch_norm_nhwc_cls(count, channels, eps, act="", residual=False):
     if residual:
         assert act == "relu", act
         grad_act = _ACTIVATIONS[""][1]
+    # Center before scaling. Expanding the affine around zero can lose
+    # the learned bias or change the sign at a ReLU threshold.
     header = _header(_WELFORD, _PAIR) + f"""
     #define CHANNELS {channels}
     __device__ __forceinline__ float jt_bn_act(float z) {{ {forward_act} }}
@@ -635,7 +640,7 @@ for (int k = 0; k < 4; k++) m2[k] = shared[8 + k][ty + span][tx];""",
             float g[4] = {g4.x, g4.y, g4.z, g4.w}, v[4] = {v4.x, v4.y, v4.z, v4.w};
             #pragma unroll
             for (int k = 0; k < 4; k++) {
-                float d = jt_bn_act_grad(g[k], v[k] * fk[k] + fb[k]);
+                float d = jt_bn_act_grad(g[k], (v[k] - center[k]) * fk[k] + fb[k]);
                 a[k] += d;
                 b[k] += d * (v[k] - center[k]);
             }
@@ -661,9 +666,10 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
         "batch_norm_apply_nhwc", "const float* x, const float* coef, float* y", """
             float4 v = reinterpret_cast<const float4*>(x)[i];
             float4 k = jt_bn_ld4(coef, lane), b = jt_bn_ld4(coef + CHANNELS, lane);
+            float4 m = jt_bn_ld4(coef + 2 * CHANNELS, lane);
             reinterpret_cast<float4*>(y)[i] = make_float4(
-                jt_bn_act(v.x * k.x + b.x), jt_bn_act(v.y * k.y + b.y),
-                jt_bn_act(v.z * k.z + b.z), jt_bn_act(v.w * k.w + b.w));
+                jt_bn_act((v.x - m.x) * k.x + b.x), jt_bn_act((v.y - m.y) * k.y + b.y),
+                jt_bn_act((v.z - m.z) * k.z + b.z), jt_bn_act((v.w - m.w) * k.w + b.w));
         """)
     residual_kernel = elementwise(
         "batch_norm_apply_residual_nhwc",
@@ -671,9 +677,10 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
             float4 v = reinterpret_cast<const float4*>(x)[i];
             float4 s = reinterpret_cast<const float4*>(r)[i];
             float4 k = jt_bn_ld4(coef, lane), b = jt_bn_ld4(coef + CHANNELS, lane);
+            float4 m = jt_bn_ld4(coef + 2 * CHANNELS, lane);
             reinterpret_cast<float4*>(y)[i] = make_float4(
-                jt_bn_act(v.x * k.x + b.x + s.x), jt_bn_act(v.y * k.y + b.y + s.y),
-                jt_bn_act(v.z * k.z + b.z + s.z), jt_bn_act(v.w * k.w + b.w + s.w));
+                jt_bn_act((v.x - m.x) * k.x + b.x + s.x), jt_bn_act((v.y - m.y) * k.y + b.y + s.y),
+                jt_bn_act((v.z - m.z) * k.z + b.z + s.z), jt_bn_act((v.w - m.w) * k.w + b.w + s.w));
         """)
     backward_apply_kernel = elementwise(
         "batch_norm_backward_apply_nhwc",
@@ -681,12 +688,13 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
             float4 gs = reinterpret_cast<const float4*>(grad_y)[i];
             float4 v = reinterpret_cast<const float4*>(x)[i];
             float4 fk = jt_bn_ld4(fcoef, lane), fb = jt_bn_ld4(fcoef + CHANNELS, lane);
+            float4 m = jt_bn_ld4(fcoef + 2 * CHANNELS, lane);
             float4 k1 = jt_bn_ld4(coef, lane), k2 = jt_bn_ld4(coef + CHANNELS, lane);
             float4 k3 = jt_bn_ld4(coef + 2 * CHANNELS, lane);
-            float g0 = jt_bn_act_grad(gs.x, v.x * fk.x + fb.x);
-            float g1 = jt_bn_act_grad(gs.y, v.y * fk.y + fb.y);
-            float g2 = jt_bn_act_grad(gs.z, v.z * fk.z + fb.z);
-            float g3 = jt_bn_act_grad(gs.w, v.w * fk.w + fb.w);
+            float g0 = jt_bn_act_grad(gs.x, (v.x - m.x) * fk.x + fb.x);
+            float g1 = jt_bn_act_grad(gs.y, (v.y - m.y) * fk.y + fb.y);
+            float g2 = jt_bn_act_grad(gs.z, (v.z - m.z) * fk.z + fb.z);
+            float g3 = jt_bn_act_grad(gs.w, (v.w - m.w) * fk.w + fb.w);
             reinterpret_cast<float4*>(grad_x)[i] = make_float4(
                 k1.x * g0 + k2.x * v.x + k3.x, k1.y * g1 + k2.y * v.y + k3.y,
                 k1.z * g2 + k2.z * v.z + k3.z, k1.w * g3 + k2.w * v.w + k3.w);
@@ -695,7 +703,7 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
 
     def statistics(x, weight, bias):
         mean, var, rstd, partial, coef = jt.code(
-            [(channels,), (channels,), (channels,), (3 * parts,), (2 * channels,)],
+            [(channels,), (channels,), (channels,), (3 * parts,), (3 * channels,)],
             ["float32", "float32", "float32", "float32", "float32"],
             [x, weight, bias],
             cuda_header=header,
@@ -728,7 +736,8 @@ for (int k = 0; k < 4; k++) b[k] = shared[4 + k][ty + span][tx];""",
                 var[c] = variance;
                 rstd[c] = r;
                 coef[c] = k;
-                coef[{channels} + c] = static_cast<float>(bias[c]) - total.mean * k;
+                coef[{channels} + c] = static_cast<float>(bias[c]);
+                coef[{2 * channels} + c] = total.mean;
             }}
             {{ auto jt_bn_error = cudaGetLastError(); CHECK(jt_bn_error == cudaSuccess) << "before batch norm statistics: " << cudaGetErrorString(jt_bn_error); }}
             batch_norm_statistics_nhwc<<<{grid}>>>(in0_p, out3_p);

@@ -632,6 +632,7 @@ class StepCapture:
         self._refused = None
         self._seen = None
         self._recaptures = 0
+        self._cap_replays = 0
         self._cuda_graph = 0
         self._pool = None
         self._graph_out = None
@@ -1172,13 +1173,17 @@ class StepCapture:
         cap = self._capture
         reason = self._stale(cap, args, kwargs) if cap is not None else None
         if reason is not None:
+            reused = self._cap_replays
             self.last_invalidated = reason
             self.invalidate()
             cap = None
-            self._recaptures += 1
-            if self._recaptures >= _GIVE_UP_AFTER:
-                self._refused = "the step kept changing, so it was re-captured too often"
-                return self._eager(args, kwargs)
+            if reused >= 8:
+                self._recaptures = 0
+            else:
+                self._recaptures += 1
+                if self._recaptures >= _GIVE_UP_AFTER:
+                    self._refused = "the step kept changing, so it was re-captured too often"
+                    return self._eager(args, kwargs)
         if cap is None:
             signature = self._call_signature(args, kwargs)
             if signature != self._seen:
@@ -1210,6 +1215,7 @@ class StepCapture:
             # cap must be gone: otherwise eager's writes can resolve its now
             # unmarked pending readers, executing the stale update once more.
             return self._eager(args, kwargs)
+        self._cap_replays += 1
         self.stats["replayed"] += 1
         return out
 
@@ -1241,6 +1247,7 @@ class StepCapture:
         self._graph_has_host_prefix = False
         self._graph_has_dynamic_prefix = False
         self._graph_host_prefix_bytes = 0
+        self._cap_replays = 0
         cap, self._capture = self._capture, None
         if cap is None:
             self._pool = None

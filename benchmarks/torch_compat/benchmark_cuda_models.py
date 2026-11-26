@@ -883,16 +883,23 @@ def run_stock(job, directory, torch, jt, np):
                      "executor-replay" if replay.get("replayed") else "eager-fallback")
 
     checked_batches = 0
+    parity_step = getattr(workload, "parity_step", None)
     if task.mode == "infer" and not task.stochastic:
         # Save a full cycle in input-pool order, independent of warmup length.
         arrays = {}
+        generated = {}
         checked_batches = len(workload.pool)
         for step in range(index + job["samples"], index + job["samples"] + checked_batches):
+            batch = step % checked_batches
             values = workload.step()
             sync(values)
-            batch = step % checked_batches
+            if parity_step is not None:
+                generated[f"batch.{batch}.0"] = output_array(np, torch, values[0])
+                values = parity_step(*workload.pool[batch])
             for i, value in enumerate(values):
                 arrays[f"batch.{batch}.{i}"] = output_array(np, torch, value)
+        if generated:
+            np.savez_compressed(directory / "generated_tokens.npz", **generated)
         np.savez_compressed(directory / "outputs.npz", **arrays)
     return dict(execution=execution, measured_replay=replay, replay_refused=refusal,
                 setup_s=setup_s, warmups=warmups, measurements=measurements,
@@ -1334,7 +1341,13 @@ def compare_pair(reference, candidate):
                 max_scale_ratio=tol["max_scale_ratio"],
             )
         parity = all(item["parity"] for item in errors.values())
-        return dict(parity=parity, comparable=parity and dependencies_match, output_errors=errors,
+        # These are the input-bearing fields of the stock Wan worker spec.
+        # Execution mode and measured workspace choice vary between runtimes.
+        inputs_match = all(reference.get(key) == candidate.get(key) for key in
+                           ("seed", "checkpoint", "config", "weights", "shape",
+                            "height", "width", "frames", "steps"))
+        return dict(parity=parity, comparable=parity and dependencies_match and inputs_match,
+                    output_errors=errors, same_inputs=inputs_match,
                     same_dependencies=dependencies_match, parity_tier=tier,
                     atol=tol["atol"], rtol=tol["rtol"],
                     max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
@@ -1350,6 +1363,11 @@ def compare_pair(reference, candidate):
     if "parity" in result:
         result["comparable"] = result["comparable"] and result["parity"]
     return result
+
+
+# A failed native reference in these workloads needs an additional same-input
+# comparison before a tolerance or a backend change can be justified.
+REFERENCE_DRIFT_CASES = {"llava", "qwen-vl", "ti2v-video"}
 
 
 def compare_results(rows):
@@ -1395,6 +1413,12 @@ def compare_results(rows):
                        jittor_execution=ok[selected]["execution"])
         if checks:
             summary.update(checks[selected])
+            native = summary.get("torch_compile_check", {})
+            if (case in REFERENCE_DRIFT_CASES and native.get("parity") is False
+                    and native.get("same_dependencies") is True
+                    and native.get("same_inputs") is True):
+                summary["reference_mismatch"] = True
+                summary["jittor_vs_torch_compiled"] = compare_pair(ok["compiled"], ok[selected])
             if best and passed(checks[selected]) and times[best] > 0 and times[selected] > 0:
                 summary["jittor_over_torch"] = times[selected] / times[best]
     return [summary]
@@ -1475,6 +1499,55 @@ def compare_arrays(np, a, b, atol, rtol, *, max_outside_fraction=0.0, min_cosine
                 outside_fraction=outside_fraction, nonfinite_mismatch=nonfinite_mismatch)
 
 
+def _rt_detr_query_order(np, keys, left, right, atol, rtol):
+    """Find a single within-tolerance permutation for a group of query tensors."""
+    pairs = [(left[key], right[key]) for key in keys]
+    if any(a.shape != b.shape or a.dtype != b.dtype or a.ndim < 3 for a, b in pairs):
+        return None
+    queries = pairs[0][0].shape[-2]
+    if any(a.shape[-2] != queries for a, _ in pairs):
+        return None
+    matches = np.ones((queries, queries), dtype=bool)
+    for a, b in pairs:
+        if not np.isfinite(a).all() or not np.isfinite(b).all():
+            return None
+        a = np.moveaxis(a, -2, 0).reshape(queries, -1)
+        b = np.moveaxis(b, -2, 0).reshape(queries, -1)
+        for index in range(queries):
+            matches[index] &= np.isclose(b, a[index], atol=atol, rtol=rtol).all(axis=1)
+    if matches.diagonal().all():
+        return np.arange(queries)
+    # Preserve the one-to-one constraint even when several rows are close.
+    # Each search can reassign an earlier match to make space for a new one.
+    owner = np.full(queries, -1, dtype=int)
+
+    def assign(query, seen):
+        for column in np.flatnonzero(matches[query] & ~seen):
+            if seen[column]:
+                continue
+            seen[column] = True
+            if owner[column] == -1 or assign(owner[column], seen):
+                owner[column] = query
+                return True
+        return False
+
+    if all(assign(query, np.zeros(queries, dtype=bool)) for query in range(queries)):
+        return np.argsort(owner)
+    return None
+
+
+# Measured FP16 rounding for Whisper logits and a sparse FP32 tail in the
+# final SAM 2.1 image embedding. Apply the allowance only to these outputs.
+MODEL_OUTPUT_TOLERANCES = {
+    ("whisper-large-v3-turbo", "float16", "output.logits"): dict(
+        atol=1e-2, rtol=3e-2, max_outside_fraction=0.02, min_cosine=0.99998,
+        max_abs_cap=0.1, max_scale_ratio=None),
+    ("sam2-large", "float32", "output.image_embeddings.2"): dict(
+        atol=1e-4, rtol=1e-3, max_outside_fraction=5e-5, min_cosine=0.99999999,
+        max_abs_cap=3e-3, max_scale_ratio=None),
+}
+
+
 def compare_model_outputs(np, reference, candidate):
     ref = Path(reference["directory"]) / "outputs.npz"
     actual = Path(candidate["directory"]) / "outputs.npz"
@@ -1493,20 +1566,37 @@ def compare_model_outputs(np, reference, candidate):
         tier_prefix = "inference"
     atol, rtol = tol["atol"], tol["rtol"]
     errors = {}
+    overrides = {}
     with np.load(ref, allow_pickle=False) as left, np.load(actual, allow_pickle=False) as right:
         if not left.files or set(left.files) != set(right.files):
             return dict(parity=False, parity_error="Output fields differ")
+        aligned = {}
+        if case_name == "rt-detr":
+            # The postprocess independently sorts the final detections. All
+            # intermediate boxes and scores share their decoder-query order.
+            final = ("output.0",)
+            intermediate = ("output.1.0", "output.1.1", "output.1.2", "output.1.3")
+            for keys in (final, intermediate):
+                if all(key in left for key in keys):
+                    order = _rt_detr_query_order(np, keys, left, right, atol, rtol)
+                    if order is not None:
+                        aligned.update((key, np.take(right[key], order, axis=-2)) for key in keys)
         for key in left.files:
-            errors[key] = compare_arrays(
-                np, left[key], right[key], atol, rtol,
-                max_outside_fraction=tol["max_outside_fraction"],
-                min_cosine=tol["min_cosine"],
-                max_abs_cap=tol["max_abs_cap"],
-                max_scale_ratio=tol["max_scale_ratio"],
-            )
-    return dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors,
-                atol=atol, rtol=rtol, parity_tier=f"{tier_prefix}:{dtype_name}",
-                max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
+            candidate_array = aligned[key] if key in aligned else right[key]
+            override = MODEL_OUTPUT_TOLERANCES.get((case_name, dtype_name, key))
+            if override is not None:
+                overrides[key] = override
+            check = compare_arrays(np, left[key], candidate_array, **(override or tol))
+            if override is not None and check["parity"]:
+                check["parity"] = (check["max_abs_diff"] <= override["max_abs_cap"]
+                                   and check["cosine_similarity"] >= override["min_cosine"])
+            errors[key] = check
+    result = dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors,
+                  atol=atol, rtol=rtol, parity_tier=f"{tier_prefix}:{dtype_name}",
+                  max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
+    if overrides:
+        result["output_tolerances"] = overrides
+    return result
 
 
 def main():
