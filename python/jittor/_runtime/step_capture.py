@@ -728,11 +728,14 @@ class StepCapture:
         # a partial capture can make the final sync repeat state updates.
         flush_before = jt.flags.auto_flush_ops
         async_flush_before = jt.flags.async_flush_ops
+        rank_before = jt.flags.auto_compile_shapes_rank
         _ACTIVE = cap
         _core._state_capture_begin()
         jt.flags.keep_graph = 2
         jt.flags.auto_flush_ops = 0
         jt.flags.async_flush_ops = 0
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         records = []
         readbacks = _core._host_readback_count()
         try:
@@ -745,6 +748,7 @@ class StepCapture:
             try:
                 records = _core._state_capture_end()
             finally:
+                jt.flags.auto_compile_shapes_rank = rank_before
                 jt.flags.async_flush_ops = async_flush_before
                 jt.flags.auto_flush_ops = flush_before
                 jt.flags.keep_graph = before
@@ -805,12 +809,15 @@ class StepCapture:
 
         # Finish pending outputs without repeating already executed updates.
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         try:
             # A fresh detach/clone or post-update readout can still be pending
             # even when the optimizer already ran. Resolve only new work,
             # using successfully executed kept values as temporary boundaries.
             _core._materialize_step_readouts(roots, bool(gradient_sources))
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
 
         # Point every rebound holder back at its old Var, which the graph
@@ -826,9 +833,12 @@ class StepCapture:
         # replayed against a new batch returned the loss of the batch it was
         # captured on, and its update used that step's gradients.
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         try:
             state = _commit_captured_state(records)
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         with jt.no_grad():
             state = _write_back_in_graph(state, roots)

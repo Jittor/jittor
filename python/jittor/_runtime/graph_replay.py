@@ -578,6 +578,9 @@ class GraphReplay:
         # above its eager peak.
         flush_before = jt.flags.auto_flush_ops
         jt.flags.auto_flush_ops = 0
+        rank_before = jt.flags.auto_compile_shapes_rank
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
@@ -622,6 +625,7 @@ class GraphReplay:
                 return None
         finally:
             _TRACING[0] -= 1
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.auto_flush_ops = flush_before
             jt.flags.keep_graph = before
 

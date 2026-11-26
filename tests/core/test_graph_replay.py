@@ -895,3 +895,35 @@ def test_cpu_dynamic_ternary_condition_survives_replay_input_writes():
             assert replay.stats["replayed"] == len(feed)
         finally:
             replay.invalidate()
+
+
+def test_graph_replay_specializes_4d_shapes_only_during_capture():
+    observed = []
+
+    class Probe(nn.Module):
+        def execute(self, value):
+            observed.append(int(jt.flags.auto_compile_shapes_rank))
+            return value * 2 + 1
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0, auto_compile_shapes_rank=8), jt.no_grad():
+        x = jt.array(np.ones((2, 2), dtype="float32"))
+        replay = GraphReplay(Probe())
+        try:
+            out = replay(x)
+            np.testing.assert_array_equal(out.numpy(), np.full((2, 2), 3., dtype="float32"))
+            assert observed == [8, 4]
+            assert int(jt.flags.auto_compile_shapes_rank) == 8
+        finally:
+            replay.invalidate()
+
+    observed.clear()
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0, auto_compile_shapes_rank=0), jt.no_grad():
+        x = jt.array(np.ones((2, 2), dtype="float32"))
+        replay = GraphReplay(Probe())
+        try:
+            out = replay(x)
+            np.testing.assert_array_equal(out.numpy(), np.full((2, 2), 3., dtype="float32"))
+            assert observed == [0, 0]
+            assert int(jt.flags.auto_compile_shapes_rank) == 0
+        finally:
+            replay.invalidate()
