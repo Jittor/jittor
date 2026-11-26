@@ -371,6 +371,29 @@ class TestModelBenchmarkContract(unittest.TestCase):
         self.assertFalse(res_nan["parity"])
         self.assertEqual(res_nan["nonfinite_mismatch"], 1)
 
+        # multi-step diffusion sampling tier admits small 20-step rounding drift at 0.9999+ cosine
+        tol_ms = cuda_bench.MULTI_STEP_INFERENCE_TOLERANCES["float16"]
+        cand_ms = ref.copy()
+        cand_ms[:100] += np.where(np.arange(100) % 2 == 0, 0.12, -0.12)  # 5% zero-mean rounding outliers, cosine ~0.9997
+        res_ms = cuda_bench.compare_arrays(
+            np, ref, cand_ms, tol_ms["atol"], tol_ms["rtol"],
+            max_outside_fraction=tol_ms["max_outside_fraction"],
+            min_cosine=tol_ms["min_cosine"],
+            max_abs_cap=tol_ms["max_abs_cap"],
+            max_scale_ratio=tol_ms["max_scale_ratio"],
+        )
+        self.assertTrue(res_ms["parity"])
+        cand_ms_bad = ref.copy()
+        cand_ms_bad[:400] += 0.8  # 20% outliers + exceeds max_abs_cap
+        res_ms_bad = cuda_bench.compare_arrays(
+            np, ref, cand_ms_bad, tol_ms["atol"], tol_ms["rtol"],
+            max_outside_fraction=tol_ms["max_outside_fraction"],
+            min_cosine=tol_ms["min_cosine"],
+            max_abs_cap=tol_ms["max_abs_cap"],
+            max_scale_ratio=tol_ms["max_scale_ratio"],
+        )
+        self.assertFalse(res_ms_bad["parity"])
+
 
 if __name__ == "__main__":
     unittest.main()

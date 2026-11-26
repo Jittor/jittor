@@ -1284,6 +1284,18 @@ INFERENCE_TOLERANCES = {
                      max_abs_cap=0.25, max_scale_ratio=0.15),
 }
 
+# Iterative multi-step diffusion sampling (e.g. 20-step DDIM with CFG 7.5) compounds
+# low-precision rounding across steps: even PyTorch compiled vs eager shows ~5.5%
+# pointwise outliers with 0.99999 cosine similarity. Keep strict non-finite and
+# high-cosine checks so genuine computation errors still fail.
+MULTI_STEP_INFERENCE_CASES = {"sd15_sample", "ti2v-video"}
+MULTI_STEP_INFERENCE_TOLERANCES = {
+    "float16": dict(atol=5e-2, rtol=5e-2, max_outside_fraction=0.10, min_cosine=0.9995,
+                    max_abs_cap=0.5, max_scale_ratio=0.15),
+    "bfloat16": dict(atol=8e-2, rtol=8e-2, max_outside_fraction=0.10, min_cosine=0.999,
+                     max_abs_cap=0.75, max_scale_ratio=0.2),
+}
+
 
 def compare_arrays(np, a, b, atol, rtol, *, max_outside_fraction=0.0, min_cosine=None,
                    max_abs_cap=None, max_scale_ratio=None):
@@ -1332,7 +1344,9 @@ def compare_model_outputs(np, reference, candidate):
     ref = Path(reference["directory"]) / "outputs.npz"
     actual = Path(candidate["directory"]) / "outputs.npz"
     dtype_name = reference["dtype"]
-    tol = INFERENCE_TOLERANCES[dtype_name]
+    case_name = reference.get("case")
+    multistep = case_name in MULTI_STEP_INFERENCE_CASES and dtype_name in MULTI_STEP_INFERENCE_TOLERANCES
+    tol = MULTI_STEP_INFERENCE_TOLERANCES[dtype_name] if multistep else INFERENCE_TOLERANCES[dtype_name]
     atol, rtol = tol["atol"], tol["rtol"]
     errors = {}
     with np.load(ref, allow_pickle=False) as left, np.load(actual, allow_pickle=False) as right:
@@ -1346,8 +1360,9 @@ def compare_model_outputs(np, reference, candidate):
                 max_abs_cap=tol["max_abs_cap"],
                 max_scale_ratio=tol["max_scale_ratio"],
             )
+    tier_prefix = "inference-multistep" if multistep else "inference"
     return dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors,
-                atol=atol, rtol=rtol, parity_tier=f"inference:{dtype_name}",
+                atol=atol, rtol=rtol, parity_tier=f"{tier_prefix}:{dtype_name}",
                 max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
 
 
