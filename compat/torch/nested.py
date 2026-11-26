@@ -1,11 +1,12 @@
 """Nested tensor, tensor-size, and leaf-parameter compatibility."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+import operator as _operator
 import numpy as np
 from typing import Any, cast
 import jittor as jt
 from ..diagnostics import EXPECTED, swallowed
-from .tensor_state import get_tensor_state
+from .tensor_state import get_tensor_state, compatibility_owner
 
 
 class _TorchSize(tuple):
@@ -136,6 +137,68 @@ class _NestedTensor:
         if dim not in (0, None):
             raise NotImplementedError("nested tensor shim only supports unbind(dim=0)")
         return tuple(self._tensors)
+
+    def _rows(self, *, offsets_host=None):
+        """Current packed metadata owns row views, never a construction-time cache.
+
+        Only from_jagged supplies its just-read local offsets to avoid a second
+        transfer. Every later row operation rereads the actual public metadata.
+        This existing host control path does not relocate the packed payload.
+        """
+        values, lengths = self._values, self._lengths
+        cat_dim = self._ragged_idx - 1
+        offs = offsets_host
+        if offs is None:
+            offs = [int(x) for x in np.asarray(
+                self._offsets.detach().cpu().numpy()).reshape(-1)]
+        lens = None if lengths is None else [int(x) for x in
+            np.asarray(lengths.detach().cpu().numpy()).reshape(-1)]
+        if lens is not None and len(lens) != len(offs) - 1:
+            raise ValueError("lengths must contain one entry per nested sample")
+        tensors = []
+        for index, (start, end) in enumerate(zip(offs[:-1], offs[1:])):
+            if lens is not None:
+                end = start + lens[index]
+            if start < 0 or end < start or end > int(values.shape[cat_dim]):
+                raise ValueError("nested offsets/lengths exceed the values buffer")
+            sl = [slice(None)] * values.ndim
+            sl[cat_dim] = slice(start, end)
+            tensors.append(values[tuple(sl)])
+        if not tensors:
+            raise NotImplementedError("empty nested batch is not supported")
+        return tuple(tensors)
+
+    def sum(self, dim=None, keepdim=False, *, dtype=None):
+        """Reduce the packed buffer, or each row along its ragged axis.
+
+        Complete reduction includes holes, as native Torch does. Row reduction
+        rejects holes and delegates values, dtype, and device computation to
+        the dense Tensor reduction; metadata only determines row boundaries.
+        """
+        if dim is None:
+            if keepdim:
+                raise NotImplementedError("nested complete sum with keepdim is not implemented")
+            return self._values.sum(dtype=dtype)
+        if isinstance(dim, (tuple, list)):
+            if len(dim) != 1:
+                raise NotImplementedError("nested sum supports one ragged dimension")
+            dim = dim[0]
+        axis = _operator.index(dim)
+        if not -self.ndim <= axis < self.ndim:
+            raise IndexError("nested sum dimension out of range")
+        axis %= self.ndim
+        if axis != self._ragged_idx:
+            raise NotImplementedError("nested sum supports only the ragged dimension")
+        if self._lengths is not None:
+            raise RuntimeError(
+                "sum(): reducing across the ragged dimension is not supported "
+                "for non-contiguous nested tensors with holes"
+            )
+        owner = compatibility_owner(jt)
+        return owner.stack([
+            row.sum(dim=axis - 1, keepdim=keepdim, dtype=dtype)
+            for row in self._rows()
+        ], dim=0)
 
     def to_padded_tensor(self, padding=0, output_size=None):
         cat_dim = self._ragged_idx - 1
