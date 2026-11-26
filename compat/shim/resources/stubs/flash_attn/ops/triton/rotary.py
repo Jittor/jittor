@@ -46,10 +46,11 @@ def apply_rotary(x, cos, sin, seqlen_offsets=0, cu_seqlens=None, max_seqlen=None
         x1 = x_rot[..., :half]
         x2 = x_rot[..., half:]
         out_rot = torch.cat((x1 * cos_slice - x2 * sin_slice, x1 * sin_slice + x2 * cos_slice), dim=-1)
+    out = torch.cat((out_rot, x_pass), dim=-1) if x_pass.shape[-1] > 0 else out_rot
     if inplace:
-        x[..., :rotary_dim] = out_rot
+        x.copy_(out)
         return x
-    return torch.cat((out_rot, x_pass), dim=-1) if x_pass.shape[-1] > 0 else out_rot
+    return out
 
 
 __all__ = ["apply_rotary"]

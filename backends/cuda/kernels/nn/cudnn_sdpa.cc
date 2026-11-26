@@ -242,6 +242,23 @@ int jt_cudnn_sdpa_supported(cudnnHandle_t handle, int dtype, int64_t b, int64_t 
     }
 }
 
+int jt_cudnn_sdpa_supported_host(int dtype, int64_t b, int64_t h, int64_t hk, int64_t sq,
+        int64_t skv, int64_t d, float scale, int causal, int training, int layout,
+        int64_t bias_b, int64_t bias_h) {
+    static std::mutex probe_mutex;
+    static cudnnHandle_t probe_handle = nullptr;
+    std::lock_guard<std::mutex> lock(probe_mutex);
+    if (!probe_handle) {
+        if (cudnnCreate(&probe_handle) != CUDNN_STATUS_SUCCESS) {
+            probe_handle = nullptr;
+            return 0;
+        }
+    }
+    int64_t workspace = 0;
+    return jt_cudnn_sdpa_supported(probe_handle, dtype, b, h, hk, sq, skv, d, scale, causal,
+                                   training, layout, bias_b, bias_h, &workspace);
+}
+
 int64_t jt_cudnn_sdpa_forward_workspace(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
         int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training,
         int layout, int64_t bias_b, int64_t bias_h) {

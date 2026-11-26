@@ -443,7 +443,8 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         if route is not None:
             miss, kernel = route
             out = kernel(query, key, value, attn_mask=attn_mask, dropout_p=0.0,
-                         is_causal=is_causal, scale=scale, **precision_options)
+                         is_causal=is_causal, scale=scale, enable_gqa=enable_gqa,
+                         **precision_options)
             if out is not None:
                 _sdpa_flash_miss(miss)
                 return out

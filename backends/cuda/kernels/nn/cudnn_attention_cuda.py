@@ -268,25 +268,40 @@ def _supported(query, key, scale, causal, training, bias=None, layout=0):
              layout)
     answer = _supported_shapes.get(shape)
     if answer is None:
-        from jittor._runtime import step_capture
-        if step_capture.tracing():
+        lib = _library()
+        if lib is None:
             return False
-        # Asked through the executor, with the handle and device the real call
-        # will use: cuDNN's own check_support is the only complete answer.
         dtype = _DTYPES[shape[2]]
-        inputs = [query] if (layout & _PACKED_QKV) else [query, key]
-        probe = jt.code(
-            (1,), "int32", inputs,
-            cuda_header=_header(),
-            cuda_src=f"""
-            cudnnHandle_t handle = jittor::cudnn_bind_stream();
-            int64_t workspace = 0;
-            int ok = jt_cudnn_sdpa_supported(handle, {dtype}, {_dims(layout)}, {float(scale)!r}f,
-                                             {int(causal)}, {int(training)}, {layout},
-                                             {bias_b}, {bias_h}, &workspace);
-            cudaMemcpy(out0_p, &ok, sizeof(int), cudaMemcpyHostToDevice);
-            """)
-        answer = bool(probe.item())
+        b, h, sq, d = _logical(query, layout & _Q)
+        _, hk, skv, _ = _logical(key, layout & _K)
+        fn = getattr(lib, "jt_cudnn_sdpa_supported_host", None)
+        if fn is not None:
+            fn.argtypes = [
+                ctypes.c_int, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+                ctypes.c_int64, ctypes.c_int64, ctypes.c_int64, ctypes.c_float,
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int64, ctypes.c_int64,
+            ]
+            fn.restype = ctypes.c_int
+            answer = bool(fn(dtype, b, h, hk, sq, skv, d, float(scale),
+                             int(causal), int(training), int(layout),
+                             int(bias_b), int(bias_h)))
+        else:
+            from jittor._runtime import step_capture
+            if step_capture.tracing():
+                return False
+            inputs = [query] if (layout & _PACKED_QKV) else [query, key]
+            probe = jt.code(
+                (1,), "int32", inputs,
+                cuda_header=_header(),
+                cuda_src=f"""
+                cudnnHandle_t handle = jittor::cudnn_bind_stream();
+                int64_t workspace = 0;
+                int ok = jt_cudnn_sdpa_supported(handle, {dtype}, {_dims(layout)}, {float(scale)!r}f,
+                                                 {int(causal)}, {int(training)}, {layout},
+                                                 {bias_b}, {bias_h}, &workspace);
+                cudaMemcpy(out0_p, &ok, sizeof(int), cudaMemcpyHostToDevice);
+                """)
+            answer = bool(probe.item())
         _supported_shapes[shape] = answer
     return answer
 
