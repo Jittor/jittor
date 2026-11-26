@@ -60,8 +60,6 @@ void HipblasBatchedMatmulOp::run() {
         CHECK(status == hipSuccess) << "hipBLAS empty batched matmul: " << hipGetErrorString(status);
         return;
     }
-    auto handle = hipblas_bind_stream(device);
-    hipblas_matmul_math(handle, a->dtype() == ns_float32);
     const auto left = trans_b ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     const auto right = trans_a ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     const int64 stride_a = int64(layout.rows) * layout.inner;
@@ -70,12 +68,12 @@ void HipblasBatchedMatmulOp::run() {
     // Row-major C=A*B is column-major C^T=B^T*A^T for every batch.
     const float alpha = 1, beta = 0;
     if (a->dtype() == ns_float32) {
-        check_hipblas(hipblasSgemmStridedBatched(handle, left, right,
-            layout.columns, layout.rows, layout.inner, &alpha,
-            b->ptr<float>(), layout.lda, stride_b,
-            a->ptr<float>(), layout.ldb, stride_a, &beta,
-            c->ptr<float>(), layout.ldc, stride_c, batch_count), "hipblasSgemmStridedBatched");
+        hipblas_sgemm_policy(device, left, right, layout.columns, layout.rows, layout.inner,
+            b->ptr<float>(), layout.lda, a->ptr<float>(), layout.ldb,
+            c->ptr<float>(), layout.ldc, c->is_stop_grad(),
+            stride_b, stride_a, stride_c, batch_count);
     } else {
+        auto handle = hipblas_bind_stream(device);
         const auto type = a->dtype() == ns_float16 ? HIPBLAS_R_16F : HIPBLAS_R_16B;
         check_hipblas(hipblasGemmStridedBatchedEx(handle, left, right,
             layout.columns, layout.rows, layout.inner, &alpha,

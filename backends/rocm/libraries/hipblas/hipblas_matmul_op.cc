@@ -67,17 +67,16 @@ void HipblasMatmulOp::run() {
         CHECK(status == hipSuccess) << "hipBLAS empty matmul: " << hipGetErrorString(status);
         return;
     }
-    auto handle = hipblas_bind_stream(device);
-    hipblas_matmul_math(handle, a->dtype() == ns_float32);
     const auto left = trans_b ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     const auto right = trans_a ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     if (a->dtype() == ns_float32) {
-        const float alpha = 1, beta = 0;
-        check_hipblas(hipblasSgemm(handle, left, right,
-            layout.columns, layout.rows, layout.inner, &alpha,
+        hipblas_sgemm_policy(device, left, right, layout.columns, layout.rows, layout.inner,
             b->ptr<float>(), layout.lda, a->ptr<float>(), layout.ldb,
-            &beta, c->ptr<float>(), layout.ldc), "hipblasSgemm");
-    } else if (a->dtype() == ns_float64) {
+            c->ptr<float>(), layout.ldc, c->is_stop_grad());
+        return;
+    }
+    auto handle = hipblas_bind_stream(device);
+    if (a->dtype() == ns_float64) {
         hipblas_require_fp64(device);
         const double alpha = 1, beta = 0;
         check_hipblas(hipblasDgemm(handle, left, right,

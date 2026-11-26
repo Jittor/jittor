@@ -143,6 +143,10 @@ PyObject* depthwise_kwargs = nullptr;
 PyObject* conv_function = nullptr;
 PyObject* conv_forward = nullptr;
 PyObject* rocm_linear_kernel = nullptr;
+PyObject* rocm_matmul_kernel = nullptr;
+PyObject* rocm_int8_kernel = nullptr;
+PyObject* rocm_int8_bindings = nullptr;
+PyObject* int8_matmul_name = nullptr;
 PyObject* rocm_linear_bindings = nullptr;
 PyObject* linear_bias_name = nullptr;
 PyObject* rocm_conv_kernel = nullptr;
@@ -611,32 +615,40 @@ bool small_pair(PyObject* value, int& a, int& b) {
 // The ROCm no-grad bias accumulator uses the same native hipBLAS product
 // and bias add. Keep Python/registry owners live, and decline custom
 // registrations before evaluating their predicates.
+bool rocm_dispatch_bindings_match(PyObject* bindings) {
+    if (!bindings) return false;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bindings); ++i) {
+        PyObject* item = PyTuple_GET_ITEM(bindings, i);
+        PyObject* actual = PyDict_GetItem(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 1));
+        PyObject* expected = PyTuple_GET_ITEM(item, 2);
+        if (actual == expected || (!actual && expected == Py_None)) continue;
+        // Restoring an overridden kernel can recreate the immutable tuple.
+        if (!actual || !PyTuple_CheckExact(actual) || !PyTuple_CheckExact(expected)
+                || PyTuple_GET_SIZE(actual) != PyTuple_GET_SIZE(expected)) return false;
+        for (Py_ssize_t j = 0; j < PyTuple_GET_SIZE(actual); ++j)
+            if (PyTuple_GET_ITEM(actual, j) != PyTuple_GET_ITEM(expected, j)) return false;
+    }
+    return true;
+}
+
 PyObject* rocm_linear_inference(PyObject* x, PyObject* weight, PyObject* bias) {
     if (!rocm_linear_kernel || !rocm_linear_bindings || !no_grad || amp_reg
             || auto_mixed_precision_level || !runtime_flag_use_cuda()
             || accelerator_backend_id() != BackendId::Rocm
             || !x || !is_var(x) || !weight || !is_var(weight) || !bias || !is_var(bias))
         return nullptr;
-    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(rocm_linear_bindings); ++i) {
-        PyObject* item = PyTuple_GET_ITEM(rocm_linear_bindings, i);
-        PyObject* actual = PyDict_GetItem(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 1));
-        PyObject* expected = PyTuple_GET_ITEM(item, 2);
-        if (actual == expected) continue;
-        // Restoring an overridden kernel can recreate the immutable tuple.
-        if (!actual || !PyTuple_CheckExact(actual) || !PyTuple_CheckExact(expected)
-                || PyTuple_GET_SIZE(actual) != PyTuple_GET_SIZE(expected)) return nullptr;
-        for (Py_ssize_t j = 0; j < PyTuple_GET_SIZE(actual); ++j)
-            if (PyTuple_GET_ITEM(actual, j) != PyTuple_GET_ITEM(expected, j)) return nullptr;
-    }
+    if (!rocm_dispatch_bindings_match(rocm_linear_bindings)) return nullptr;
     auto* xh = GET_RAW_PTR(VarHolder, x);
     auto* wh = GET_RAW_PTR(VarHolder, weight);
     auto* bh = GET_RAW_PTR(VarHolder, bias);
+    NanoString dtype = xh->var->dtype();
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return nullptr;
     auto eligible = [&]() {
         if (wh->view || bh->view) return false;
         for (auto* holder : {xh, wh, bh}) {
             Var* value = holder->var;
             if (value->storage_offset_bytes || !value->is_contiguous()
-                    || value->dtype() != ns_float32
+                    || value->dtype() != dtype
                     || (value->placement.explicit_backend
                         && value->placement.device.backend != BackendId::Rocm))
                 return false;
@@ -652,14 +664,54 @@ PyObject* rocm_linear_inference(PyObject* x, PyObject* weight, PyObject* bias) {
     };
     if (!eligible() || !has_op("hipblas_matmul")) return nullptr;
     PyObjHolder owners(PyTuple_Pack(3, x, weight, bias));
-    PyObjHolder kernel(kernel_select(linear_bias_name, owners.obj, nullptr));
-    if (kernel.obj != rocm_linear_kernel) return nullptr;
+    if (dtype == ns_float32) {
+        PyObjHolder kernel(kernel_select(linear_bias_name, owners.obj, nullptr));
+        if (kernel.obj != rocm_linear_kernel) return nullptr;
+    } else {
+        // FP16/BF16 use the ordinary matmul and bias semantics of linear().
+        // The guarded accumulator registration is FP32-only.
+        if (!rocm_matmul_kernel) return nullptr;
+        PyObjHolder call_args(PyTuple_Pack(4, x, weight, Py_False, Py_True));
+        PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
+        if (kernel.obj != rocm_matmul_kernel) return nullptr;
+    }
     for (auto* holder : {xh, wh, bh}) holder->observe_alias_history();
     if (!eligible()) return nullptr;
     static auto make_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("hipblas_matmul");
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     auto product = make_matmul(xh->var, wh->var, false, true);
     unique_ptr<VarHolder> out(new VarHolder(make_linear_bias_add(product, bh->var, ns_add)));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
+}
+
+PyObject* rocm_int8_matmul_inference(PyObject* x, PyObject* weight) {
+    if (!rocm_int8_kernel || !rocm_dispatch_bindings_match(rocm_int8_bindings)
+            || !runtime_flag_use_cuda() || accelerator_backend_id() != BackendId::Rocm
+            || !is_var(x) || !is_var(weight)) return nullptr;
+    auto* xh = GET_RAW_PTR(VarHolder, x);
+    auto* wh = GET_RAW_PTR(VarHolder, weight);
+    auto eligible = [&]() {
+        Var* a = xh->var;
+        Var* w = wh->var;
+        for (auto* operand : {a, w})
+            if (operand->dtype() != ns_int8 || operand->shape.size() != 2
+                    || operand->storage_offset_bytes || !operand->is_contiguous()
+                    || (operand->placement.explicit_backend
+                        && operand->placement.device.backend != BackendId::Rocm))
+                return false;
+        return a->shape[1] == w->shape[0] && a->device_id == w->device_id;
+    };
+    if (!eligible() || !has_op("hipblas_matmul")) return nullptr;
+    PyObjHolder args(PyTuple_Pack(4, x, weight, Py_False, Py_False));
+    PyObjHolder selected(kernel_select(int8_matmul_name, args.obj, nullptr));
+    if (selected.obj != rocm_int8_kernel) return nullptr;
+    xh->observe_alias_history();
+    wh->observe_alias_history();
+    if (!eligible()) return nullptr;
+    static auto make_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("hipblas_matmul");
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    unique_ptr<VarHolder> out(new VarHolder(make_matmul(xh->var, wh->var, false, false)));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
@@ -1590,16 +1642,21 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(conv_function, "conv_function");
     part(conv_forward, "conv_forward");
     part(rocm_linear_kernel, "rocm_linear_kernel");
+    part(rocm_matmul_kernel, "rocm_matmul_kernel");
+    part(rocm_int8_kernel, "rocm_int8_kernel");
+    part(rocm_int8_bindings, "rocm_int8_bindings");
+    if (!int8_matmul_name) int8_matmul_name = PyUnicode_InternFromString("int8_matmul");
     part(rocm_linear_bindings, "rocm_linear_bindings");
     if (!linear_bias_name) linear_bias_name = PyUnicode_InternFromString("linear_bias_accumulator");
-    if (rocm_linear_bindings) {
-        if (!PyTuple_CheckExact(rocm_linear_bindings))
-            throw std::invalid_argument("invalid ROCm Linear bindings");
-        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(rocm_linear_bindings); ++i) {
-            PyObject* entry = PyTuple_GET_ITEM(rocm_linear_bindings, i);
+    for (auto* bindings : {rocm_linear_bindings, rocm_int8_bindings}) {
+        if (!bindings) continue;
+        if (!PyTuple_CheckExact(bindings))
+            throw std::invalid_argument("invalid ROCm dispatch bindings");
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(bindings); ++i) {
+            PyObject* entry = PyTuple_GET_ITEM(bindings, i);
             if (!PyTuple_CheckExact(entry) || PyTuple_GET_SIZE(entry) != 3
                     || !PyDict_CheckExact(PyTuple_GET_ITEM(entry, 0)))
-                throw std::invalid_argument("invalid ROCm Linear binding");
+                throw std::invalid_argument("invalid ROCm dispatch binding");
         }
     }
     part(rocm_conv_kernel, "rocm_conv_kernel");
@@ -1696,6 +1753,13 @@ PyObject* group_norm_rocm_build(PyObject* source, PyObject* weight, PyObject* bi
 
 PyObject* rocm_linear_inference_forward(PyObject* x, PyObject* weight, PyObject* bias) {
     PyObject* out = rocm_linear_inference(x, weight, bias);
+    if (out || PyErr_Occurred()) return out;
+    Py_INCREF(Py_None);
+    return Py_None;
+}
+
+PyObject* rocm_int8_matmul_forward(PyObject* x, PyObject* weight) {
+    PyObject* out = rocm_int8_matmul_inference(x, weight);
     if (out || PyErr_Occurred()) return out;
     Py_INCREF(Py_None);
     return Py_None;

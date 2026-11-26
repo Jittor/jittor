@@ -313,3 +313,78 @@ def test_rocm_autocast_matmul_linear_and_batched(dtype):
             value.sync()
             assert value.location() == "device" and value.dtype == dtype
         np.testing.assert_array_equal((x @ w).float().cpu().numpy(), np.full((2, 8, 17), 64))
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_rocm_low_precision_native_linear_preserves_dispatch(dtype):
+    from jittor.backends.rocm.libraries import install as rocm_libraries
+    with torch.no_grad():
+        layer = torch.nn.Linear(7, 11).to(device="cuda", dtype=dtype)
+        outer = torch.nn.Sequential(layer)
+        x = torch.tensor(np.random.RandomState(191).normal(size=(2, 3, 7)).astype("float32"),
+                         device="cuda", dtype=dtype)
+        expected = outer(x).float().cpu().numpy().copy()
+        calls = (lambda: outer(x),
+                 lambda: torch.nn.functional.linear(x, layer.weight, layer.bias))
+        with mock.patch.object(rocm_libraries, "_matmul_operands",
+                               side_effect=AssertionError("Python matmul provider reached")):
+            for run in calls:
+                y = run()
+                y.sync()
+                assert y.location() == "device" and y.dtype == dtype
+                np.testing.assert_array_equal(y.float().cpu().numpy(), expected)
+        original = registered_kernel("matmul", "rocm")
+        traced_calls = []
+        def traced(*args, **kwargs):
+            traced_calls.append(True)
+            return original(*args, **kwargs)
+        with override_kernel("matmul", "rocm", traced):
+            for run in calls:
+                np.testing.assert_array_equal(run().float().cpu().numpy(), expected)
+        assert len(traced_calls) == len(calls)
+
+
+def test_rocm_relaxed_math_shape_choice_is_stable_and_isolated():
+    rng = np.random.RandomState(192)
+    a = rng.normal(size=(257, 257)).astype("float32") / 4
+    b = rng.normal(size=(257, 257)).astype("float32") / 4
+    x, y = torch.tensor(a, device="cuda"), torch.tensor(b, device="cuda")
+    old = torch.backends.cuda.matmul.allow_tf32
+    try:
+        with torch.no_grad():
+            torch.backends.cuda.matmul.allow_tf32 = False
+            strict = (x @ y).cpu().numpy().copy()
+            torch.backends.cuda.matmul.allow_tf32 = True
+            relaxed = (x @ y).cpu().numpy().copy()
+            repeated = (x @ y).cpu().numpy().copy()
+            torch.backends.cuda.matmul.allow_tf32 = False
+            strict_again = (x @ y).cpu().numpy().copy()
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = old
+    np.testing.assert_array_equal(relaxed, repeated)
+    np.testing.assert_array_equal(strict, strict_again)
+    expected = a.astype("float64") @ b.astype("float64")
+    assert np.linalg.norm(relaxed-expected)/np.linalg.norm(expected) < 0.005
+
+
+def test_rocm_native_int_mm_preserves_provider_override():
+    from jittor._runtime import backend_libraries
+    rng = np.random.RandomState(194)
+    a = rng.randint(-4, 5, size=(19, 32)).astype("int8")
+    b = rng.randint(-4, 5, size=(32, 23)).astype("int8")
+    x, y = torch.tensor(a, device="cuda"), torch.tensor(b, device="cuda")
+    expected = a.astype("int32") @ b.astype("int32")
+    with mock.patch.object(backend_libraries, "get_library_ops",
+                           side_effect=AssertionError("Python INT8 provider reached")):
+        actual = torch._int_mm(x, y)
+        actual.sync()
+        assert actual.location() == "device" and actual.dtype == torch.int32
+    np.testing.assert_array_equal(actual.cpu().numpy(), expected)
+    original = registered_kernel("int8_matmul", "rocm")
+    calls = []
+    def traced(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    with override_kernel("int8_matmul", "rocm", traced):
+        np.testing.assert_array_equal(torch._int_mm(x, y).cpu().numpy(), expected)
+    assert len(calls) == 1

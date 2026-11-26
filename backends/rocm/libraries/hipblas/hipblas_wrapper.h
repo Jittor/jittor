@@ -15,7 +15,10 @@ inline void check_hipblas(hipblasStatus_t status, const char* operation) {
 }
 
 hipblasHandle_t hipblas_bind_stream(int device);
-void hipblas_matmul_math(hipblasHandle_t handle, bool float32);
+void hipblas_sgemm_policy(int device, hipblasOperation_t trans_a, hipblasOperation_t trans_b,
+    int m, int n, int k, const float* a, int lda, const float* b, int ldb,
+    float* c, int ldc, bool inference, int64 stride_a=0, int64 stride_b=0,
+    int64 stride_c=0, int batch_count=0);
 void hipblas_require_fp64(int device);
 void hipblas_shutdown() noexcept;
 

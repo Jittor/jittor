@@ -196,7 +196,11 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     assert calls[1][1]["dtypes"] == {"int8"}
     assert calls[2][1]["dtypes"] == {"float32"}
     assert calls[2][1]["supports"] is installer._supports_linear_bias
-    assert rules == [("rocm_linear_bias", installer._supports_linear_bias)]
+    assert rules == [
+        ("rocm_linear_bias", installer._supports_linear_bias),
+        ("rocm_matmul", installer._supports_matmul),
+        ("rocm_batched_matmul", installer._supports_batched_matmul),
+    ]
     assert calls[3][1]["dtypes"] == {"float32", "float16", "bfloat16"}
     assert calls[4][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
     a = SimpleNamespace(ndim=2, dtype="float32")

@@ -20,6 +20,11 @@ def _hipblas_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("hipblas").hipblas_matmul(a, b, trans_a, trans_b)
 
 
+def _hipblas_int8_matmul(a, b, trans_a=False, trans_b=False):
+    from jittor._runtime.backend_libraries import get_library_ops
+    return get_library_ops("hipblas").hipblas_matmul(a, b, trans_a, trans_b)
+
+
 def _hipblas_batched_matmul(a, b, trans_a=False, trans_b=False):
     from jittor._runtime.backend_libraries import get_library_ops
     a, b = _matmul_operands(a, b)
@@ -84,9 +89,11 @@ def install_kernels():
     """Run after core loading; native domain imports may follow this step."""
     from jittor._runtime.dispatch import register_kernel, native_rule
     native_rule("rocm_linear_bias")(_supports_linear_bias)
+    native_rule("rocm_matmul")(_supports_matmul)
+    native_rule("rocm_batched_matmul")(_supports_batched_matmul)
     register_kernel("matmul", "rocm", _hipblas_matmul,
                     dtypes={"float32", "float64", "float16", "bfloat16"}, supports=_supports_matmul, priority=100)
-    register_kernel("int8_matmul", "rocm", _hipblas_matmul,
+    register_kernel("int8_matmul", "rocm", _hipblas_int8_matmul,
                     dtypes={"int8"}, supports=_supports_matmul, priority=100)
     register_kernel("linear_bias_accumulator", "rocm", _hipblas_linear_bias,
                     dtypes={"float32"}, supports=_supports_linear_bias, priority=100)

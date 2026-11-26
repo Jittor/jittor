@@ -19,7 +19,7 @@ namespace {
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
     enum Kind { none, same_float, same_float_or_complex, same_blas, rms_inference, rms_training, ln_inference,
-                depthwise_conv2d, group_norm, rocm_conv2d, rocm_group, rocm_layer, rocm_linear_bias } kind = none;
+                depthwise_conv2d, group_norm, rocm_conv2d, rocm_group, rocm_layer, rocm_linear_bias, rocm_matmul, rocm_batched_matmul } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -157,6 +157,30 @@ bool geometry_pair(PyObject* value, int64& a, int64& b) {
     return false;
 }
 
+Verdict rocm_matmul_rule(PyObject* args, bool batched) {
+    auto n = PyTuple_GET_SIZE(args);
+    if (n < 2 || n > 4 || !is_var(PyTuple_GET_ITEM(args, 0))
+            || !is_var(PyTuple_GET_ITEM(args, 1))) return unknown;
+    Var* a = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
+    Var* b = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 1))->var;
+    if (a->num < 0 || b->num < 0) return unknown;
+    if (a->dtype() != b->dtype()) return declines;
+    auto rank = a->shape.size();
+    if (batched) {
+        if (rank < 3 || b->shape.size() != rank) return declines;
+        for (uint axis = 0; axis < rank-2; ++axis)
+            if (a->shape[axis] != b->shape[axis]) return declines;
+        return accepts;
+    }
+    if (b->shape.size() != 2) return declines;
+    if (rank == 2) return accepts;
+    if (rank < 2 || !is_floating(a->dtype())) return declines;
+    if (n == 2) return accepts;
+    PyObject* trans_a = PyTuple_GET_ITEM(args, 2);
+    if (!PyBool_Check(trans_a) && !PyLong_CheckExact(trans_a)) return unknown;
+    return PyObject_IsTrue(trans_a) ? declines : accepts;
+}
+
 Verdict rocm_linear_bias_rule(PyObject* args) {
     if (PyTuple_GET_SIZE(args) != 3) return unknown;
     Var* values[3];
@@ -282,6 +306,8 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
         return rocm_norm_rule(args, rule.kind == NativeRule::rocm_group);
     if (rule.kind == NativeRule::rocm_conv2d) return rocm_conv_rule(args);
     if (rule.kind == NativeRule::rocm_linear_bias) return rocm_linear_bias_rule(args);
+    if (rule.kind == NativeRule::rocm_matmul || rule.kind == NativeRule::rocm_batched_matmul)
+        return rocm_matmul_rule(args, rule.kind == NativeRule::rocm_batched_matmul);
     if (rule.kind == NativeRule::group_norm) {
         // `_supports_group_norm(x, num_groups, weight, bias, eps)`.
         if (n != 5 || !is_var(PyTuple_GET_ITEM(args, 0))) return unknown;
@@ -440,6 +466,10 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
         parsed.kind = NativeRule::rocm_layer;
     } else if (rule == "rocm_linear_bias") {
         parsed.kind = NativeRule::rocm_linear_bias;
+    } else if (rule == "rocm_matmul") {
+        parsed.kind = NativeRule::rocm_matmul;
+    } else if (rule == "rocm_batched_matmul") {
+        parsed.kind = NativeRule::rocm_batched_matmul;
     } else {
         throw std::invalid_argument("unknown native kernel rule: " + rule);
     }

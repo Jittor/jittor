@@ -42,9 +42,13 @@ void module_call_bind(PyObject* module_cls, PyObject* dispatch_call,
                       PyObject* pipeline, PyObject* device_context, PyObject* slow,
                       PyObject* dispatch_parts);
 
-// FP32 ROCm Linear through the same registry and guards as native module calls.
+// ROCm Linear through the same registry and guards as native module calls.
 // @pyjt(_rocm_linear_inference)
 PyObject* rocm_linear_inference_forward(PyObject* x, PyObject* weight, PyObject* bias);
+
+// Dense signed INT8 GEMM with the registered ROCm provider.
+// @pyjt(_rocm_int_mm)
+PyObject* rocm_int8_matmul_forward(PyObject* x, PyObject* weight);
 
 // @pyjt(_module_call)
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs);

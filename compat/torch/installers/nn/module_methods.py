@@ -1537,16 +1537,47 @@ def _rocm_linear_dispatch_bindings(dispatch):
 
     linear = importlib.import_module("jittor.nn.functional.linear")
     modules = importlib.import_module("jittor.nn.modules.linear")
-    key = ("linear_bias_accumulator", "rocm")
-    entries = dispatch._kernels.get(key, ())
-    if (len(entries) != 1 or entries[0].implementation is not rocm_libraries._hipblas_linear_bias
-            or entries[0].supports is not rocm_libraries._supports_linear_bias):
-        return None
+    checks = []
+    for op, implementation, supports in (
+        ("linear_bias_accumulator", rocm_libraries._hipblas_linear_bias,
+         rocm_libraries._supports_linear_bias),
+        ("matmul", rocm_libraries._hipblas_matmul, rocm_libraries._supports_matmul),
+    ):
+        key = (op, "rocm")
+        entries = dispatch._kernels.get(key, ())
+        if (len(entries) != 1 or entries[0].implementation is not implementation
+                or entries[0].supports is not supports):
+            return None
+        wildcard = (op, "*")
+        wildcard_entries = dispatch._kernels.get(wildcard)
+        if wildcard_entries:
+            return None
+        checks.extend(((dispatch._kernels, key, entries),
+                       (dispatch._kernels, wildcard, wildcard_entries)))
     return linear._NATIVE_LINEAR_BINDINGS + (
         (vars(modules), "linear", linear._NATIVE_LINEAR_FUNCTION),
         (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
         (vars(dispatch), "_kernels", dispatch._kernels),
+    ) + tuple(checks)
+
+
+def _rocm_int8_dispatch_bindings(dispatch):
+    import importlib
+    from jittor.backends.rocm.libraries import install as rocm_libraries
+
+    linear = importlib.import_module("jittor.nn.functional.linear")
+    key, wildcard = ("int8_matmul", "rocm"), ("int8_matmul", "*")
+    entries = dispatch._kernels.get(key, ())
+    wildcard_entries = dispatch._kernels.get(wildcard)
+    if (len(entries) != 1 or entries[0].implementation is not rocm_libraries._hipblas_int8_matmul
+            or entries[0].supports is not rocm_libraries._supports_matmul or wildcard_entries):
+        return None
+    owners = tuple(entry for entry in linear._NATIVE_LINEAR_BINDINGS if entry[0] is vars(dispatch))
+    return owners + (
+        (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
+        (vars(dispatch), "_kernels", dispatch._kernels),
         (dispatch._kernels, key, entries),
+        (dispatch._kernels, wildcard, wildcard_entries),
     )
 
 
@@ -1702,6 +1733,9 @@ def _install_module_methods(nn, registry=None):
         from jittor.backends.rocm.libraries import install as _rocm_libraries
         _dispatch_parts.update(
             rocm_linear_kernel=_rocm_libraries._hipblas_linear_bias,
+            rocm_matmul_kernel=_rocm_libraries._hipblas_matmul,
+            rocm_int8_kernel=_rocm_libraries._hipblas_int8_matmul,
+            rocm_int8_bindings=_rocm_int8_dispatch_bindings(_kernel_dispatch),
             rocm_linear_bindings=_rocm_linear_dispatch_bindings(_kernel_dispatch),
             rocm_conv_kernel=_rocm_kernels._conv2d,
             rocm_group_kernel=_rocm_kernels._group_norm,

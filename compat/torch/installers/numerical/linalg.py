@@ -339,21 +339,32 @@ def mm(input, mat2, dtype_or_out=None, *, out=None, out_dtype=None):
 
 def _int_mm(input, mat2, *, out=None):
     """Multiply signed int8 matrices with a native int32 accumulator."""
+    if out is None:
+        from . import jt
+        fast = getattr(jt.core, "_rocm_int_mm", None)
+        if fast is not None:
+            result = fast(input, mat2)
+            if result is not None:
+                return result
+
     from jittor._core.dtypes import dtype_name
     from jittor._runtime.dispatch import select_kernel
 
-    if input.ndim != 2 or mat2.ndim != 2 or input.shape[1] != mat2.shape[0]:
+    left_shape, right_shape = input.shape, mat2.shape
+    if len(left_shape) != 2 or len(right_shape) != 2 or left_shape[1] != right_shape[0]:
         raise RuntimeError("_int_mm requires two compatible rank-2 matrices")
-    if dtype_name(input.dtype) != "int8" or dtype_name(mat2.dtype) != "int8":
+    dtype = input.dtype
+    if dtype_name(dtype) != "int8" or mat2.dtype != dtype:
         raise RuntimeError("_int_mm requires int8 inputs")
-    if input.device != mat2.device:
-        raise RuntimeError("_int_mm requires inputs on the same device")
     if out is not None and (dtype_name(out.dtype) != "int32" or out.device != input.device
-                            or tuple(out.shape) != (input.shape[0], mat2.shape[1])):
+                            or tuple(out.shape) != (left_shape[0], right_shape[1])):
         raise RuntimeError("_int_mm out must have the result shape, int32 dtype and input device")
-    left, right = input.contiguous(), mat2.contiguous()
+    left = input if input._storage_is_contiguous() else input.contiguous()
+    right = mat2 if mat2._storage_is_contiguous() else mat2.contiguous()
     kernel = select_kernel("int8_matmul", left, right, False, False)
     if kernel is None:
+        if input.device != mat2.device:
+            raise RuntimeError("_int_mm requires inputs on the same device")
         raise NotImplementedError("_int_mm has no native provider for this device")
     result = kernel(left, right, False, False)
     return result if out is None else out.copy_(result)
