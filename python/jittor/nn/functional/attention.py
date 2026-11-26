@@ -507,6 +507,25 @@ def _scaled_dot_product_attention(
                 )
             if out is not None:
                 return out.cast(query_dtype)
+        # Short bounded FP32 captured steps intentionally decline tiled
+        # `fused_attention_f32` to avoid recomputing scores in backward.
+        # Keep them on `_composite` so probabilities are computed once with
+        # the fused CUB softmax forward and backward instead of recomputing
+        # Q@K^T and scalar max/sum reductions inside `_MemoryEfficientAttention`.
+        scores_count = (int(query.shape[0]) * int(query.shape[1])
+                        * query_length * int(key.shape[-2]))
+        if (use_fused and query_dtype == "float32"
+                and dispatch_context(query, key, value).backend == "cuda"
+                and len(query.shape) == len(key.shape) == 4
+                and query_length <= 128 and int(key.shape[-2]) <= 128
+                and scores_count <= (4 << 20)
+                and (attn_mask is None or not _output_requires_grad(attn_mask))):
+            from jittor._runtime import step_capture
+            if step_capture.active():
+                return _composite(
+                    query, key, value, attn_mask, probability, is_causal,
+                    scale_factor, query_dtype
+                )
         return _MemoryEfficientAttention.apply(
             query, key, value, attn_mask, bool(is_causal), float(scale_factor)
         )

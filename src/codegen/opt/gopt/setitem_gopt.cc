@@ -5,6 +5,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #include <cmath>
+#include <cstring>
 #include "core/var.h"
 #include "ops/composite/setitem_op.h"
 #include "ops/composite/getitem_op.h"
@@ -55,12 +56,26 @@ static void setitem_inplace(SetitemOp* op) {
     auto input_op = input->input();
     if (input_op) {
         // make sure input op will not use input
-        if (!(input_op->type() == OpType::broadcast || 
-            input_op->inputs().size() == 0 ||
-            input_op->is_op(op_ids::setitem()) ||
-            input_op->is_op(op_ids::getitem())))
-            // TODO: inplace getitem maybe risky, getitem maybe inplace too
-        return;
+        bool known_safe = input_op->type() == OpType::broadcast
+            || input_op->inputs().size() == 0
+            || input_op->is_op(op_ids::setitem())
+            || input_op->is_op(op_ids::getitem());
+        if (!known_safe) {
+            // A single-output non-view producer owning its own contiguous
+            // buffer (e.g. matmul or elementwise gradient accumulation feeding
+            // embedding grad_into / scatter-add) can safely share storage with
+            // this SetitemOp when no other consumer or backward edge reads it.
+            if (input_op->outputs().size() != 1
+                    || input_op->is_storage_view()
+                    || std::strcmp(input_op->name(), "clone") == 0
+                    || std::strcmp(input_op->name(), "tape") == 0
+                    || input->is_sharing()
+                    || input->storage_offset_bytes != 0
+                    || !input->is_contiguous()
+                    || input->flag(VarFlags::_needed_by_backward)
+                    || !input_op->saved_storage_versions.empty())
+                return;
+        }
     }
     auto output = op->outputs().front();
     // return if output is all ready shared

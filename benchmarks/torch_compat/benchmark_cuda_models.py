@@ -141,7 +141,6 @@ TRAINING_CASES.update({
 })
 EAGER_TRAINING = {
     "bert-large-cased-r2-b4", "roberta-large-r2-b4",
-    "t5-small-r2-b16",
 }
 
 
