@@ -643,6 +643,30 @@ def _install_nn_extras(nn, registry=None):
         embedding_cls.__init__ = embedding_init
         embedding_cls._torch_dtype_patched = True
 
+    class _TorchUpsample(nn.Module):
+        def __init__(self, size=None, scale_factor=None, mode="nearest",
+                     align_corners=None, recompute_scale_factor=None):
+            super().__init__()
+            self.size = size
+            self.scale_factor = scale_factor
+            self.mode = mode
+            self.align_corners = align_corners
+            self.recompute_scale_factor = recompute_scale_factor
+
+        def forward(self, input):
+            return F.interpolate(
+                input,
+                size=self.size,
+                scale_factor=self.scale_factor,
+                mode=self.mode,
+                align_corners=self.align_corners,
+                recompute_scale_factor=self.recompute_scale_factor,
+            )
+
+    _TorchUpsample.__name__ = "Upsample"
+    _TorchUpsample.__qualname__ = "Upsample"
+    nn.Upsample = _TorchUpsample
+
     get_install_context(_torch_target).state["nn_extra_native"] = MappingProxyType({
         "dropout_initializers": MappingProxyType(_dropout_initializers),
         "_jt_linear": locals().get("_jt_linear"),

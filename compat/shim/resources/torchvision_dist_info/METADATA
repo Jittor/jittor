@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: torchvision
+Version: 0.26.0
+Summary: Jittor-backed torchvision compatibility surface

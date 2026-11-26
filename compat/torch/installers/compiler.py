@@ -948,6 +948,12 @@ def install(ctx):
     except ImportError:  # Python 3.7
         from typing_extensions import Final as _Final
     _jit.Final = _Final
+    class TracerWarning(UserWarning):
+        pass
+    class TracingCheckError(Exception):
+        pass
+    _jit.TracerWarning = TracerWarning
+    _jit.TracingCheckError = TracingCheckError
     _bind_missing(g, "jit", _jit)
     _bind_missing(g, "ScriptModule", _jit.ScriptModule)
     _modules.setdefault("torch.jit", _jit)

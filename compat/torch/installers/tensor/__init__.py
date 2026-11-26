@@ -481,6 +481,30 @@ def _index_select(input, dim, index, *, out=None):
     return result
 
 
+def _select(input, dim, index):
+    ndim = len(input.shape)
+    if ndim == 0:
+        raise IndexError("select() cannot be applied to a 0-dim tensor.")
+    d = int(dim)
+    if d < 0:
+        d += ndim
+    if d < 0 or d >= ndim:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of [{-ndim}, {ndim - 1}], but got {dim})"
+        )
+    idx = int(index)
+    size = int(input.shape[d])
+    if idx < 0:
+        idx += size
+    if idx < 0 or idx >= size:
+        raise IndexError(
+            f"select(): index {index} out of range for tensor of size {tuple(input.shape)} at dimension {d}"
+        )
+    slices = [slice(None)] * ndim
+    slices[d] = idx
+    return input[tuple(slices)]
+
+
 def _byte_tensor_constructor_data(data, *, nested=False):
     """Match torch.ByteTensor for bytes nested in sequence inputs."""
     if isinstance(data, bytes):
@@ -1039,6 +1063,7 @@ def install(ctx):
     Var = ctx.state["Var"]
     from ...frontend import frontend_factory
     g.index_select = _index_select
+    g.select = _select
     # torch.Tensor is both (a) the isinstance target and (b) a legacy constructor:
     # torch.Tensor(d0, d1, ...) makes an UNINITIALISED tensor of that shape (DETR's
     # _init_layers: torch.Tensor(num_levels, embed_dims)), while torch.Tensor(data)
@@ -1083,6 +1108,11 @@ def install(ctx):
     g.pi = _math.pi
     g.e = _math.e
     g.strided = "strided"
+    g.sparse_coo = "sparse_coo"
+    g.sparse_csr = "sparse_csr"
+    g.sparse_csc = "sparse_csc"
+    g.sparse_bsr = "sparse_bsr"
+    g.sparse_bsc = "sparse_bsc"
     g.jagged = "jagged"
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"
@@ -1147,7 +1177,7 @@ def install(ctx):
     _install_reductions(g)
 
     register_api_bindings(g, 'torch',
-        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'channels_last_3d', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
+        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'channels_last_3d', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'select', 'sparse_bsc', 'sparse_bsr', 'sparse_coo', 'sparse_csc', 'sparse_csr', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
         Fidelity.APPROXIMATE, 'Native tensor allocation and conversion with Torch dtype, device, and frontend policies; supported argument and backend subsets apply')
 
 from .shape_api import (

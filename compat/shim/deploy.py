@@ -195,6 +195,24 @@ def _plan(target, resource_root=None):
         flash_top_level,
         _destination(target, flash_version_dir, "top_level.txt"),
     ))
+    tv_root = os.path.join(root, "torchvision_dist_info")
+    tv_meta = _required_source_file(
+        os.path.join(tv_root, "METADATA"), "torchvision metadata")
+    tv_top_level = _required_source_file(
+        os.path.join(tv_root, "top_level.txt"),
+        "torchvision top-level metadata",
+    )
+    tv_version_dir = "torchvision-%s.dist-info" % _safe_component(
+        _metadata_version(tv_meta, "torchvision metadata"), "version"
+    )
+    ops.append((
+        tv_meta,
+        _destination(target, tv_version_dir, "METADATA"),
+    ))
+    ops.append((
+        tv_top_level,
+        _destination(target, tv_version_dir, "top_level.txt"),
+    ))
 
     destinations = [destination for _source, destination in ops]
     if len(destinations) != len(set(destinations)):

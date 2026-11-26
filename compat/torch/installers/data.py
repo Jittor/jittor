@@ -242,6 +242,28 @@ class _SubsetRandomSampler(_Sampler):
         return len(self.indices)
 
 
+class _WeightedRandomSampler(_Sampler):
+    def __init__(self, weights, num_samples, replacement=True, generator=None):
+        import numpy as _np
+        if hasattr(weights, "numpy"):
+            w = _np.asarray(weights.numpy(), dtype=_np.float64)
+        else:
+            w = _np.asarray(list(weights), dtype=_np.float64)
+        self.weights = w
+        self.num_samples = int(num_samples)
+        self.replacement = bool(replacement)
+        self.generator = generator
+    def __iter__(self):
+        import numpy as _np
+        total = float(self.weights.sum())
+        probs = self.weights / total if total > 0 else _np.full_like(self.weights, 1.0 / max(len(self.weights), 1))
+        rng = _np.random.default_rng()
+        idx = rng.choice(len(self.weights), size=self.num_samples, replace=self.replacement, p=probs)
+        return iter(int(i) for i in idx.tolist())
+    def __len__(self):
+        return self.num_samples
+
+
 class _BatchSampler(_Sampler):
     def __init__(self, sampler, batch_size, drop_last):
         self.sampler = sampler
@@ -753,7 +775,8 @@ _DATA_APIS = {
     "TensorDataset": _TensorDataset, "ConcatDataset": _ConcatDataset,
     "Subset": _Subset, "Sampler": _Sampler,
     "SequentialSampler": _SequentialSampler, "RandomSampler": _RandomSampler,
-    "SubsetRandomSampler": _SubsetRandomSampler, "BatchSampler": _BatchSampler,
+    "SubsetRandomSampler": _SubsetRandomSampler, "WeightedRandomSampler": _WeightedRandomSampler,
+    "BatchSampler": _BatchSampler,
     "DistributedSampler": _DistributedSampler, "DataLoader": _DataLoader,
     "default_collate": _default_collate, "default_convert": _default_convert,
     "get_worker_info": _get_worker_info,
@@ -810,7 +833,7 @@ def install(ctx):
         _modules["torch.utils.data.dataset"] = _dataset_mod
         _data.dataset = _dataset_mod
         _sampler_mod = _types2.ModuleType("torch.utils.data.sampler")
-        for _name in ("Sampler", "SequentialSampler", "RandomSampler", "SubsetRandomSampler", "BatchSampler", "DistributedSampler"):
+        for _name in ("Sampler", "SequentialSampler", "RandomSampler", "SubsetRandomSampler", "WeightedRandomSampler", "BatchSampler", "DistributedSampler"):
             setattr(_sampler_mod, _name, getattr(_data, _name))
         _modules["torch.utils.data.sampler"] = _sampler_mod
         _data.sampler = _sampler_mod
