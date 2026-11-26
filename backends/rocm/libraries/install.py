@@ -37,6 +37,23 @@ def _supports_matmul(a, b, trans_a=False, trans_b=False):
             and not _batched_amp_changes_dtype())
 
 
+def _hipblas_linear_bias(x, weight, bias):
+    from jittor._runtime.core_api import _stop_grad_outputs
+    return _stop_grad_outputs(_hipblas_matmul(x, weight, False, True) + bias)
+
+
+def _supports_linear_bias(x, weight, bias):
+    import jittor as jt
+    from jittor._core.dtypes import dtype_name
+    from jittor._runtime.core_api import _output_requires_grad
+    return (all(isinstance(v, jt.Var) and dtype_name(v.dtype) == "float32"
+                and v._storage_is_contiguous() for v in (x, weight, bias))
+            and not jt.flags.amp_reg and not _output_requires_grad(x, weight, bias)
+            and x.ndim >= 2 and weight.ndim == 2 and bias.ndim == 1
+            and x.numel() > 0 and weight.numel() > 0
+            and x.shape[-1] == weight.shape[1] and bias.shape[0] == weight.shape[0])
+
+
 def _rocprim_scan(x, reverse=False):
     from jittor._runtime.backend_libraries import get_library_ops
     return get_library_ops("rocprim").rocprim_cumsum(x, reverse)
@@ -60,9 +77,12 @@ def install_libraries(context):
 
 def install_kernels():
     """Run after core loading; native domain imports may follow this step."""
-    from jittor._runtime.dispatch import register_kernel
+    from jittor._runtime.dispatch import register_kernel, native_rule
+    native_rule("rocm_linear_bias")(_supports_linear_bias)
     register_kernel("matmul", "rocm", _hipblas_matmul,
                     dtypes={"float32", "float64"}, supports=_supports_matmul, priority=100)
+    register_kernel("linear_bias_accumulator", "rocm", _hipblas_linear_bias,
+                    dtypes={"float32"}, supports=_supports_linear_bias, priority=100)
     # A typed dgemm entry alone does not establish full-precision FP64 math
     # on every SDK; admit only the independently validated FP32 batch path.
     register_kernel("batched_matmul", "rocm", _hipblas_batched_matmul,

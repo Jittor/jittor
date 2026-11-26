@@ -1530,6 +1530,26 @@ def _module_extra_repr(self):
     return ""
 
 
+def _rocm_linear_dispatch_bindings(dispatch):
+    """Live owners for the no-grad ROCm dense Linear shortcut."""
+    import importlib
+    from jittor.backends.rocm.libraries import install as rocm_libraries
+
+    linear = importlib.import_module("jittor.nn.functional.linear")
+    modules = importlib.import_module("jittor.nn.modules.linear")
+    key = ("linear_bias_accumulator", "rocm")
+    entries = dispatch._kernels.get(key, ())
+    if (len(entries) != 1 or entries[0].implementation is not rocm_libraries._hipblas_linear_bias
+            or entries[0].supports is not rocm_libraries._supports_linear_bias):
+        return None
+    return linear._NATIVE_LINEAR_BINDINGS + (
+        (vars(modules), "linear", linear._NATIVE_LINEAR_FUNCTION),
+        (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
+        (vars(dispatch), "_kernels", dispatch._kernels),
+        (dispatch._kernels, key, entries),
+    )
+
+
 def _linear_training_dispatch_state(nn, dispatch):
     """Live owners for the native small CUDA training product, or None."""
     import importlib
@@ -1679,7 +1699,10 @@ def _install_module_methods(nn, registry=None):
     if getattr(jt.compiler, "has_rocm", False):
         from jittor.backends.rocm import kernels as _rocm_kernels
         from jittor.backends.rocm.kernels import normalization as _rocm_norm
+        from jittor.backends.rocm.libraries import install as _rocm_libraries
         _dispatch_parts.update(
+            rocm_linear_kernel=_rocm_libraries._hipblas_linear_bias,
+            rocm_linear_bindings=_rocm_linear_dispatch_bindings(_kernel_dispatch),
             rocm_conv_kernel=_rocm_kernels._conv2d,
             rocm_group_kernel=_rocm_kernels._group_norm,
             rocm_layer_kernel=_rocm_kernels._layer_norm,

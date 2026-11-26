@@ -80,3 +80,21 @@ def test_higher_rank_amp_is_declined():
         a, b = jt.ones((2, 3, 4)), jt.ones((4, 5))
         with jt.flag_scope(amp_reg=18):
             assert select_kernel('matmul', a, b, False, False) is None
+
+@pytest.mark.parametrize("shape", [(5, 7), (2, 3, 7)])
+def test_rocm_linear_bias_inference_and_gradient_boundary(shape):
+    rng = np.random.RandomState(132)
+    raw = rng.normal(size=shape).astype("float32")
+    weights = rng.normal(size=(11, 7)).astype("float32")
+    biases = rng.normal(size=11).astype("float32")
+    with jt.no_grad():
+        x, w, b = map(jt.array, (raw, weights, biases))
+        assert select_kernel("linear_bias_accumulator", x, w, b) is not None
+        result = jt.nn.linear(x, w, b)
+        result.sync()
+        assert result.location() == "device" and not result.requires_grad
+        np.testing.assert_allclose(result.numpy(), raw @ weights.T + biases,
+                                   rtol=3e-5, atol=3e-6)
+    with jt.flag_scope(no_grad=0):
+        w.start_grad()
+        assert select_kernel("linear_bias_accumulator", x, w, b) is None

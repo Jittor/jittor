@@ -1605,6 +1605,28 @@ PyObject* fast_gelu(PyObject* x) {
     NanoString own = var->dtype();
     if (!is_floating(own)) return none();
     bool low = own == ns_float16 || own == ns_bfloat16;
+    if (own == ns_float32 && !amp_reg && no_grad && runtime_flag_use_cuda()
+            && accelerator_backend_id() == BackendId::Rocm && var->num > 0
+            && var->is_contiguous() && !var->storage_offset_bytes
+            && (!var->placement.explicit_backend || var->placement.device.backend == BackendId::Rocm)) {
+        // Construct the exact GELU expression in one frontend call. Keep its
+        // elementwise graph available for fusion with an adjacent bias add.
+        PyTensorFrontendScope scope(x, nullptr, 0, false);
+        GET_RAW_PTR(VarHolder, x)->observe_alias_history();
+        var = GET_RAW_PTR(VarHolder, x)->var;
+        static auto binary = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+        static auto number = op_constructor<VarPtr, float, Var*>("number");
+        auto half = number(0.5f, var);
+        auto inv_sqrt2 = number(0.7071067811865476f, var);
+        auto one = number(1.f, var);
+        auto scaled = binary(half, var, ns_multiply);
+        auto inner = binary(var, inv_sqrt2, ns_multiply);
+        auto erf = make_unary(inner, ns_erf);
+        auto shifted = binary(one, erf, ns_add);
+        unique_ptr<VarHolder> out(new VarHolder(binary(scaled, shifted, ns_multiply)));
+        out->stop_grad();
+        return to_py_object<VarHolder*>(out.release());
+    }
     Op* producer = var->input();
     // A CUDA kernel source: only where the accelerator is CUDA (`use_cuda` is
     // also set on ACL).

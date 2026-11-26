@@ -183,15 +183,21 @@ def test_compilation_failure_is_not_published_or_swallowed(tmp_path, monkeypatch
 def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     installer = load_installer(monkeypatch)
     calls = []
+    rules = []
     dispatch = ModuleType("jittor._runtime.dispatch")
     dispatch.register_kernel = lambda *args, **kwargs: calls.append((args, kwargs))
+    dispatch.native_rule = lambda rule: lambda predicate: rules.append((rule, predicate))
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     installer.install_kernels()
-    assert [args[0] for args, _ in calls] == ["matmul", "batched_matmul", "misc.scan_2d"]
+    assert [args[0] for args, _ in calls] == [
+        "matmul", "linear_bias_accumulator", "batched_matmul", "misc.scan_2d"]
     assert all(args[1] == "rocm" for args, _ in calls)
     assert calls[0][1]["dtypes"] == {"float32", "float64"}
     assert calls[1][1]["dtypes"] == {"float32"}
-    assert calls[2][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
+    assert calls[1][1]["supports"] is installer._supports_linear_bias
+    assert rules == [("rocm_linear_bias", installer._supports_linear_bias)]
+    assert calls[2][1]["dtypes"] == {"float32"}
+    assert calls[3][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
     monkeypatch.setattr(installer, "_batched_amp_changes_dtype", lambda: False)
     a = SimpleNamespace(ndim=2, dtype="float32")
     assert installer._supports_matmul(a, a)

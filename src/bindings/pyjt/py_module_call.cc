@@ -142,6 +142,9 @@ PyObject* conv2d_name = nullptr;
 PyObject* depthwise_kwargs = nullptr;
 PyObject* conv_function = nullptr;
 PyObject* conv_forward = nullptr;
+PyObject* rocm_linear_kernel = nullptr;
+PyObject* rocm_linear_bindings = nullptr;
+PyObject* linear_bias_name = nullptr;
 PyObject* rocm_conv_kernel = nullptr;
 PyObject* rocm_group_kernel = nullptr;
 PyObject* rocm_layer_kernel = nullptr;
@@ -603,6 +606,62 @@ bool small_pair(PyObject* value, int& a, int& b) {
     if (PyLong_CheckExact(value)) return integer(value, a) && (b = a, true);
     if (!PyTuple_CheckExact(value) || PyTuple_GET_SIZE(value) != 2) return false;
     return integer(PyTuple_GET_ITEM(value, 0), a) && integer(PyTuple_GET_ITEM(value, 1), b);
+}
+
+// The ROCm no-grad bias accumulator uses the same native hipBLAS product
+// and bias add. Keep Python/registry owners live, and decline custom
+// registrations before evaluating their predicates.
+PyObject* rocm_linear_inference(PyObject* x, PyObject* weight, PyObject* bias) {
+    if (!rocm_linear_kernel || !rocm_linear_bindings || !no_grad || amp_reg
+            || auto_mixed_precision_level || !runtime_flag_use_cuda()
+            || accelerator_backend_id() != BackendId::Rocm
+            || !x || !is_var(x) || !weight || !is_var(weight) || !bias || !is_var(bias))
+        return nullptr;
+    for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(rocm_linear_bindings); ++i) {
+        PyObject* item = PyTuple_GET_ITEM(rocm_linear_bindings, i);
+        PyObject* actual = PyDict_GetItem(PyTuple_GET_ITEM(item, 0), PyTuple_GET_ITEM(item, 1));
+        PyObject* expected = PyTuple_GET_ITEM(item, 2);
+        if (actual == expected) continue;
+        // Restoring an overridden kernel can recreate the immutable tuple.
+        if (!actual || !PyTuple_CheckExact(actual) || !PyTuple_CheckExact(expected)
+                || PyTuple_GET_SIZE(actual) != PyTuple_GET_SIZE(expected)) return nullptr;
+        for (Py_ssize_t j = 0; j < PyTuple_GET_SIZE(actual); ++j)
+            if (PyTuple_GET_ITEM(actual, j) != PyTuple_GET_ITEM(expected, j)) return nullptr;
+    }
+    auto* xh = GET_RAW_PTR(VarHolder, x);
+    auto* wh = GET_RAW_PTR(VarHolder, weight);
+    auto* bh = GET_RAW_PTR(VarHolder, bias);
+    auto eligible = [&]() {
+        if (wh->view || bh->view) return false;
+        for (auto* holder : {xh, wh, bh}) {
+            Var* value = holder->var;
+            if (value->storage_offset_bytes || !value->is_contiguous()
+                    || value->dtype() != ns_float32
+                    || (value->placement.explicit_backend
+                        && value->placement.device.backend != BackendId::Rocm))
+                return false;
+        }
+        Var* a = xh->var;
+        Var* w = wh->var;
+        Var* b = bh->var;
+        int rank = a->shape.size();
+        return rank >= 2 && w->shape.size() == 2 && b->shape.size() == 1
+            && a->num > 0 && w->num > 0 && a->shape[rank-1] == w->shape[1]
+            && b->shape[0] == w->shape[0] && a->device_id == w->device_id
+            && a->device_id == b->device_id;
+    };
+    if (!eligible() || !has_op("hipblas_matmul")) return nullptr;
+    PyObjHolder owners(PyTuple_Pack(3, x, weight, bias));
+    PyObjHolder kernel(kernel_select(linear_bias_name, owners.obj, nullptr));
+    if (kernel.obj != rocm_linear_kernel) return nullptr;
+    for (auto* holder : {xh, wh, bh}) holder->observe_alias_history();
+    if (!eligible()) return nullptr;
+    static auto make_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("hipblas_matmul");
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    auto product = make_matmul(xh->var, wh->var, false, true);
+    unique_ptr<VarHolder> out(new VarHolder(make_linear_bias_add(product, bh->var, ns_add)));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
 }
 
 // Build the existing backend operator after the public dispatcher selects
@@ -1399,6 +1458,11 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
             && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
+        if (rocm_linear_kernel && stored_attributes(module, dict, {"weight", "bias"})) {
+            fast = rocm_linear_inference(PyTuple_GET_ITEM(args, 0),
+                PyDict_GetItem(dict, name_weight()), PyDict_GetItem(dict, name_bias()));
+            if (fast || PyErr_Occurred()) return fast;
+        }
         fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
         if (fast || PyErr_Occurred()) return fast;
         fast = linear_with_bias_training(module, dict, PyTuple_GET_ITEM(args, 0));
@@ -1525,6 +1589,19 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(conv_execute, "conv_execute");
     part(conv_function, "conv_function");
     part(conv_forward, "conv_forward");
+    part(rocm_linear_kernel, "rocm_linear_kernel");
+    part(rocm_linear_bindings, "rocm_linear_bindings");
+    if (!linear_bias_name) linear_bias_name = PyUnicode_InternFromString("linear_bias_accumulator");
+    if (rocm_linear_bindings) {
+        if (!PyTuple_CheckExact(rocm_linear_bindings))
+            throw std::invalid_argument("invalid ROCm Linear bindings");
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(rocm_linear_bindings); ++i) {
+            PyObject* entry = PyTuple_GET_ITEM(rocm_linear_bindings, i);
+            if (!PyTuple_CheckExact(entry) || PyTuple_GET_SIZE(entry) != 3
+                    || !PyDict_CheckExact(PyTuple_GET_ITEM(entry, 0)))
+                throw std::invalid_argument("invalid ROCm Linear binding");
+        }
+    }
     part(rocm_conv_kernel, "rocm_conv_kernel");
     part(rocm_group_kernel, "rocm_group_kernel");
     part(rocm_layer_kernel, "rocm_layer_kernel");
@@ -1614,6 +1691,13 @@ PyObject* group_norm_rocm_build(PyObject* source, PyObject* weight, PyObject* bi
     if (width > 1048576 || x->shape[0] > INT_MAX / groups)
         throw std::invalid_argument("unsupported ROCm group normalization shape");
     return build_rocm_norm(source, weight, bias, "group", groups, eps, act);
+}
+
+PyObject* rocm_linear_inference_forward(PyObject* x, PyObject* weight, PyObject* bias) {
+    PyObject* out = rocm_linear_inference(x, weight, bias);
+    if (out || PyErr_Occurred()) return out;
+    Py_INCREF(Py_None);
+    return Py_None;
 }
 
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs) {

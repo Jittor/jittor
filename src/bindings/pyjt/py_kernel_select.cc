@@ -19,7 +19,7 @@ namespace {
 // A native stand-in for a `supports` predicate; see kernel_select_native_rule.
 struct NativeRule {
     enum Kind { none, same_float, same_float_or_complex, same_blas, rms_inference, rms_training, ln_inference,
-                depthwise_conv2d, group_norm, rocm_conv2d, rocm_group, rocm_layer } kind = none;
+                depthwise_conv2d, group_norm, rocm_conv2d, rocm_group, rocm_layer, rocm_linear_bias } kind = none;
     string op;
 };
 enum Verdict { declines = 0, accepts = 1, unknown = 2 };
@@ -157,6 +157,26 @@ bool geometry_pair(PyObject* value, int64& a, int64& b) {
     return false;
 }
 
+Verdict rocm_linear_bias_rule(PyObject* args) {
+    if (PyTuple_GET_SIZE(args) != 3) return unknown;
+    Var* values[3];
+    for (int i = 0; i < 3; ++i) {
+        PyObject* value = PyTuple_GET_ITEM(args, i);
+        if (!is_var(value)) return unknown;
+        values[i] = GET_RAW_PTR(VarHolder, value)->var;
+        if (values[i]->num < 0) return unknown;
+        if (values[i]->dtype() != ns_float32 || !values[i]->is_contiguous()
+                || (!no_grad && requires_grad(values[i]))) return declines;
+    }
+    Var* x = values[0];
+    Var* w = values[1];
+    Var* b = values[2];
+    if (amp_reg || x->shape.size() < 2 || w->shape.size() != 2 || b->shape.size() != 1
+            || x->num <= 0 || w->num <= 0) return declines;
+    return x->shape[x->shape.size()-1] == w->shape[1] && b->shape[0] == w->shape[0]
+        ? accepts : declines;
+}
+
 Verdict rocm_norm_rule(PyObject* args, bool group) {
     if (PyTuple_GET_SIZE(args) != 5 || !is_var(PyTuple_GET_ITEM(args, 0))
             || !is_var(PyTuple_GET_ITEM(args, 2)) || !is_var(PyTuple_GET_ITEM(args, 3)))
@@ -259,6 +279,7 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
     if (rule.kind == NativeRule::rocm_group || rule.kind == NativeRule::rocm_layer)
         return rocm_norm_rule(args, rule.kind == NativeRule::rocm_group);
     if (rule.kind == NativeRule::rocm_conv2d) return rocm_conv_rule(args);
+    if (rule.kind == NativeRule::rocm_linear_bias) return rocm_linear_bias_rule(args);
     if (rule.kind == NativeRule::group_norm) {
         // `_supports_group_norm(x, num_groups, weight, bias, eps)`.
         if (n != 5 || !is_var(PyTuple_GET_ITEM(args, 0))) return unknown;
@@ -415,6 +436,8 @@ void kernel_select_native_rule(PyObject* fn, const string& rule) {
         parsed.kind = NativeRule::rocm_group;
     } else if (rule == "rocm_layer_norm") {
         parsed.kind = NativeRule::rocm_layer;
+    } else if (rule == "rocm_linear_bias") {
+        parsed.kind = NativeRule::rocm_linear_bias;
     } else {
         throw std::invalid_argument("unknown native kernel rule: " + rule);
     }

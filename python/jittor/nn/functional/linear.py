@@ -13,9 +13,16 @@ from ._amp import bias_for_compute_dtype
 from .matrix import _bfloat16_matmul_accumulator, _check_matmul_shapes
 
 
+_ROCM_LINEAR_INFERENCE = getattr(jt.core, "_rocm_linear_inference", None)
+
+
 def linear(x, weight, bias=None):
     """Return ``x * weight.T`` with an optional bias."""
     if bias is not None:
+        if _ROCM_LINEAR_INFERENCE is not None:
+            fast = _ROCM_LINEAR_INFERENCE(x, weight, bias)
+            if fast is not None:
+                return fast
         # cuBLASLt folds the bias into the GEMM's epilogue, which is the same
         # one-rounding order the bf16 accumulator below exists to preserve:
         # for a bf16 product that path is six operators (a cast of the bias, a
@@ -102,7 +109,7 @@ _NATIVE_LINEAR_MATMUL_TRANSPOSE = _check_matmul_shapes.__globals__["matmul_trans
 _NATIVE_LINEAR_BINDINGS = tuple(
     (scope, key, scope[key])
     for scope, names in (
-        (globals(), ("_lt_linear_cuda", "_lt_linear_train_cuda", "select_kernel",
+        (globals(), ("_ROCM_LINEAR_INFERENCE", "_lt_linear_cuda", "_lt_linear_train_cuda", "select_kernel",
                      "bias_for_compute_dtype", "_check_matmul_shapes")),
         (_check_matmul_shapes.__globals__,
          ("matmul_transpose", "_matmul_2d_cublas", "_matmul_kernel_dispatch",

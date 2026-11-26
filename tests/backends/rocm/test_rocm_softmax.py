@@ -17,8 +17,8 @@ def reference(raw, axis=-1, log=False):
         return shifted - np.log(normalizer) if log else np.exp(shifted) / normalizer
 
 
-@pytest.mark.parametrize('shape', [(3, 1), (2, 33), (4, 128), (2, 257),
-                                  (4, 2048), (2, 4096), (2, 3, 65)])
+@pytest.mark.parametrize('shape', [(3, 1), (2, 33), (4, 128), (9, 197), (2, 257),
+                                  (4, 2048), (2, 4096), (3, 4608), (2, 8192), (2, 3, 65)])
 def test_inference_matches_wide_reference_and_preserves_input(shape):
     raw = np.random.RandomState(103).normal(size=shape).astype('float32') * 7
     raw[..., ::7] = -np.inf

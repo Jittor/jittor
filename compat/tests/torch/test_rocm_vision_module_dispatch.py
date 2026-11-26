@@ -1,5 +1,6 @@
 """Native module construction preserves the registered ROCm provider contract."""
 
+import math
 from unittest import mock
 
 import numpy as np
@@ -196,3 +197,63 @@ def test_gradient_enabled_call_keeps_all_requested_derivatives(kind):
         expected.sync()
         assert actual is not None and actual.location() == 'device'
         np.testing.assert_allclose(actual.detach().cpu().numpy(), expected.detach().cpu().numpy(), rtol=3e-5, atol=3e-5)
+
+
+def test_rocm_native_linear_bias_provider_and_override():
+    from jittor.backends.rocm.libraries import install as rocm_libraries
+    with torch.no_grad():
+        layer = torch.nn.Linear(7, 11).cuda()
+        outer = torch.nn.Sequential(layer)
+        x = torch.tensor(np.random.RandomState(137).normal(size=(2, 3, 7)).astype("float32"),
+                         device="cuda")
+        expected = jt.nn.linear(x, layer.weight, layer.bias).cpu().numpy().copy()
+        outer(x).sync()
+        with mock.patch.object(rocm_libraries, "_hipblas_matmul",
+                               side_effect=AssertionError("Python provider reached")):
+            for run in (lambda: outer(x), lambda: layer(x),
+                        lambda: jt.nn.linear(x, layer.weight, layer.bias)):
+                actual = run()
+                actual.sync()
+                assert actual.location() == "device" and not actual.requires_grad
+                np.testing.assert_allclose(actual.cpu().numpy(), expected, rtol=3e-5, atol=3e-6)
+        original = registered_kernel("linear_bias_accumulator", "rocm")
+        calls = []
+        def traced(*args, **kwargs):
+            calls.append(True)
+            return original(*args, **kwargs)
+        with override_kernel("linear_bias_accumulator", "rocm", traced):
+            for run in (lambda: outer(x), lambda: layer(x),
+                        lambda: jt.nn.linear(x, layer.weight, layer.bias)):
+                actual = run()
+                actual.sync()
+                np.testing.assert_allclose(actual.cpu().numpy(), expected, rtol=3e-5, atol=3e-6)
+        assert len(calls) == 3
+
+
+def test_rocm_native_linear_respects_bias_descriptor():
+    class CustomLinear(torch.nn.Linear):
+        pass
+
+    with torch.no_grad():
+        layer = CustomLinear(7, 11).cuda()
+        outer = torch.nn.Sequential(layer)
+        x = torch.tensor(np.random.RandomState(139).normal(size=(2, 3, 7)).astype("float32"),
+                         device="cuda")
+        expected = outer(x).cpu().numpy().copy()
+        with mock.patch.object(CustomLinear, "bias",
+                               property(lambda self: self.__dict__["bias"] + 2), create=True):
+            actual = outer(x)
+            actual.sync()
+            assert actual.location() == "device"
+            np.testing.assert_allclose(actual.cpu().numpy(), expected + 2, rtol=3e-5, atol=3e-6)
+
+
+def test_rocm_exact_gelu_inference_on_device():
+    raw = np.random.RandomState(138).uniform(-6., 6., (4, 197, 23)).astype("float32")
+    expected = raw * 0.5 * (1. + np.vectorize(math.erf)(raw / math.sqrt(2.)))
+    with torch.no_grad():
+        x = torch.tensor(raw, device="cuda")
+        y = torch.nn.functional.gelu(x)
+        y.sync()
+        assert y.location() == "device" and not y.requires_grad
+        np.testing.assert_allclose(y.cpu().numpy(), expected, rtol=3e-5, atol=2e-6)
