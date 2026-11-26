@@ -82,7 +82,10 @@ def _inference_filter(x, weight, groups):
     if (not channels_last_filters or not weight.is_finished
             or step_capture.tracing() or jt.flags.keep_graph or _rematerializing.get()):
         return weight, "oihw"
-    dense = weight.transpose(0, 2, 3, 1).clone()
+    # Materialize dense OHWI explicitly: under the Torch frontend `Tensor.clone`
+    # defaults to `preserve_format`, which would keep the transposed view's OIHW
+    # strides and force cuDNN's op entry to run a contiguous copy on every call.
+    dense = jt.contiguous(weight.transpose(0, 2, 3, 1))
     with jt.flag_scope(transpose_storage_view=1):
         view = dense.transpose(0, 3, 1, 2)
     # Made under `no_grad`, the view is born stopped; a parameter that takes a

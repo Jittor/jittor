@@ -424,6 +424,39 @@ def test_repeat_is_a_dense_copy(device):
     _check_repeat_is_a_dense_copy(device)
 
 
+@pytest.mark.parametrize("in_channels", [16, 1])
+def test_cudnn_inference_filter_materializes_dense_ohwi_for_torch_parameter(in_channels):
+    """`_inference_filter` must produce dense OHWI storage for Torch parameters.
+
+    Under the Torch frontend, `Tensor.clone()` defaults to `preserve_format`,
+    which kept the transposed filter view's OIHW strides and caused every
+    subsequent cuDNN conv2d call to launch a full weight `ContiguousOp` copy.
+    """
+    from jittor.nn.backends import cudnn as cudnn_backend
+
+    rng = np.random.default_rng(0)
+    values = rng.standard_normal((16, in_channels, 3, 3)).astype(np.float16)
+    weight = torch.nn.Parameter(torch.tensor(values, dtype=torch.float16))
+    x = torch.zeros((2, in_channels, 8, 8), dtype=torch.float16)
+    jt.sync([weight, x])
+    with torch.no_grad():
+        first, layout1 = cudnn_backend._inference_filter(x, weight, 1)
+        second, layout2 = cudnn_backend._inference_filter(x, weight, 1)
+    assert layout1 == layout2 == "ohwi"
+    assert first._storage_is_contiguous()
+    assert second._storage_is_contiguous()
+    assert tuple(first.shape) == (16, 3, 3, in_channels)
+    expected_strides = (3 * 3 * in_channels, 3 * in_channels, in_channels, 1)
+    assert tuple(second._storage_strides())[:3] == expected_strides[:3]
+    if in_channels > 1:
+        assert second._storage_strides()[3] == 1
+    assert not weight.is_stop_grad()
+    assert second.is_stop_grad()
+    np.testing.assert_array_equal(first.detach().cpu().numpy(), values.transpose(0, 2, 3, 1))
+    np.testing.assert_array_equal(second.detach().cpu().numpy(), values.transpose(0, 2, 3, 1))
+    np.testing.assert_array_equal(weight.detach().cpu().numpy(), values)
+
+
 @pytest.mark.npu
 def test_contiguous_storage_and_gradient_npu():
     if not capability.check_accelerator("acl", backend=jt).enabled:
