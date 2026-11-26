@@ -34,7 +34,7 @@ def disable_stochastic_layers(model, torch):
         if isinstance(module, torch.nn.Dropout):
             module.p = 0.0
             changed.append(name + '.p')
-        for attribute in ('drop_prob', 'dropout', 'attention_dropout'):
+        for attribute in ('drop_prob', 'dropout', 'dropout_prob', 'attention_dropout'):
             value = getattr(module, attribute, None)
             if isinstance(value, (int, float)) and not isinstance(value, bool):
                 setattr(module, attribute, 0.0)

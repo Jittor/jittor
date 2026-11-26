@@ -270,6 +270,7 @@ def revision(root, *args):
 def worker_env(args, output, runtime):
     env = os.environ.copy()
     env.pop("JITTOR_TORCH_SHIM", None)
+    env.pop("JITTOR_BENCH_JIT_UTILS_RESTARTED", None)
     if args.gpu is not None:
         env["CUDA_VISIBLE_DEVICES"] = args.gpu
         env.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
@@ -406,6 +407,11 @@ def rank_env(env, job, directory, rank, port):
         env["LOCAL_RANK"] = str(rank)
     else:
         env.pop("LOCAL_RANK", None)
+    if (job["case"] == "qwen3_train-r2" and job["runtime"] == "torch"
+            and "PYTORCH_ALLOC_CONF" not in env):
+        # Two FP32 replicas at the preset batch fit on 24 GiB cards when the
+        # allocator can grow existing segments between DDP warmup steps.
+        env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     if job["runtime"] == "jittor" and ranks > 1:
         env.update(
             JITTOR_HOME=str(Path(env["JITTOR_HOME"]) / f"rank{rank}"),
@@ -811,6 +817,10 @@ def run_stock(job, directory, torch, jt, np):
     from workloads import WORKLOADS
 
     settings = configure(torch, "cuda", False, False, job["runtime"])
+    if job["runtime"] == "torch":
+        allocator = os.environ.get("PYTORCH_ALLOC_CONF") or os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
+        if allocator:
+            settings["cuda_allocator_config"] = allocator
     torch.manual_seed(job["seed"])
     task = WORKLOADS[job.get("stock_workload", job["case"])]
     workload = task(torch, "cuda", task.default_dtype, job["size"], seed=job["seed"])
@@ -930,6 +940,12 @@ def run_model(job, directory, torch, jt, np):
                  "weight": cuda_residency(torch, jt, next(model.parameters()))}
     if job["mode"] == "reduce-overhead":
         if jt is None:
+            if MODEL_CASES[job["case"]].options.get("torch_emulate_precision_casts"):
+                # Preserve eager's lower precision rounding between fused ops.
+                from torch._inductor import config as inductor_config
+
+                inductor_config.emulate_precision_casts = True
+                job["torch_emulate_precision_casts"] = True
             # Materialize any lazily cached module buffers (e.g. detector anchors/strides)
             # in eager memory before torch.compile so CUDAGraph replay does not overwrite them.
             forward()
@@ -1085,7 +1101,7 @@ def run_training_rank(job, directory, jt):
         limit_cv_batches(job, steps)
         cycles = "2" if job["ranks"] == 2 and job["batch"] == 64 else "1"
         sys.argv += ["--data-dir", job["cv_data"], "--cycles", cycles, "--num-workers", "8",
-                     "--persistent-workers", "--shared-input-pipeline"]
+                     "--persistent-workers", "--shared-input-pipeline", "--disable-stochastic-layers"]
         input_plan = {}
     else:
         input_plan = trace_nlp_inputs(job, steps)
@@ -1131,7 +1147,16 @@ def run_worker(spec):
 
     job = json.loads(spec.read_text())
     directory = spec.parent
-    torch, jt, guard = checked_runtime(job)
+    try:
+        torch, jt, guard = checked_runtime(job)
+    except SystemExit as error:
+        # The build uses exit code 3 to request a fresh import after replacing
+        # jit_utils. Restart before the worker touches a distributed group.
+        restart_key = "JITTOR_BENCH_JIT_UTILS_RESTARTED"
+        if job["runtime"] != "jittor" or error.code != 3 or os.environ.get(restart_key):
+            raise
+        os.environ[restart_key] = "1"
+        os.execv(sys.executable, [sys.executable, "-u", *sys.argv])
     stock_distributed = job["kind"] == "stock" and job.get("ranks", 1) > 1
     if stock_distributed:
         torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))

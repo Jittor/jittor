@@ -87,7 +87,8 @@ MODEL_CASES.update({
                checkpoint="facebook/sam3"),
     "bert": hf("nlp", "BertModel", "bert", "text encoder", (1, 512)),
     "roberta": hf("nlp", "RobertaModel", "roberta", "text encoder", (1, 512), max_position_embeddings=514),
-    "modernbert": hf("nlp", "ModernBertModel", "modernbert", "long text encoder", (1, 2048)),
+    "modernbert": hf("nlp", "ModernBertModel", "modernbert", "long text encoder", (1, 2048),
+                     attn_implementation="sdpa"),
     "bge-m3": hf("nlp", "XLMRobertaModel", "", "dense CLS embedding", (1, 512),
                  checkpoint="BAAI/bge-m3"),
     "qwen3-embedding": hf("nlp", "Qwen3Model", "", "dense last-token embedding", (1, 512),
@@ -113,7 +114,7 @@ MODEL_CASES.update({
     "flux": ModelCase("multimodal", "diffusers", "FluxTransformer2DModel", "compact denoising step",
                       (1, 1024, 64), "bfloat16"),
     "flux2": ModelCase("multimodal", "diffusers", "Flux2Transformer2DModel", "compact denoising step",
-                       (1, 1024, 128), "bfloat16"),
+                       (1, 1024, 128), "bfloat16", options={"torch_emulate_precision_casts": True}),
     "sdxl": ModelCase("multimodal", "diffusers", "UNet2DConditionModel", "denoising step",
                       (1, 4, 96, 96), "float16", "stabilityai/stable-diffusion-xl-base-1.0 (unet)"),
     "sd3.5": ModelCase("multimodal", "diffusers", "SD3Transformer2DModel", "denoising step",
@@ -362,7 +363,18 @@ def pyg_model(torch, case, assets, inputs):
 
 def recurrent_model(torch, case, assets, inputs):
     model = getattr(torch.nn, case.model)(case.shape[-1], case.shape[-1], num_layers=2, batch_first=True)
-    return PreparedModel(model, (inputs.real(case.shape),))
+    args = (inputs.real(case.shape),)
+    if case.model != "LSTM":
+        return PreparedModel(model, args)
+
+    def forward(x):
+        sequence, (hidden, cell) = model(x)
+        # PyTorch 2.11 Inductor can retain the singleton direction dimension.
+        # The benchmark publishes the two unidirectional states in LSTM layout.
+        state_shape = (model.num_layers, x.shape[0], model.hidden_size)
+        return sequence, (hidden.reshape(state_shape), cell.reshape(state_shape))
+
+    return PreparedModel(model, args, forward=forward)
 
 
 def chronos_model(torch, case, assets, inputs):

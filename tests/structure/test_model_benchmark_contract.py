@@ -102,6 +102,43 @@ class TestModelBenchmarkContract(unittest.TestCase):
         self.assertEqual(result["compile_warmup_s"], 0.2)
         self.assertEqual(result["median_s"], 0.03)
 
+    def test_cuda_stock_qwen_dual_defaults_to_expandable_allocator_segments(self):
+        job = dict(case="qwen3_train-r2", runtime="torch", ranks=2)
+        for env, expected in (
+                ({}, "expandable_segments:True"),
+                ({"PYTORCH_CUDA_ALLOC_CONF": "backend:cudaMallocAsync"}, "backend:cudaMallocAsync"),
+                ({"PYTORCH_ALLOC_CONF": "backend:cudaMallocAsync"}, None)):
+            with self.subTest(env=env):
+                result = cuda_runner.rank_env(env, job, Path("/unused"), 1, 10001)
+                self.assertEqual(result.get("PYTORCH_CUDA_ALLOC_CONF"), expected)
+
+    def test_stochastic_profile_disables_attention_probability_fields(self):
+        with mock.patch.object(sys, "path", [str(HERE), *sys.path]):
+            from training_tools.model_profile import disable_stochastic_layers
+
+        attention = SimpleNamespace(dropout_prob=0.1)
+        model = SimpleNamespace(named_modules=lambda: [("attention", attention)])
+        torch = SimpleNamespace(nn=SimpleNamespace(Dropout=type("Dropout", (), {})))
+        self.assertEqual(disable_stochastic_layers(model, torch), ["attention.dropout_prob"])
+        self.assertEqual(attention.dropout_prob, 0.0)
+
+    def test_cuda_worker_restarts_once_for_jit_utils_rebuild(self):
+        key = "JITTOR_BENCH_JIT_UTILS_RESTARTED"
+        with tempfile.TemporaryDirectory() as directory:
+            spec = Path(directory) / "job.json"
+            spec.write_text(json.dumps(dict(runtime="jittor")))
+            with mock.patch.dict(sys.modules, {"worker": worker}), \
+                    mock.patch.dict(cuda_runner.os.environ, {}, clear=True), \
+                    mock.patch.object(cuda_runner, "checked_runtime", side_effect=SystemExit(3)), \
+                    mock.patch.object(cuda_runner.os, "execv", side_effect=RuntimeError("exec")) as restart:
+                with self.assertRaisesRegex(RuntimeError, "exec"):
+                    cuda_runner.run_worker(spec)
+                self.assertEqual(cuda_runner.os.environ[key], "1")
+                with self.assertRaises(SystemExit) as error:
+                    cuda_runner.run_worker(spec)
+                self.assertEqual(error.exception.code, 3)
+                restart.assert_called_once()
+
     def test_cuda_stock_inference_excludes_fast_output_mismatch(self):
         import numpy as np
 

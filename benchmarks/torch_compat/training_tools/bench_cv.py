@@ -63,6 +63,8 @@ def main():
     parser.add_argument('--initial-state')
     parser.add_argument('--shared-input-pipeline', action='store_true',
                         help='Use identical PIL/NumPy crops and sample order on both frameworks')
+    parser.add_argument('--disable-stochastic-layers', action='store_true',
+                        help='Disable dropout and drop path for cross-runtime loss comparison')
     parser.add_argument('--save-evaluation', action='store_true',
                         help='Save gathered validation logits and labels outside training-step timing')
     parser.add_argument('--audit-training', action='store_true',
@@ -169,6 +171,10 @@ def main():
     if args.initial_state:
         from safetensors.numpy import load_file
         model.load_state_dict({name: torch.from_numpy(value) for name, value in load_file(args.initial_state).items()}, strict=True)
+    if args.disable_stochastic_layers:
+        from model_profile import disable_stochastic_layers
+
+        disable_stochastic_layers(model, torch)
     for parameter in model.parameters():
         parameter.requires_grad = False
     for parameter in model.get_classifier().parameters():
@@ -351,6 +357,7 @@ def main():
         result = dict(backend=args.backend, completed=completed, execution=args.execution, device=hardware,
                       model=args.model,
                       mixed_precision=args.mixed_precision,
+                      stochastic_layers_disabled=args.disable_stochastic_layers,
                       require_flash_attention=args.require_flash_attention,
                       flash_attention=(dict(sdpa_flash_stats(jt))
                                        if candidate and args.require_flash_attention else None),
