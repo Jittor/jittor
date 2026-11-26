@@ -92,7 +92,10 @@ def test_adapter_state_is_per_frontend_and_native_classes_are_untouched():
             return self.mu
     class Uniform(Base):
         pass
-    native = SimpleNamespace(Distribution=Base, Normal=Normal, Uniform=Uniform)
+    # Adapters consult the native registry for distribution-specific behavior.
+    # Substitute only the classes involved in the frontend identity check.
+    native = SimpleNamespace(**dict(
+        vars(jt.distributions), Distribution=Base, Normal=Normal, Uniform=Uniform))
     def owner(tensor_type):
         return SimpleNamespace(Var=tensor_type, get_default_dtype=lambda: "float32",
                                as_tensor=lambda value, dtype=None: tensor_type(value))
