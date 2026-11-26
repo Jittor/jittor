@@ -515,7 +515,8 @@ class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
-                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix", "shape_dependencies")
+                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
+                 "shape_dependencies", "folded_leaves")
 
     def __init__(self):
         self.prologue = []
@@ -529,6 +530,7 @@ class _Capture:
         self.differentiable_leaves = []
         self.dynamic_prefix = None
         self.shape_dependencies = []
+        self.folded_leaves = None
 
 
 def _finish_normally(roots):
@@ -817,6 +819,22 @@ class StepCapture:
             _commit_captured_state(records)
             return None, result
 
+        # Fold pure input-independent constant subgraphs (e.g. static position
+        # biases, shifted-window masks, cuDNN attention mask checks) for
+        # stateless inference captures before materializing the kept graph.
+        private_inputs = _input_vars((private_args, private_kwargs), [])
+        if (bool(jt.flags.no_grad) and not records and not gradient_sources
+                and not cap.prologue and not cap.frozen_random
+                and cap.dynamic_prefix is None):
+            private_ptrs = {v.var_ptr for v in private_inputs}
+            guarded_leaves = [v for v in _core._step_leaf_holders(roots)
+                              if v.var_ptr not in private_ptrs]
+            if _core._fold_graph_constants(roots, private_inputs, guarded_leaves) > 0:
+                cap.folded_leaves = [
+                    (v, v.var_ptr, v._saved_storage_version())
+                    for v in guarded_leaves
+                ]
+
         # Finish pending outputs without repeating already executed updates.
         jt.flags.keep_graph = 2
         if rank_before > 4:
@@ -931,6 +949,10 @@ class StepCapture:
             return "the inputs changed shape or dtype, or the gradient mode changed"
         if cap.gradient_leaves and _core._first_changed_step_leaf(*cap.gradient_leaves) >= 0:
             return "a captured leaf was rebound or changed its gradient policy"
+        if cap.folded_leaves:
+            for holder, ptr, ver in cap.folded_leaves:
+                if holder.var_ptr != ptr or holder._saved_storage_version() != ver:
+                    return "a folded constant leaf was replaced or mutated"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0
