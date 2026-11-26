@@ -538,6 +538,15 @@ def _state_dict_key_diff(root, state_dict):
     return missing, unexpected, mismatched
 
 
+def _checkpoint_local_loader(module):
+    loader = module._load_from_state_dict
+    # The inherited native hook delegates back to load_state_dict. Use the
+    # Torch per-module loader for native modules inside a Torch checkpoint.
+    if getattr(loader, "__func__", None) is _ORIG_MODULE_LOAD_FROM_STATE_DICT:
+        return _load_from_state_dict.__get__(module)
+    return loader
+
+
 def _load_state_dict(self, state_dict, strict=True, assign=False):
     """Torch's ``load_state_dict``: honours ``strict`` and returns the keys."""
     if assign:
@@ -545,7 +554,7 @@ def _load_state_dict(self, state_dict, strict=True, assign=False):
             self, state_dict, strict)
         if fsdp_result is not None:
             return fsdp_result
-    if any(getattr(module._load_from_state_dict, "__func__", None) is not _load_from_state_dict
+    if any(getattr(_checkpoint_local_loader(module), "__func__", None) is not _load_from_state_dict
            for _, module in _walk(self)):
         return _load_state_dict_with_overrides(self, state_dict, strict, assign)
     state_dict, hook_missing, hook_unexpected, hook_errors = (
@@ -661,7 +670,7 @@ def _load_state_dict_with_overrides(root, state_dict, strict, assign):
             local_metadata["assign_to_params_buffers"] = True
         # The module override can migrate its entire subtree before the next
         # child sees its portion of the state. Each child validates its own keys.
-        module._load_from_state_dict(
+        _checkpoint_local_loader(module)(
             stack[-1][1], prefix, local_metadata, True, missing, unexpected, errors)
     return _load_incompatible_keys(root, strict, missing, unexpected, errors)
 
