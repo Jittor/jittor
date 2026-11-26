@@ -23,6 +23,7 @@
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
 #include "ops/op_register.h"
+#include "ops/composite/contiguous_op.h"
 #include "core/executor.h"
 #include "core/exec_plan.h"
 #include "core/exec_runner.h"
@@ -231,8 +232,15 @@ void Executor::submit_pending(Var* target, bool force) {
     run_sync({target}, true);
 }
 
-void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+Op* load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     (void)tt;
+    if (rr - ll == 1) {
+        Op* op = ops[fuse_ops[ll]];
+        if (op->is_op(op_ids::contiguous()) && op->execution_backend() == BackendId::Cuda
+                && static_cast<ContiguousOp*>(op)->cuda_transpose_axis >= 0)
+            return op;
+    }
+
     fused_op.ops.clear();
     fused_op.edges.clear();
     // Membership through the segment's own index rather than a traversal
@@ -245,6 +253,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
     fused_op.update_ops_and_edges();
+    return &fused_op;
 }
 
 static void top_weak_sync(vector<Var*>& vars) {

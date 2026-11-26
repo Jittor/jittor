@@ -36,7 +36,7 @@ struct OpCompiler {
     bool op_exist(Op* op);
     int total_member_count();
 
-    string get_jit_src(Op* op);
+    string get_jit_src(Op* op, bool fused_member = false);
     string get_fused_src(FusedOp* op);
     jit_op_entry_t compile(const string& jit_key, const string& src);
     static string __get_fused_src(

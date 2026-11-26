@@ -87,6 +87,6 @@ struct Executor {
 
 EXTERN_LIB Executor& runtime_executor();
 
-void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt);
+Op* load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt);
     
 } // jittor

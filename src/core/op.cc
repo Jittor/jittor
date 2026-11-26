@@ -25,6 +25,7 @@
 #include "core/graph.h"
 #include "core/grad.h"
 #include "ops/op_register.h"
+#include "ops/composite/contiguous_op.h"
 #include "utils/graph_build_profile.h"
 #include "runtime/rematerialization_scope.h"
 #include "runtime/profiler/memory_history.h"
@@ -801,6 +802,9 @@ void Op::prepare_codegen_key(JK& jk) {
         // TODO: fused op do not have inputs,
         //   check use_cuda_op from outputs may not be enough
         bool use_cuda_op = backend != BackendId::Cpu;
+        if (backend == BackendId::Cuda && is_op(op_ids::contiguous())
+                && static_cast<ContiguousOp*>(this)->cuda_transpose_axis >= 0)
+            jk << "«TILED_TRANSPOSE=1";
         for (Var* var : inputs()) {
             if (var->num >= std::numeric_limits<int32_t>::max()
                     || (var->storage_strides.size() && var->num

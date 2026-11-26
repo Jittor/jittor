@@ -891,11 +891,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1))) prepared_jit_key.clear();
         try {
         if (op->type() != OpType::other) {
-            op = &fused_op;
-            is_fused_op = true;
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            op = load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            is_fused_op = op == &fused_op;
         }
         // A kept graph run again: an in-graph constant has already moved its
         // data into its output (ArrayOp::run), so there is nothing to run --

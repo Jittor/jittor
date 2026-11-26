@@ -7,6 +7,7 @@ struct ContiguousOp : Op {
     Var* x;
     Var* y;
     int cuda_copy_width = 1;
+    int cuda_transpose_axis = -1;
     ContiguousOp(Var* x);
     const char* name() const override { return "contiguous"; }
     void infer_shape() override;
