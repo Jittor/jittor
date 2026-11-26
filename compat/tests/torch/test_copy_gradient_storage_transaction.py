@@ -107,5 +107,18 @@ class TestCopyGradientStorageTransaction:
         _assert_values(old.grad, [[2., 2.], [0., 0.], [2., 2.]])
         _assert_values(source.grad, [[1., 1.]])
 
+    def test_index_copy_no_grad_preserves_storage_along_non_zero_dim(self, device):
+        destination = torch.zeros((1, 2, 4, 2), device=device)
+        pointer = destination.data_ptr()
+        index = torch.tensor([2], device=device, dtype=torch.int64)
+        source = torch.arange(1, 5, device=device, dtype=torch.float32).reshape(1, 2, 1, 2)
+        with torch.no_grad():
+            out = destination.index_copy_(2, index, source)
+        assert out is destination
+        assert destination.data_ptr() == pointer
+        expected = np.zeros((1, 2, 4, 2), dtype=np.float32)
+        expected[:, :, 2:3, :] = np.arange(1, 5, dtype=np.float32).reshape(1, 2, 1, 2)
+        _assert_values(destination, expected)
+
 
 instantiate_device_type_tests(TestCopyGradientStorageTransaction, globals(), only_for=("cpu", "cuda"))
