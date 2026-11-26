@@ -83,11 +83,14 @@ def main():
     parser.add_argument('--ddp-bucket-cap-mb', type=float,
                         help='Use the same public DDP bucket cap on the candidate and native reference')
     parser.add_argument('--parity', action='store_true')
+    parser.add_argument('--disable-stochastic-layers', action='store_true',
+                        help='Disable dropout and drop path for cross-runtime loss comparison')
     parser.add_argument('--parity-shared-snapshots', action='store_true',
                         help='Reuse gradient readout buffers across input shapes; parity only')
     parser.add_argument('--initial-state')
     parser.add_argument('--metric', help='Local official GLUE metric script, for offline execution')
     args = parser.parse_args()
+    stochastic_layers_disabled = args.parity or args.disable_stochastic_layers
     if args.parity_shared_snapshots and not args.parity:
         parser.error('--parity-shared-snapshots requires --parity')
     if int(os.environ.get('JT_BENCH_STACK_SECONDS', '0')):
@@ -257,17 +260,17 @@ def main():
             kw['pad_token_id'] = tokenizer_observations[-1]['pad_token_id']
         if args.model != 'bert-base-cased' and hasattr(selected_config, 'use_cache'):
             kw['use_cache'] = False
-        if args.parity:
+        if stochastic_layers_disabled:
             kw.update(numerical_model_options(selected_config))
         model = original_load(args.model, *a, **kw)
         if args.initial_state:
             state = {k: torch.from_numpy(v) for k, v in load_file(args.initial_state).items()}
             model.load_state_dict(state, strict=True)
-        if args.parity:
+        if stochastic_layers_disabled:
             disable_stochastic_layers(model, torch)
-            if not args.initial_state:
-                save_file({k: np.ascontiguousarray(v.detach().cpu().numpy())
-                           for k, v in model.state_dict().items()}, str(out / 'initial.safetensors'))
+        if args.parity and not args.initial_state:
+            save_file({k: np.ascontiguousarray(v.detach().cpu().numpy())
+                       for k, v in model.state_dict().items()}, str(out / 'initial.safetensors'))
         models.append(model)
         return model
 
@@ -293,8 +296,9 @@ def main():
         return call
 
     class MeasuredLoader:
-        def __init__(self, loader):
+        def __init__(self, loader, device):
             self.loader = loader
+            self.device = device
         def __len__(self):
             return len(self.loader)
         def __iter__(self):
@@ -316,6 +320,8 @@ def main():
                 synchronize()
                 start = time.perf_counter()
                 batch = next(iterator)
+                if any(value.device != self.device for value in batch.values()):
+                    batch = batch.to(self.device)
                 if args.phases:
                     synchronize()
                 active.update(start=start, data=time.perf_counter()-start,
@@ -372,7 +378,7 @@ def main():
             accelerator, model, optimizer, train, evaluation, scheduler)
         assert all(p.device.type == 'cuda' for p in model.parameters())
         if args.execution != 'official-eager':
-            return model, optimizer, MeasuredLoader(train), evaluation, scheduler
+            return model, optimizer, MeasuredLoader(train, accelerator.device), evaluation, scheduler
         model.forward = timed('forward', model.forward)
         accelerator.backward = timed('backward', accelerator.backward)
         original_step = optimizer.step
@@ -396,7 +402,7 @@ def main():
             finish_record()
             return result
         optimizer.zero_grad = zero_grad
-        return model, optimizer, MeasuredLoader(train), evaluation, scheduler
+        return model, optimizer, MeasuredLoader(train, accelerator.device), evaluation, scheduler
 
     Accelerator.prepare = prepare
     namespace = runpy.run_path(str(script))
@@ -450,6 +456,7 @@ def main():
                       rank=int(os.environ.get('RANK', '0')), world_size=world_size, local_batch_size=args.batch_size,
                       global_batch_size=args.batch_size*world_size,
                       execution=args.execution, tensor_learning_rate=args.tensor_learning_rate,
+                      stochastic_layers_disabled=stochastic_layers_disabled,
                       parity_shared_snapshots=args.parity_shared_snapshots,
                       num_workers=args.num_workers, ddp_bucket_cap_mb=args.ddp_bucket_cap_mb,
                       steps_per_epoch=epoch_steps, captures=captures, epochs=epoch_times,

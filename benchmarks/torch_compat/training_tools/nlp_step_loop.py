@@ -80,7 +80,6 @@ def train_steps(namespace, config, args, execution, parity, finish, out):
         model.train()
         train_start = time.perf_counter()
         for batch in train:
-            batch.to(accelerator.device)
             signature = tuple((key, tuple(value.shape), str(value.dtype)) for key, value in sorted(batch.items()))
             if signature not in runners:
                 runners[signature] = (torch.compile(step, mode='reduce-overhead', dynamic=False)

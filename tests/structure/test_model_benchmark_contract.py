@@ -182,6 +182,25 @@ class TestModelBenchmarkContract(unittest.TestCase):
                  candidate_loss=0.5, max_abs=0.8 - 0.5),
         ])
 
+    def test_cuda_training_comparison_requires_same_dropout_policy_and_batches(self):
+        rank = dict(training_input_sha256="input plan", initial_state_sha256="weights",
+                    stochastic_layers_disabled=True,
+                    records=[dict(step=0, loss=1.0, batch_sha256="batch A")])
+        reference = dict(kind="training", rank_results=[rank])
+        candidate = copy.deepcopy(reference)
+        candidate_rank = candidate["rank_results"][0]
+        self.assertTrue(cuda_runner.compare_pair(reference, candidate)["comparable"])
+        candidate_rank["stochastic_layers_disabled"] = False
+        result = cuda_runner.compare_pair(reference, candidate)
+        self.assertTrue(result["parity"])
+        self.assertFalse(result["same_training_profile"])
+        self.assertFalse(result["comparable"])
+        candidate_rank["stochastic_layers_disabled"] = True
+        candidate_rank["records"][0]["batch_sha256"] = "batch B"
+        result = cuda_runner.compare_pair(reference, candidate)
+        self.assertFalse(result["same_inputs"])
+        self.assertFalse(result["comparable"])
+
     def test_cuda_logit_masks_compare_infinities_at_the_same_positions(self):
         import numpy as np
 

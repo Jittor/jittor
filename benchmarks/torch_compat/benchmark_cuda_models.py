@@ -50,7 +50,8 @@ with model and initial_state paths also work. Supply local Pets images via
 cache and --nlp-metric. Use --gpu 0,1 for the two-rank cases.
 
 Training repeats one real NLP batch per rank or uses batches of real CV
-images. Eight warmup steps precede 16 timed steps by default. Training reports
+images. NLP training disables stochastic layers in all modes for loss parity.
+Eight warmup steps precede 16 timed steps by default. Training reports
 mean step time using the slowest rank per step. Wan and the stock workloads
 report median latency. Results and rank logs are saved outside the checkout.
 A single selection defaults to two process rounds. Stock and training cases
@@ -1039,7 +1040,10 @@ def run_training_rank(job, directory, jt):
         input_plan = {}
     else:
         input_plan = trace_nlp_inputs(job, steps)
-        sys.argv += ["--batches", str(job["ranks"]), "--cycles", str(steps), "--metric", job["metric"]]
+        # Native eager and compiled dropout can use different random streams
+        # even with the same seed. Compare the same training profile in all modes.
+        sys.argv += ["--batches", str(job["ranks"]), "--cycles", str(steps),
+                     "--metric", job["metric"], "--disable-stochastic-layers"]
         if job.get("torch_mode") == "compiled":
             sys.argv.append("--tensor-learning-rate")
 
@@ -1143,6 +1147,8 @@ def compare_training(np, reference, candidate):
     keys = ("training_input_sha256", "initial_state_sha256")
     inputs_match = all(left.get(key) is not None and left[key] == right.get(key)
                        for left, right in zip(expected, actual) for key in keys)
+    profile_match = all(left.get("stochastic_layers_disabled") == right.get("stochastic_layers_disabled")
+                        for left, right in zip(expected, actual))
     errors = []
     metrics = {}
     for rank, (left, right) in enumerate(zip(expected, actual)):
@@ -1151,6 +1157,8 @@ def compare_training(np, reference, candidate):
         if not expected_steps or expected_steps != actual_steps:
             errors.append(dict(rank=rank, parity_error="Training steps are missing or differ"))
             continue
+        inputs_match &= all(a.get("batch_sha256") == b.get("batch_sha256")
+                            for a, b in zip(left["records"], right["records"]))
         reference_loss = np.array([row["loss"] for row in left["records"]])
         candidate_loss = np.array([row["loss"] for row in right["records"]])
         metrics[f"rank{rank}.loss"] = compare_arrays(
@@ -1163,7 +1171,8 @@ def compare_training(np, reference, candidate):
                                reference_loss=float(reference_loss[first]), candidate_loss=float(candidate_loss[first]),
                                max_abs=float(np.abs(reference_loss - candidate_loss).max())))
     parity = bool(metrics) and all(check["parity"] for check in metrics.values()) and not errors
-    return dict(same_inputs=inputs_match, parity=parity, comparable=inputs_match and parity,
+    return dict(same_inputs=inputs_match, same_training_profile=profile_match, parity=parity,
+                comparable=inputs_match and profile_match and parity,
                 output_errors=metrics, loss_errors=errors,
                 atol=TRAINING_LOSS_ATOL, rtol=TRAINING_LOSS_RTOL)
 
