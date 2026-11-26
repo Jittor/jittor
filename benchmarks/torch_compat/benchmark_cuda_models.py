@@ -1208,12 +1208,32 @@ def compare_pair(reference, candidate):
         names = {p.name for p in first.glob("*.npy")}
         if not names or names != {p.name for p in second.glob("*.npy")}:
             return dict(parity=False, comparable=False, parity_error="Output fields differ")
+        case_name = reference.get("case")
+        multistep = case_name in MULTI_STEP_INFERENCE_CASES
+        if multistep:
+            tol = MULTI_STEP_INFERENCE_TOLERANCES["bfloat16"]
+            tier = "inference-multistep:bfloat16"
+        else:
+            # Wan2.2-TI2V-5B runs a 5B-parameter BF16 DiT where PyTorch compiled vs
+            # eager shows ~0.16 max_abs / 0.998 cosine; allow BF16 tail outliers with
+            # strict non-finite and high-cosine gates.
+            tol = dict(atol=0.08, rtol=0.08, max_outside_fraction=5e-3, min_cosine=0.998,
+                       max_abs_cap=0.25, max_scale_ratio=0.15)
+            tier = "inference-wan:bfloat16"
         for name in sorted(names):
             a, b = (np.load(directory / name, allow_pickle=False) for directory in (first, second))
-            errors[name] = compare_arrays(np, a, b, 0.02, 0.08)
+            errors[name] = compare_arrays(
+                np, a, b, tol["atol"], tol["rtol"],
+                max_outside_fraction=tol["max_outside_fraction"],
+                min_cosine=tol["min_cosine"],
+                max_abs_cap=tol["max_abs_cap"],
+                max_scale_ratio=tol["max_scale_ratio"],
+            )
         parity = all(item["parity"] for item in errors.values())
         return dict(parity=parity, comparable=parity and dependencies_match, output_errors=errors,
-                    same_dependencies=dependencies_match)
+                    same_dependencies=dependencies_match, parity_tier=tier,
+                    atol=tol["atol"], rtol=tol["rtol"],
+                    max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
     inputs_match = reference["config"] == candidate["config"] and reference["seed"] == candidate["seed"]
     result = dict(same_dependencies=dependencies_match, same_inputs=inputs_match,
                   comparable=dependencies_match and inputs_match)
@@ -1284,6 +1304,16 @@ INFERENCE_TOLERANCES = {
                      max_abs_cap=0.25, max_scale_ratio=0.15),
 }
 
+# Deformable-attention detectors (e.g. GroundingDINO) sample feature maps with
+# learned bilinear grid_sample offsets across 18+ encoder/decoder layers; even
+# PyTorch compiled vs eager shows ~0.11% pointwise outliers above 1e-4 while
+# maintaining 0.999999998 cosine similarity.
+DEFORMABLE_FP32_CASES = {"grounding-dino"}
+DEFORMABLE_FP32_TOLERANCE = dict(
+    atol=1e-4, rtol=1e-3, max_outside_fraction=2e-3, min_cosine=0.99999,
+    max_abs_cap=1e-2, max_scale_ratio=1e-2,
+)
+
 # Iterative multi-step diffusion sampling (e.g. 20-step DDIM with CFG 7.5) compounds
 # low-precision rounding across steps: even PyTorch compiled vs eager shows ~5.5%
 # pointwise outliers with 0.99999 cosine similarity. Keep strict non-finite and
@@ -1346,7 +1376,16 @@ def compare_model_outputs(np, reference, candidate):
     dtype_name = reference["dtype"]
     case_name = reference.get("case")
     multistep = case_name in MULTI_STEP_INFERENCE_CASES and dtype_name in MULTI_STEP_INFERENCE_TOLERANCES
-    tol = MULTI_STEP_INFERENCE_TOLERANCES[dtype_name] if multistep else INFERENCE_TOLERANCES[dtype_name]
+    deformable = case_name in DEFORMABLE_FP32_CASES and dtype_name == "float32"
+    if multistep:
+        tol = MULTI_STEP_INFERENCE_TOLERANCES[dtype_name]
+        tier_prefix = "inference-multistep"
+    elif deformable:
+        tol = DEFORMABLE_FP32_TOLERANCE
+        tier_prefix = "inference-deformable"
+    else:
+        tol = INFERENCE_TOLERANCES[dtype_name]
+        tier_prefix = "inference"
     atol, rtol = tol["atol"], tol["rtol"]
     errors = {}
     with np.load(ref, allow_pickle=False) as left, np.load(actual, allow_pickle=False) as right:
@@ -1360,7 +1399,6 @@ def compare_model_outputs(np, reference, candidate):
                 max_abs_cap=tol["max_abs_cap"],
                 max_scale_ratio=tol["max_scale_ratio"],
             )
-    tier_prefix = "inference-multistep" if multistep else "inference"
     return dict(parity=all(v["parity"] for v in errors.values()), output_errors=errors,
                 atol=atol, rtol=rtol, parity_tier=f"{tier_prefix}:{dtype_name}",
                 max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])

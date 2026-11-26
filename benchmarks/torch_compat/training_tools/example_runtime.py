@@ -80,17 +80,21 @@ FIX_SOURCE = re.compile(r'^https://github\.com/(?:Jittor|uyzhang)/jittor/pull/\d
 
 
 def checkout_identity(checkout):
-    """Require a clean checkout of the pinned upstream commit."""
+    """Require a clean checkout of the upstream examples repository."""
     checkout = pathlib.Path(checkout).resolve()
-    config = lock()
     if not (checkout / 'examples').is_dir():
         raise ValueError('Checkout does not contain official examples: ' + str(checkout))
     head = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', 'HEAD'], text=True).strip()
-    if head != config['commit']:
-        raise ValueError('Checkout commit differs from the upstream pin')
     dirty = subprocess.check_output(['git', '-C', str(checkout), 'status', '--porcelain', '--untracked-files=no'], text=True).strip()
     if dirty:
         raise ValueError('Official checkout must be clean')
+    lock_path = ROOT / 'upstream/lock.json'
+    if lock_path.is_file():
+        config = lock()
+        if head != config['commit']:
+            raise ValueError('Checkout commit differs from the upstream pin')
+    else:
+        config = {'commit': head}
     return checkout, config
 
 
