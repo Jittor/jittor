@@ -185,7 +185,7 @@ Verdict rocm_norm_rule(PyObject* args, bool group) {
     Var* w = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 2))->var;
     Var* b = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 3))->var;
     if (x->num < 0 || w->num < 0 || b->num < 0) return unknown;
-    if (x->dtype() != ns_float32 || w->dtype() != ns_float32 || b->dtype() != ns_float32
+    if (!is_floating(x->dtype()) || w->dtype() != x->dtype() || b->dtype() != x->dtype()
             || amp_reg || (!no_grad && (requires_grad(x) || requires_grad(w) || requires_grad(b))))
         return declines;
     PyObject* eps = PyTuple_GET_ITEM(args, 4);
@@ -238,6 +238,8 @@ Verdict rocm_conv_rule(PyObject* args) {
     if (bias != Py_None && !is_var(bias)) return unknown;
     if (x->num < 0 || w->num < 0
             || (bias != Py_None && GET_RAW_PTR(VarHolder, bias)->var->num < 0)) return unknown;
+    if (x->dtype() == ns_float16 || x->dtype() == ns_bfloat16)
+        return unknown;  // The Python path bounds the low-precision columns workspace.
     if (x->shape.size() != 4 || w->shape.size() != 4 || !w->is_contiguous()
             || x->dtype() != ns_float32 || w->dtype() != ns_float32
             || (bias != Py_None && GET_RAW_PTR(VarHolder, bias)->var->dtype() != ns_float32)) return declines;

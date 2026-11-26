@@ -846,7 +846,7 @@ _MM_FIDELITY_DETAIL = (
 
 from .linalg import _mm_impl
 
-from .linalg import mm
+from .linalg import mm, _int_mm
 
 register_fidelity(
     "torch.mm",
@@ -1383,6 +1383,7 @@ def install(ctx):
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
     _bind_missing(g, "mm", mm)
+    _bind_missing(g, "_int_mm", _int_mm)
     _bind_missing(g, "mv", mv)
     _bind_missing(g, "masked_select", masked_select)
     # Force-override, not `_bind_missing`: `jt.masked_fill` already exists, so the

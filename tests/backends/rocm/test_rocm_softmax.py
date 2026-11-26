@@ -82,7 +82,7 @@ def test_other_axes_and_log_softmax_retain_portable_values():
             assert y.location() == 'device'
             np.testing.assert_allclose(y.numpy(), reference(raw, dim, log), rtol=2e-5, atol=2e-6)
         assert select_kernel('nn.softmax', x, dim=-1, zero_all_neg_inf=True) is None
-        assert select_kernel('nn.softmax', x.half(), dim=-1) is None
+        assert select_kernel('nn.softmax', x.half(), dim=-1) is not None
         with jt.flag_scope(amp_reg=18):
             assert select_kernel('nn.softmax', x, dim=-1) is None
 
@@ -92,3 +92,17 @@ def test_empty_leading_dimension():
         y = jt.nn.softmax(jt.empty((0, 128)), -1)
         y.sync()
         assert tuple(y.shape) == (0, 128)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("width", [197, 4608])
+def test_low_precision_softmax_uses_fp32_accumulation(dtype, width):
+    raw = np.random.RandomState(182).normal(size=(9, width)).astype("float32")
+    with jt.no_grad():
+        x = jt.array(raw).cast(dtype)
+        expected = reference(x.numpy(), -1, False)
+        assert select_kernel("nn.softmax", x, dim=-1) is not None
+        y = jt.nn.softmax(x, dim=-1)
+        y.sync()
+        assert y.location() == "device" and str(y.dtype) == dtype
+        np.testing.assert_allclose(y.numpy(), expected, rtol=0.008, atol=1e-6)

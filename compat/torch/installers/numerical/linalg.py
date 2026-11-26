@@ -337,6 +337,28 @@ def mm(input, mat2, dtype_or_out=None, *, out=None, out_dtype=None):
     return _mm_with_out_dtype(input, mat2, out_dtype, out)
 
 
+def _int_mm(input, mat2, *, out=None):
+    """Multiply signed int8 matrices with a native int32 accumulator."""
+    from jittor._core.dtypes import dtype_name
+    from jittor._runtime.dispatch import select_kernel
+
+    if input.ndim != 2 or mat2.ndim != 2 or input.shape[1] != mat2.shape[0]:
+        raise RuntimeError("_int_mm requires two compatible rank-2 matrices")
+    if dtype_name(input.dtype) != "int8" or dtype_name(mat2.dtype) != "int8":
+        raise RuntimeError("_int_mm requires int8 inputs")
+    if input.device != mat2.device:
+        raise RuntimeError("_int_mm requires inputs on the same device")
+    if out is not None and (dtype_name(out.dtype) != "int32" or out.device != input.device
+                            or tuple(out.shape) != (input.shape[0], mat2.shape[1])):
+        raise RuntimeError("_int_mm out must have the result shape, int32 dtype and input device")
+    left, right = input.contiguous(), mat2.contiguous()
+    kernel = select_kernel("int8_matmul", left, right, False, False)
+    if kernel is None:
+        raise NotImplementedError("_int_mm has no native provider for this device")
+    result = kernel(left, right, False, False)
+    return result if out is None else out.copy_(result)
+
+
 def kron(a, b):
     """Compute the Kronecker product through broadcasted Jittor views."""
     nd = max(a.ndim, b.ndim)

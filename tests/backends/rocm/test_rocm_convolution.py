@@ -219,3 +219,19 @@ def test_native_selection_matches_python_convolution_predicate():
             pointwise = jt.ones((6, 4, 1, 1))
             assert not supported(empty, pointwise)
             assert select_kernel('conv2d', empty, pointwise, None, (1, 1), (0, 0), (1, 1), 1) is None
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+def test_low_precision_convolution_uses_native_gemm(dtype):
+    rng = np.random.RandomState(184)
+    with jt.no_grad():
+        x = jt.array(rng.normal(size=(2, 3, 7, 8)).astype("float32") / 4).cast(dtype)
+        w = jt.array(rng.normal(size=(4, 3, 3, 2)).astype("float32") / 4).cast(dtype)
+        b = jt.array(rng.normal(size=4).astype("float32") / 4).cast(dtype)
+        xh, wh, bh = (v.numpy().astype("float32") for v in (x, w, b))
+        expected, _, _ = reference(xh, wh, bh, (2, 1), (1, 0), (1, 1))
+        assert select_kernel("conv2d", x, w, b, (2, 1), (1, 0), (1, 1), 1) is not None
+        y = jt.nn.conv2d(x, w, b, stride=(2, 1), padding=(1, 0))
+        y.sync()
+        assert y.location() == "device" and str(y.dtype) == dtype
+        np.testing.assert_allclose(y.numpy(), expected, rtol=0.012, atol=0.003)

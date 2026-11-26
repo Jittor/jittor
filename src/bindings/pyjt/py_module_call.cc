@@ -1677,11 +1677,12 @@ PyObject* group_norm_rocm_build(PyObject* source, PyObject* weight, PyObject* bi
     Var* x = GET_RAW_PTR(VarHolder, source)->var;
     Var* w = GET_RAW_PTR(VarHolder, weight)->var;
     Var* b = GET_RAW_PTR(VarHolder, bias)->var;
-    if (x->dtype() != ns_float32 || w->dtype() != ns_float32 || b->dtype() != ns_float32
+    if ((x->dtype() != ns_float32 && x->dtype() != ns_float16 && x->dtype() != ns_bfloat16)
+            || w->dtype() != x->dtype() || b->dtype() != x->dtype()
             || x->shape.size() < 2 || groups <= 0 || x->shape[1] <= 0 || x->shape[1] % groups
             || w->shape != NanoVector{x->shape[1]} || b->shape != NanoVector{x->shape[1]}
             || !std::isfinite(eps) || eps <= 0)
-        throw std::invalid_argument("invalid FP32 group normalization inputs");
+        throw std::invalid_argument("invalid ROCm group normalization inputs");
     int64 width = x->shape[1] / groups;
     for (int i = 2; i < x->shape.size(); ++i) {
         if (x->shape[i] <= 0 || width > 1048576 / x->shape[i])

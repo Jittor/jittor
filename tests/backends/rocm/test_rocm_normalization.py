@@ -212,7 +212,7 @@ def test_empty_shapes_and_precision_policy():
         x, w, b = jt.ones((0, 8, 7)), jt.ones(8), jt.zeros(8)
         assert tuple(jt.nn.group_norm(x, 4, w, b).shape) == (0, 8, 7)
         assert tuple(jt.nn.layer_norm(x, (7,)).shape) == (0, 8, 7)
-        assert not supports_group_norm(x.half(), 4, w.half(), b.half())
+        assert supports_group_norm(x.half(), 4, w.half(), b.half())
         assert not supports_group_norm(x, 4, w.float64(), b)
         for eps in [0, -1, float('nan'), float('inf')]:
             assert not supports_group_norm(x, 4, w, b, eps)
@@ -239,3 +239,44 @@ def test_native_selection_matches_python_predicate(kind):
     with jt.no_grad():
         for weights, biases in [(w, 0.0), (1.0, b), (1.0, 0.0)]:
             assert (select_kernel(operation(kind), x, extent, weights, biases, 1e-5) is not None) == predicate(x, extent, weights, biases, 1e-5)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+@pytest.mark.parametrize("kind", ["group", "layer"])
+def test_low_precision_norm_uses_fp32_statistics(dtype, kind):
+    rng = np.random.RandomState(183)
+    raw = rng.normal(size=(2, 6, 7)).astype("float32")
+    extent = 3 if kind == "group" else (7,)
+    shape = affine_shape(raw, kind, extent)
+    with jt.no_grad():
+        x = jt.array(raw).cast(dtype)
+        w = jt.array(rng.normal(size=shape).astype("float32")).cast(dtype)
+        b = jt.array(rng.normal(size=shape).astype("float32")).cast(dtype)
+        xh, wh, bh = (v.numpy().astype("float32") for v in (x, w, b))
+        expected, _ = normalized(xh, kind, extent)
+        if kind == "group":
+            expected = expected * wh.reshape(1, -1, 1) + bh.reshape(1, -1, 1)
+            op = "nn.group_norm"
+            y = jt.nn.group_norm(x, extent, w, b)
+        else:
+            expected = expected * wh + bh
+            op = "nn.layer_norm.inference"
+            y = jt.nn.layer_norm(x, extent, w, b)
+        assert select_kernel(op, x, extent, w, b, 1e-5) is not None
+        y.sync()
+        assert y.location() == "device" and str(y.dtype) == dtype
+        np.testing.assert_allclose(y.numpy(), expected, rtol=0.008, atol=0.002)
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+def test_low_precision_group_norm_silu_preserves_rounding(dtype):
+    rng = np.random.RandomState(185)
+    with jt.no_grad():
+        x = jt.array(rng.normal(size=(2, 8, 5, 7)).astype("float32")).cast(dtype)
+        w, b = jt.ones(8).cast(dtype), jt.zeros(8).cast(dtype)
+        normalized_value = jt.nn.group_norm(x, 4, w, b)
+        fused = jt.nn.silu(normalized_value)
+        fused.sync()
+        assert fused.location() == "device" and str(fused.dtype) == dtype
+        raw = normalized_value.numpy().astype("float32")
+        np.testing.assert_allclose(fused.numpy(), raw / (1 + np.exp(-raw)), rtol=0.008, atol=0.002)

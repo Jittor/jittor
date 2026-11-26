@@ -190,15 +190,15 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
     monkeypatch.setitem(sys.modules, dispatch.__name__, dispatch)
     installer.install_kernels()
     assert [args[0] for args, _ in calls] == [
-        "matmul", "linear_bias_accumulator", "batched_matmul", "misc.scan_2d"]
+        "matmul", "int8_matmul", "linear_bias_accumulator", "batched_matmul", "misc.scan_2d"]
     assert all(args[1] == "rocm" for args, _ in calls)
-    assert calls[0][1]["dtypes"] == {"float32", "float64"}
-    assert calls[1][1]["dtypes"] == {"float32"}
-    assert calls[1][1]["supports"] is installer._supports_linear_bias
-    assert rules == [("rocm_linear_bias", installer._supports_linear_bias)]
+    assert calls[0][1]["dtypes"] == {"float32", "float64", "float16", "bfloat16"}
+    assert calls[1][1]["dtypes"] == {"int8"}
     assert calls[2][1]["dtypes"] == {"float32"}
-    assert calls[3][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
-    monkeypatch.setattr(installer, "_batched_amp_changes_dtype", lambda: False)
+    assert calls[2][1]["supports"] is installer._supports_linear_bias
+    assert rules == [("rocm_linear_bias", installer._supports_linear_bias)]
+    assert calls[3][1]["dtypes"] == {"float32", "float16", "bfloat16"}
+    assert calls[4][1]["dtypes"] == {"float32", "float64", "int32", "int64"}
     a = SimpleNamespace(ndim=2, dtype="float32")
     assert installer._supports_matmul(a, a)
     assert not installer._supports_matmul(a, SimpleNamespace(ndim=3, dtype="float32"))
@@ -218,8 +218,6 @@ def test_python_registration_is_narrow_and_uses_native_names(monkeypatch):
                 SimpleNamespace(ndim=3, dtype="float32", shape=(2, 4, 5)),
                 SimpleNamespace(ndim=4, dtype="float64", shape=(2, 1, 4, 5))):
         assert not installer._supports_batched_matmul(batch_a, bad)
-    monkeypatch.setattr(installer, "_batched_amp_changes_dtype", lambda: True)
-    assert not installer._supports_batched_matmul(batch_a, batch_a)
 
 
 def test_gemm_layout_all_transposes_and_checked_dimensions(tmp_path):
@@ -287,5 +285,7 @@ def test_inference_kernels_register_without_importing_tensor_implementations(mon
     assert [args[0] for args, _ in calls] == [
         'nn.rms_norm.inference', 'nn.softmax', 'conv2d',
         'nn.group_norm', 'nn.layer_norm.inference']
-    assert all(args[1] == 'rocm' and kwargs['dtypes'] == {'float32'}
-               for args, kwargs in calls)
+    assert all(args[1] == 'rocm' for args, _ in calls)
+    assert calls[0][1]['dtypes'] == {'float32'}
+    assert all(kwargs['dtypes'] == {'float32', 'float16', 'bfloat16'}
+               for _, kwargs in calls[1:])

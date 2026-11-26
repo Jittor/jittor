@@ -9,8 +9,9 @@ namespace jittor {
 namespace {
 int64 dense_rows(Var* a, Var* b, bool trans_a) {
     USER_CHECK(a->shape.size() >= 2 && b->shape.size() == 2
-               && (a->shape.size() == 2 || (!trans_a && a->dtype() == ns_float32)))
-        << "hipBLAS matmul requires rank-2 inputs or an untransposed FP32 left tensor";
+               && (a->shape.size() == 2 || (!trans_a && (a->dtype() == ns_float32 || a->dtype() == ns_float16
+                   || a->dtype() == ns_bfloat16))))
+        << "hipBLAS matmul requires rank-2 inputs or an untransposed FP32/FP16/BF16 left tensor";
     int64 rows = 1;
     for (int i = 0; i + 1 < a->shape.size(); ++i) {
         const int64 size = a->shape[i];
@@ -26,14 +27,17 @@ int64 dense_rows(Var* a, Var* b, bool trans_a) {
 HipblasMatmulOp::HipblasMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
     USER_CHECK(a->dtype() == b->dtype()
-               && (a->dtype() == ns_float32 || a->dtype() == ns_float64))
-        << "hipBLAS matmul requires matching float32 or float64 inputs";
+               && (a->dtype() == ns_float32 || a->dtype() == ns_float64
+                   || a->dtype() == ns_float16 || a->dtype() == ns_bfloat16
+                   || a->dtype() == ns_int8))
+        << "hipBLAS matmul requires matching float32, float64, float16, bfloat16 or int8 inputs";
+    if (a->dtype() == ns_float64) hipblas_require_fp64(a->device_id);
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_manual_set_vnbb);
     a->set_flag(VarFlags::_needed_by_backward);
     b->set_flag(VarFlags::_needed_by_backward);
-    c = create_output(nullptr, a->dtype());
+    c = create_output(nullptr, a->dtype() == ns_int8 ? ns_int32 : a->dtype());
 }
 
 void HipblasMatmulOp::infer_shape() {
@@ -64,6 +68,7 @@ void HipblasMatmulOp::run() {
         return;
     }
     auto handle = hipblas_bind_stream(device);
+    hipblas_matmul_math(handle, a->dtype() == ns_float32);
     const auto left = trans_b ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     const auto right = trans_a ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     if (a->dtype() == ns_float32) {
@@ -72,12 +77,28 @@ void HipblasMatmulOp::run() {
             layout.columns, layout.rows, layout.inner, &alpha,
             b->ptr<float>(), layout.lda, a->ptr<float>(), layout.ldb,
             &beta, c->ptr<float>(), layout.ldc), "hipblasSgemm");
-    } else {
+    } else if (a->dtype() == ns_float64) {
+        hipblas_require_fp64(device);
         const double alpha = 1, beta = 0;
         check_hipblas(hipblasDgemm(handle, left, right,
             layout.columns, layout.rows, layout.inner, &alpha,
             b->ptr<double>(), layout.lda, a->ptr<double>(), layout.ldb,
             &beta, c->ptr<double>(), layout.ldc), "hipblasDgemm");
+    } else if (a->dtype() == ns_int8) {
+        const int32 alpha = 1, beta = 0;
+        check_hipblas(hipblasGemmEx(handle, left, right,
+            layout.columns, layout.rows, layout.inner, &alpha,
+            b->mem_ptr, HIPBLAS_R_8I, layout.lda, a->mem_ptr, HIPBLAS_R_8I, layout.ldb,
+            &beta, c->mem_ptr, HIPBLAS_R_32I, layout.ldc, HIPBLAS_R_32I,
+            HIPBLAS_GEMM_DEFAULT), "hipblasGemmEx int8");
+    } else {
+        const float alpha = 1, beta = 0;
+        const auto type = a->dtype() == ns_float16 ? HIPBLAS_R_16F : HIPBLAS_R_16B;
+        check_hipblas(hipblasGemmEx(handle, left, right,
+            layout.columns, layout.rows, layout.inner, &alpha,
+            b->mem_ptr, type, layout.lda, a->mem_ptr, type, layout.ldb,
+            &beta, c->mem_ptr, type, layout.ldc, HIPBLAS_R_32F,
+            HIPBLAS_GEMM_DEFAULT), "hipblasGemmEx half");
     }
 }
 

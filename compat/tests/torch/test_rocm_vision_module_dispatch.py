@@ -248,12 +248,68 @@ def test_rocm_native_linear_respects_bias_descriptor():
             np.testing.assert_allclose(actual.cpu().numpy(), expected + 2, rtol=3e-5, atol=3e-6)
 
 
-def test_rocm_exact_gelu_inference_on_device():
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
+def test_rocm_exact_gelu_inference_on_device(dtype):
     raw = np.random.RandomState(138).uniform(-6., 6., (4, 197, 23)).astype("float32")
-    expected = raw * 0.5 * (1. + np.vectorize(math.erf)(raw / math.sqrt(2.)))
     with torch.no_grad():
-        x = torch.tensor(raw, device="cuda")
+        x = torch.tensor(raw, device="cuda", dtype=dtype)
+        values = x.float().cpu().numpy()
+        expected = values * 0.5 * (1. + np.vectorize(math.erf)(values / math.sqrt(2.)))
         y = torch.nn.functional.gelu(x)
         y.sync()
-        assert y.location() == "device" and not y.requires_grad
-        np.testing.assert_allclose(y.cpu().numpy(), expected, rtol=3e-5, atol=2e-6)
+        assert y.location() == "device" and not y.requires_grad and y.dtype == dtype
+        tolerance = 3e-5 if dtype == torch.float32 else 0.008
+        np.testing.assert_allclose(y.float().cpu().numpy(), expected, rtol=tolerance, atol=2e-6)
+
+
+def test_rocm_int_mm_uses_int32_and_preserves_out():
+    rng = np.random.RandomState(180)
+    a = rng.randint(-17, 18, size=(19, 32)).astype("int8")
+    b = rng.randint(-17, 18, size=(32, 23)).astype("int8")
+    x = torch.tensor(a, device="cuda")
+    y = torch.tensor(b.T.copy(), device="cuda").t()
+    expected = a.astype("int32") @ b.astype("int32")
+    z = torch._int_mm(x, y)
+    z.sync()
+    assert z.location() == "device" and z.dtype == torch.int32
+    np.testing.assert_array_equal(z.cpu().numpy(), expected)
+    out = torch.empty((19, 23), dtype=torch.int32, device="cuda")
+    assert torch._int_mm(x, y, out=out) is out
+    np.testing.assert_array_equal(out.cpu().numpy(), expected)
+    with pytest.raises(RuntimeError, match="int8"):
+        torch._int_mm(x.float(), y)
+
+
+def test_rocm_tf32_policy_does_not_leak_to_strict_matmul():
+    rng = np.random.RandomState(181)
+    a = rng.normal(size=(128, 128)).astype("float32")
+    b = rng.normal(size=(128, 128)).astype("float32")
+    x, y = torch.tensor(a, device="cuda"), torch.tensor(b, device="cuda")
+    old = torch.backends.cuda.matmul.allow_tf32
+    try:
+        torch.backends.cuda.matmul.allow_tf32 = False
+        strict = (x @ y).cpu().numpy().copy()
+        torch.backends.cuda.matmul.allow_tf32 = True
+        relaxed = (x @ y).cpu().numpy().copy()
+        torch.backends.cuda.matmul.allow_tf32 = False
+        strict_again = (x @ y).cpu().numpy().copy()
+    finally:
+        torch.backends.cuda.matmul.allow_tf32 = old
+    np.testing.assert_array_equal(strict, strict_again)
+    ref = a.astype("float64") @ b.astype("float64")
+    np.testing.assert_allclose(strict, ref, rtol=3e-5, atol=2e-5)
+    # Hardware that cannot provide XF32 can legally retain full precision.
+    assert np.linalg.norm(relaxed-ref)/np.linalg.norm(ref) < 0.005
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_rocm_autocast_matmul_linear_and_batched(dtype):
+    x = torch.ones(2, 8, 64, device="cuda")
+    w = torch.ones(64, 17, device="cuda")
+    batched = torch.ones(2, 64, 17, device="cuda")
+    layer = torch.nn.Linear(64, 17).cuda().eval()
+    with torch.no_grad(), torch.autocast(device_type="cuda", dtype=dtype):
+        for value in (x[0] @ w, x @ w, x @ batched, layer(x)):
+            value.sync()
+            assert value.location() == "device" and value.dtype == dtype
+        np.testing.assert_array_equal((x @ w).float().cpu().numpy(), np.full((2, 8, 17), 64))

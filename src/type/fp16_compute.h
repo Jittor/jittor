@@ -20,6 +20,7 @@
 #ifdef IS_ROCM
 #include <hip/hip_runtime.h>
 #include <hip/hip_fp16.h>
+#include <hip/hip_bfloat16.h>
 #else
 #include <driver_types.h>
 #include <cuda_fp16.h>
@@ -29,7 +30,9 @@
 namespace jittor {
 
 typedef __half float16;
-#ifndef IS_ROCM
+#ifdef IS_ROCM
+typedef hip_bfloat16 bfloat16;
+#else
 typedef __nv_bfloat16 bfloat16;
 #endif
 
@@ -94,7 +97,6 @@ inline __device__ float32 _signed_powf(float32 x, float32 y) {
 inline __device__ float16 pow(float16 a, float16 b) { return float16(_signed_powf(float32(a), float32(b))); }
 
 
-#ifndef IS_ROCM
 // See the float16 pair above: same dead `CUDA_ARCH` ladder, same NaN bug,
 // same fix.
 inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) {
@@ -105,7 +107,6 @@ inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) {
 }
 
 inline __device__ bfloat16 pow(bfloat16 a, bfloat16 b) { return bfloat16(_signed_powf(float32(a), float32(b))); }
-#endif
 template<int nbyte, class T>
 __device__ inline
 typename std::enable_if<nbyte<=0,void>::type

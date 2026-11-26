@@ -1,4 +1,4 @@
-"""Native HIP FP32 last-axis inference softmax."""
+"""Native HIP last-axis inference softmax with FP32 accumulation."""
 
 from functools import lru_cache
 
@@ -12,7 +12,7 @@ def supported(x, log=False, zero_all_neg_inf=False, dim=-1):
         return False
     if dim not in (-1, x.ndim - 1) or log or zero_all_neg_inf:
         return False
-    if dtype_name(x.dtype) != 'float32' or jt.flags.amp_reg or _output_requires_grad(x):
+    if dtype_name(x.dtype) not in ('float32', 'float16', 'bfloat16') or jt.flags.amp_reg or _output_requires_grad(x):
         return False
     width = x.shape[-1]
     return 0 < width <= 8192 and 0 <= x.numel() // width <= 2147483647
@@ -38,7 +38,7 @@ __device__ static float hip_softmax_group_sum(float value) {
 def _small_source(items):
     # Eight independent short rows per block avoid a block-wide reduction.
     return r'''
- __global__ static void hip_softmax_small(const float* x,float* y,int width,long long rows) {
+ __global__ static void hip_softmax_small(const in0_type* x,out0_type* y,int width,long long rows) {
     const int lane=threadIdx.x%%32;
     const long long row=(long long)blockIdx.x*8+threadIdx.x/32;
     if(row>=rows)return;
@@ -48,7 +48,7 @@ def _small_source(items):
     #pragma unroll
     for(int i=0;i<%(items)d;i++) {
         const int col=lane+i*32;
-        float v=col<width?x[base+col]:-INFINITY;
+        float v=col<width?float(x[base+col]):-INFINITY;
         values[i]=v;maxval=fmaxf(maxval,v);
     }
     const float maximum=__shfl(hip_softmax_group_max(maxval),0,32);
@@ -59,7 +59,7 @@ def _small_source(items):
     #pragma unroll
     for(int i=0;i<%(items)d;i++) {
         const int col=lane+i*32;
-        if(col<width)y[base+col]=values[i]/denom;
+        if(col<width)y[base+col]=out0_type(values[i]/denom);
     }
  }
  const int width=in0->shape[in0->shape.size()-1];
@@ -72,7 +72,7 @@ def _small_source(items):
 def _source(items):
     # Long rows use all 256 threads and reduce each 32-lane subgroup first.
     return r'''
- __global__ static void hip_softmax(const float* x,float* y,int width) {
+ __global__ static void hip_softmax(const in0_type* x,out0_type* y,int width) {
     const long long base=(long long)blockIdx.x*width;
     const int tid=threadIdx.x,lane=tid%%32,group=tid/32;
     __shared__ float maxima[8],sums[8];
@@ -81,7 +81,7 @@ def _source(items):
     #pragma unroll
     for(int i=0;i<%(items)d;i++) {
         const int col=tid+i*256;
-        float v=col<width?x[base+col]:-INFINITY;
+        float v=col<width?float(x[base+col]):-INFINITY;
         values[i]=v;maxval=fmaxf(maxval,v);
     }
     maxval=hip_softmax_group_max(maxval);
@@ -108,7 +108,7 @@ def _source(items):
     #pragma unroll
     for(int i=0;i<%(items)d;i++) {
         const int col=tid+i*256;
-        if(col<width)y[base+col]=values[i]/denom;
+        if(col<width)y[base+col]=out0_type(values[i]/denom);
     }
  }
  const int width=in0->shape[in0->shape.size()-1];

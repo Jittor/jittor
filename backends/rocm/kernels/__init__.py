@@ -61,10 +61,10 @@ def install_kernels():
     register_kernel('nn.rms_norm.inference', 'rocm', _rms_norm,
                     dtypes={'float32'}, supports=_supports_rms_norm, priority=100)
     register_kernel('nn.softmax', 'rocm', _softmax,
-                    dtypes={'float32'}, supports=_supports_softmax, priority=100)
+                    dtypes={'float32', 'float16', 'bfloat16'}, supports=_supports_softmax, priority=100)
     register_kernel('conv2d', 'rocm', _conv2d,
-                    dtypes={'float32'}, supports=_supports_conv2d, priority=100)
+                    dtypes={'float32', 'float16', 'bfloat16'}, supports=_supports_conv2d, priority=100)
     register_kernel('nn.group_norm', 'rocm', _group_norm,
-                    dtypes={'float32'}, supports=_supports_group_norm, priority=100)
+                    dtypes={'float32', 'float16', 'bfloat16'}, supports=_supports_group_norm, priority=100)
     register_kernel('nn.layer_norm.inference', 'rocm', _layer_norm,
-                    dtypes={'float32'}, supports=_supports_layer_norm, priority=100)
+                    dtypes={'float32', 'float16', 'bfloat16'}, supports=_supports_layer_norm, priority=100)

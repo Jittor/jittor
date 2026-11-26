@@ -1,4 +1,4 @@
-"""Native HIP FP32 inference group and layer normalization."""
+"""Native HIP inference group and layer normalization with FP32 statistics."""
 from functools import lru_cache
 import math
 import jittor as jt
@@ -21,9 +21,9 @@ _HEADER = r'''#include <hip/hip_runtime.h>
 
 def _supported(x, weight, bias, eps):
     values = (x, weight, bias)
-    return (isinstance(x, jt.Var) and dtype_name(x.dtype) == 'float32'
+    return (isinstance(x, jt.Var) and dtype_name(x.dtype) in ('float32', 'float16', 'bfloat16')
             and not jt.flags.amp_reg and not _output_requires_grad(*values)
-            and all(dtype_name(v.dtype) == 'float32' if isinstance(v, jt.Var)
+            and all(v.dtype == x.dtype if isinstance(v, jt.Var)
                     else type(v) in (int, float) and math.isfinite(v)
                     for v in (weight, bias))
             and type(eps) in (int, float) and math.isfinite(eps) and eps > 0)
@@ -75,44 +75,47 @@ def _source(kind, extent, eps, scale, shift, act):
     affine = ''
     for name,value in [('scale', scale), ('shift', shift)]:
         if value == 'tensor':
-            args += f',const float* {name}'
-            pointers += ',in'+str(1 + (name=='shift' and scale=='tensor'))+'_p'
-            affine += f'float {name}_value={name}[{affine_index}];'
+            index = 1 + (name == 'shift' and scale == 'tensor')
+            args += f',const in{index}_type* {name}'
+            pointers += f',in{index}_p'
+            affine += f'float {name}_value=float({name}[{affine_index}]);'
         else:
             affine += f'float {name}_value={float(value):.9e}f;'
     apply = 'value = value * scale_value + shift_value;'
     if act == 'silu':
-        apply += 'value = value / (1.f + expf(-value));'
+        # Preserve the standalone normalization's output rounding before
+        # applying the activation, including FP16/BF16 inputs.
+        apply += 'value = float(out0_type(value)); value = value / (1.f + expf(-value));'
     return r'''
-    __global__ static void hip_norm(const float* x,float* y%(args)s,
+    __global__ static void hip_norm(const in0_type* x,out0_type* y%(args)s,
             long long width,long long spatial,long long channels) {
         const long long base=(long long)blockIdx.x*width;
         const int tid=threadIdx.x;
         __shared__ float scratch[256];
         // Subtract an anchor before summing: a large common offset must not
         // round away a small variance, nor round the mean back onto the input.
-        float anchor=x[base],sum=0.f;
-        for(long long j=tid;j<width;j+=256)sum+=x[base+j]-anchor;
+        float anchor=float(x[base]),sum=0.f;
+        for(long long j=tid;j<width;j+=256)sum+=float(x[base+j])-anchor;
         float mean=hip_norm_sum(sum,scratch)/width;
         float variance=0.f;
         for(long long j=tid;j<width;j+=256) {
-            float d=(x[base+j]-anchor)-mean;variance+=d*d;
+            float d=(float(x[base+j])-anchor)-mean;variance+=d*d;
         }
         variance=hip_norm_sum(variance,scratch)/width;
         if(isfinite(mean)&&isfinite(variance)) {
             float inverse=rsqrtf(variance+%(eps).9ef);
             for(long long j=tid;j<width;j+=256) {
-                float value=((x[base+j]-anchor)-mean)*inverse;
+                float value=((float(x[base+j])-anchor)-mean)*inverse;
                 %(affine)s
                 %(apply)s
-                y[base+j]=value;
+                y[base+j]=out0_type(value);
             }
         } else {
             // Scale exceptional rows before the reductions: even opposite
             // finite FP32 extremes must normalize without overflowing. This
             // uses FP32 throughout and needs no backend FP64 capability.
             float magnitude=0.f;
-            for(long long j=tid;j<width;j+=256)magnitude=fmaxf(magnitude,fabsf(x[base+j]));
+            for(long long j=tid;j<width;j+=256)magnitude=fmaxf(magnitude,fabsf(float(x[base+j])));
             scratch[tid]=magnitude;__syncthreads();
             for(int s=128;s;s>>=1) {
                 if(tid<s)scratch[tid]=fmaxf(scratch[tid],scratch[tid+s]);
@@ -120,17 +123,17 @@ def _source(kind, extent, eps, scale, shift, act):
             }
             magnitude=scratch[0];__syncthreads();
             float sum=0.f;
-            for(long long j=tid;j<width;j+=256)sum+=x[base+j]/magnitude;
+            for(long long j=tid;j<width;j+=256)sum+=float(x[base+j])/magnitude;
             float m=hip_norm_sum(sum,scratch)/width,v=0.f;
             for(long long j=tid;j<width;j+=256) {
-                float d=x[base+j]/magnitude-m;v+=d*d;
+                float d=float(x[base+j])/magnitude-m;v+=d*d;
             }
             float inverse=rsqrtf(hip_norm_sum(v,scratch)/width+(%(eps).9ef/magnitude)/magnitude);
             for(long long j=tid;j<width;j+=256) {
-                float value=(x[base+j]/magnitude-m)*inverse;
+                float value=(float(x[base+j])/magnitude-m)*inverse;
                 %(affine)s
                 %(apply)s
-                y[base+j]=value;
+                y[base+j]=out0_type(value);
             }
         }
     }

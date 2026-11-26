@@ -15,6 +15,8 @@ inline void check_hipblas(hipblasStatus_t status, const char* operation) {
 }
 
 hipblasHandle_t hipblas_bind_stream(int device);
+void hipblas_matmul_math(hipblasHandle_t handle, bool float32);
+void hipblas_require_fp64(int device);
 void hipblas_shutdown() noexcept;
 
 } // namespace jittor

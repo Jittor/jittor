@@ -102,12 +102,13 @@ def test_attention_products_dispatch_to_hipblas(length):
     assert_device(output, (q @ k.swapaxes(-1, -2)) @ v, "float32")
 
 
-@pytest.mark.parametrize("policy", ["prefer16", "prefer_bfloat16"])
-def test_half_amp_does_not_select_a_float32_output_provider(policy):
+@pytest.mark.parametrize("policy,dtype", [("prefer16", "float16"), ("prefer_bfloat16", "bfloat16")])
+def test_half_amp_uses_a_low_precision_output_provider(policy, dtype):
     x = jt.array(np.ones((2, 3, 4), dtype="float32"))
     y = jt.array(np.ones((2, 4, 5), dtype="float32"))
     with jt.flag_scope(amp_reg=getattr(jt.amp_flags, policy)):
-        assert select_kernel("batched_matmul", x, y, False, False) is None
+        assert select_kernel("batched_matmul", x, y, False, False) is not None
+        assert_device(jt.matmul(x, y), np.full((2, 3, 5), 4), dtype)
 
 
 def test_shared_operand_accumulates_both_gradient_contributions():

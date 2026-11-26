@@ -75,11 +75,16 @@ def test_empty_rows_or_inner_dimension(shape):
         np.testing.assert_array_equal(y.numpy(), raw @ weight)
 
 
-def test_higher_rank_amp_is_declined():
+@pytest.mark.parametrize("policy,dtype", [("prefer16", "float16"), ("prefer_bfloat16", "bfloat16")])
+def test_higher_rank_amp_uses_low_precision_gemm(policy, dtype):
     with jt.no_grad():
         a, b = jt.ones((2, 3, 4)), jt.ones((4, 5))
-        with jt.flag_scope(amp_reg=18):
-            assert select_kernel('matmul', a, b, False, False) is None
+        with jt.flag_scope(amp_reg=getattr(jt.amp_flags, policy)):
+            assert select_kernel('matmul', a, b, False, False) is not None
+            out = jt.matmul(a, b)
+            out.sync()
+            assert out.location() == "device" and str(out.dtype) == dtype
+            np.testing.assert_array_equal(out.numpy(), np.full((2, 3, 5), 4))
 
 @pytest.mark.parametrize("shape", [(5, 7), (2, 3, 7)])
 def test_rocm_linear_bias_inference_and_gradient_boundary(shape):

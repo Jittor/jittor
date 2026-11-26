@@ -99,7 +99,14 @@ def test_hipblas_transposes_and_gradients(dtype, trans_a, trans_b):
     b = (np.arange(20).reshape(4, 5) / 10).astype(dtype)
     a_input, b_input = (a.T.copy() if trans_a else a), (b.T.copy() if trans_b else b)
     x, y = jt.array(a_input).cast(dtype), jt.array(b_input).cast(dtype)
-    product = get_library_ops("hipblas").hipblas_matmul(x, y, trans_a, trans_b)
+    try:
+        product = get_library_ops("hipblas").hipblas_matmul(x, y, trans_a, trans_b)
+    except jt.JittorError as error:
+        if dtype != "float64" or "ROCm device does not support true float64 computation" not in str(error):
+            raise
+        # Devices that report no double-precision arithmetic must reject the
+        # request rather than return a single-precision result in FP64 storage.
+        return
     dx, dy = jt.grad(product.sum(), [x, y])
     da, db = np.ones((3, 5), dtype=dtype) @ b.T, a.T @ np.ones((3, 5), dtype=dtype)
     assert_device_value(product, a @ b, rtol=1e-5, atol=1e-6)
@@ -252,3 +259,48 @@ def test_empty_random_and_linear_initialization():
         jt.sync_all(True)
         assert all(parameter.location() == "device" for parameter in parameters)
     assert losses[-1] < losses[0]
+
+
+@pytest.mark.parametrize("dtype", ["float16", "bfloat16"])
+def test_low_precision_gemm_linear_batched_and_gradients(dtype):
+    from jittor._runtime.dispatch import select_kernel
+    rng = np.random.RandomState(178)
+    a = jt.array(rng.normal(size=(2, 5, 8)).astype("float32")).cast(dtype)
+    b = jt.array(rng.normal(size=(8, 7)).astype("float32")).cast(dtype)
+    w = jt.array(rng.normal(size=(2, 8, 7)).astype("float32")).cast(dtype)
+    ah, bh, wh = (v.numpy().astype("float32") for v in (a, b, w))
+    assert select_kernel("matmul", a, b, False, False) is not None
+    assert select_kernel("batched_matmul", a, w, False, False) is not None
+    product = jt.matmul(a, b)
+    batched = jt.matmul(a, w)
+    da, db = jt.grad(product.sum(), [a, b])
+    expected_da = np.ones((2, 5, 7), dtype="float32") @ bh.T
+    expected_db = ah.reshape(-1, 8).T @ np.ones((10, 7), dtype="float32")
+    tol = 0.008 if dtype == "bfloat16" else 0.002
+    for result, expected in ((product, ah @ bh), (batched, ah @ wh),
+                             (da, expected_da), (db, expected_db)):
+        assert str(result.dtype) == dtype
+        assert_device_value(result, expected, rtol=tol, atol=tol)
+    elementwise = jt.nn.relu(a + a)
+    assert_device_value(elementwise, np.maximum(2*ah, 0), rtol=tol, atol=tol)
+
+
+def test_native_int8_gemm_uses_int32_accumulation():
+    from jittor._runtime.dispatch import select_kernel
+    rng = np.random.RandomState(179)
+    a = rng.randint(-13, 14, size=(19, 32)).astype("int8")
+    b = rng.randint(-13, 14, size=(32, 23)).astype("int8")
+    x, y = jt.array(a), jt.array(b)
+    provider = select_kernel("int8_matmul", x, y, False, False)
+    assert provider is not None
+    out = provider(x, y, False, False)
+    assert str(out.dtype) == "int32"
+    assert_device_value(out, a.astype("int32") @ b.astype("int32"), rtol=0, atol=0)
+
+
+def test_bfloat16_amp_reduction_atomic_add():
+    a = jt.ones((2, 8, 64, 17), dtype="float32")
+    b = jt.ones_like(a)
+    with jt.flag_scope(amp_reg=jt.amp_flags.prefer_bfloat16 | jt.amp_flags.keep_reduce):
+        result = (a * b).sum(2)
+        assert_device_value(result, np.full((2, 8, 17), 64), rtol=0, atol=0)

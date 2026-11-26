@@ -9,8 +9,9 @@ namespace jittor {
 
 HipblasBatchedMatmulOp::HipblasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
     : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
-    USER_CHECK(a->dtype() == ns_float32 && b->dtype() == ns_float32)
-        << "hipBLAS batched matmul requires matching float32 inputs";
+    USER_CHECK(a->dtype() == b->dtype()
+               && (a->dtype() == ns_float32 || a->dtype() == ns_float16 || a->dtype() == ns_bfloat16))
+        << "hipBLAS batched matmul requires matching float32, float16 or bfloat16 inputs";
     set_flag(OpFlags::_cpu, 0);
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_manual_set_vnbb);
@@ -60,6 +61,7 @@ void HipblasBatchedMatmulOp::run() {
         return;
     }
     auto handle = hipblas_bind_stream(device);
+    hipblas_matmul_math(handle, a->dtype() == ns_float32);
     const auto left = trans_b ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     const auto right = trans_a ? HIPBLAS_OP_T : HIPBLAS_OP_N;
     const int64 stride_a = int64(layout.rows) * layout.inner;
@@ -67,11 +69,21 @@ void HipblasBatchedMatmulOp::run() {
     const int64 stride_c = int64(layout.rows) * layout.columns;
     // Row-major C=A*B is column-major C^T=B^T*A^T for every batch.
     const float alpha = 1, beta = 0;
-    check_hipblas(hipblasSgemmStridedBatched(handle, left, right,
-        layout.columns, layout.rows, layout.inner, &alpha,
-        b->ptr<float>(), layout.lda, stride_b,
-        a->ptr<float>(), layout.ldb, stride_a, &beta,
-        c->ptr<float>(), layout.ldc, stride_c, batch_count), "hipblasSgemmStridedBatched");
+    if (a->dtype() == ns_float32) {
+        check_hipblas(hipblasSgemmStridedBatched(handle, left, right,
+            layout.columns, layout.rows, layout.inner, &alpha,
+            b->ptr<float>(), layout.lda, stride_b,
+            a->ptr<float>(), layout.ldb, stride_a, &beta,
+            c->ptr<float>(), layout.ldc, stride_c, batch_count), "hipblasSgemmStridedBatched");
+    } else {
+        const auto type = a->dtype() == ns_float16 ? HIPBLAS_R_16F : HIPBLAS_R_16B;
+        check_hipblas(hipblasGemmStridedBatchedEx(handle, left, right,
+            layout.columns, layout.rows, layout.inner, &alpha,
+            b->mem_ptr, type, layout.lda, stride_b,
+            a->mem_ptr, type, layout.ldb, stride_a, &beta,
+            c->mem_ptr, type, layout.ldc, stride_c, batch_count,
+            HIPBLAS_R_32F, HIPBLAS_GEMM_DEFAULT), "hipblasGemmStridedBatchedEx half");
+    }
 }
 
 VarPtr HipblasBatchedMatmulOp::grad(Var*, Var* dout, Var*, int v_index) {

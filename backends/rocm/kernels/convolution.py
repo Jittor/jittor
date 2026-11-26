@@ -1,4 +1,4 @@
-"""FP32 ROCm convolution lowered to native hipBLAS GEMM."""
+"""ROCm convolution lowered to native hipBLAS GEMM."""
 
 import jittor as jt
 from jittor._core.dtypes import dtype_name
@@ -7,10 +7,11 @@ from jittor.nn.functional._amp import prefers_half
 
 def supported(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
               *, _depthwise_fast_path=True):
+    dtype = dtype_name(x.dtype)
     if (groups != 1 or x.ndim != 4 or weight.ndim != 4
-            or dtype_name(x.dtype) != 'float32'
-            or dtype_name(weight.dtype) != 'float32'
-            or (bias is not None and dtype_name(bias.dtype) != 'float32')
+            or dtype not in ('float32', 'float16', 'bfloat16')
+            or dtype_name(weight.dtype) != dtype
+            or (bias is not None and dtype_name(bias.dtype) != dtype)
             or not weight._storage_is_contiguous() or prefers_half()):
         return False
     from jittor.misc import _pair
@@ -32,7 +33,7 @@ def supported(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     # Inference can reuse a bounded im2col tile. The differentiable path
     # still requires the full columns tensor for its existing backward.
     from jittor._runtime.core_api import _output_requires_grad
-    return inner*4 <= workspace_limit and not _output_requires_grad(x, weight, bias)
+    return dtype == "float32" and inner*4 <= workspace_limit and not _output_requires_grad(x, weight, bias)
 
 
 
@@ -41,7 +42,7 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     from jittor.misc import _pair
     stride, padding, dilation = map(_pair, (stride, padding, dilation))
     from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-    if not _output_requires_grad(x, weight, bias):
+    if dtype_name(x.dtype) == "float32" and not _output_requires_grad(x, weight, bias):
         from jittor._runtime.backend_libraries import get_library_ops
         return _stop_grad_outputs(get_library_ops('hipblas').hipblas_conv_inference(
             x, weight, [] if bias is None else [bias], stride, padding, dilation))
