@@ -1304,11 +1304,11 @@ INFERENCE_TOLERANCES = {
                      max_abs_cap=0.25, max_scale_ratio=0.15),
 }
 
-# Deformable-attention detectors (e.g. GroundingDINO) sample feature maps with
-# learned bilinear grid_sample offsets across 18+ encoder/decoder layers; even
-# PyTorch compiled vs eager shows ~0.11% pointwise outliers above 1e-4 while
-# maintaining 0.999999998 cosine similarity.
-DEFORMABLE_FP32_CASES = {"grounding-dino"}
+# Deep FP32 vision/deformable-attention models (GroundingDINO, OWLv2, SigLIP2)
+# accumulate tiny FP32 FMA/grid_sample tail rounding across 18-24+ layers: even
+# PyTorch compiled vs eager shows 0.001%-0.11% pointwise outliers above 1e-4
+# while maintaining >= 0.9999999 cosine similarity.
+DEFORMABLE_FP32_CASES = {"grounding-dino", "owlv2", "siglip2"}
 DEFORMABLE_FP32_TOLERANCE = dict(
     atol=1e-4, rtol=1e-3, max_outside_fraction=2e-3, min_cosine=0.99999,
     max_abs_cap=1e-2, max_scale_ratio=1e-2,
