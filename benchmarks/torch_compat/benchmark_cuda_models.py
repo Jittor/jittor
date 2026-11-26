@@ -866,6 +866,8 @@ def run_stock(job, directory, torch, jt, np):
     warmups, index = warm_up(warmup_job, call, None if distributed else settled)
     capture_before = compile_report(torch, "jittor", workload) if jittor_compile else None
     outputs, measurements = timed_calls(directory, job, call, index)
+    if "native_compile" in job:
+        job["native_compile"].update(getattr(workload, "compile_settings", {}))
     residency = cuda_residency(torch, jt, outputs[0])
     execution = job["mode"]
     replay = {}

@@ -239,7 +239,7 @@ class Qwen3Decode(_Qwen3):
     default_dtype = "bfloat16"
     description = "Qwen3-0.6B greedy generate() with KV cache, fixed length"
     iterations = (2, 5)
-    compile_what = None     # the dynamic cache grows every token
+    compile_what = None     # dynamic decode uses the native compiler only
     cache = None
 
     def setup(self):
@@ -259,6 +259,13 @@ class Qwen3Decode(_Qwen3):
             ids = self.integers(config.vocab_size, (self.batch, self.prompt))
             self.pool.append((ids, self.torch.ones_like(ids)))
         self.items = self.batch * self.new_tokens
+
+    def compile(self, mode):
+        # The growing KV cache carries tensors across compiled forward calls.
+        # Use Inductor with CUDA graphs disabled so the cache owns its storage.
+        self.model.forward = self.compiled = self.torch.compile(
+            self.model.forward, dynamic=True, options={"triton.cudagraphs": False})
+        self.compile_settings = {"mode": "default", "dynamic": True, "cudagraphs": False}
 
     def _generate(self, input_ids, attention_mask, **options):
         extra = {} if self.cache is None else {"cache_implementation": self.cache}

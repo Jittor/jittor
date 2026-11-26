@@ -107,26 +107,16 @@ channels_last_activations = True
 
 _HALF = ("float16", "bfloat16")
 
-#: Whether a convolution that records a gradient runs channels-last where
-#: that pays, float32 included. cuDNN's tensor-core kernels compute in NHWC for
-#: training too: handed NCHW, every forward, data-gradient and filter-gradient
-#: call converts its operands on the way in and its result on the way out --
-#: 7.4 ms of a 78 ms ResNet-50 training step, whose convolutions ran in 41.3 ms
-#: NCHW against 37.1 NHWC. It only pays while what reads the result keeps the
-#: layout: a batch norm does (its NHWC kernels), a group norm, an
-#: interpolation or a reshape would convert it back, and a DDPM UNet trained
-#: 13% slower with every convolution channels-last. So a convolution whose
-#: input is NCHW hands out NCHW and offers the channels-last result
-#: (`offer_channels_last`) for a reader that can use it; one whose input is
-#: already channels-last stays channels-last. Gradients follow the same
-#: layout back (`TransposeOp::grad` keeps a view a view). Grouped convolutions
-#: stay NCHW: their channels-last kernels are the slow ones.
+#: Ungrouped training convolutions can keep a channels-last input's layout.
+#: With tensor-op math, they can also offer that layout to a consumer such as
+#: BatchNorm. For strict float32 cuDNN can select NCHW engines even when the
+#: descriptors say NHWC, especially for the gradients. Starting an NHWC
+#: chain from NCHW in that mode adds activation reorders inside cuDNN.
 channels_last_training = True
 
 
-def _training_channels_last(x, weight, bias, groups):
+def _training_channels_last(x, weight, bias, groups, dtype):
     """Whether a call that records a gradient may run channels-last."""
-    dtype = _jittor_dtype_name(x.dtype)
     return (channels_last_training and groups == 1
             and (dtype in _HALF or dtype == "float32")
             and not jt.flags.no_grad and _output_requires_grad(x, weight, bias))
@@ -158,8 +148,9 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
             y = y + bias_for_compute_dtype(y, bias)
         return channels_last_view(y)
 
-    training = _training_channels_last(x, weight, bias, groups)
-    if training or (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
+    dtype = _jittor_dtype_name(x.dtype)
+    training = _training_channels_last(x, weight, bias, groups, dtype)
+    if training or (channels_last_activations and dtype in _HALF
                     and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):
         source = channels_last_source(x)
         if source is None:
@@ -174,7 +165,8 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     y = cudnn.cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups, "abcd", layout)
     if bias is not None:
         y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
-    if training:
+    if training and (dtype in _HALF or not jt.compiler.is_cuda
+                     or jt.core.float32_precision_state()[1] != "highest"):
         offer_channels_last(y, lambda: channels_last(None))
     return y
 
