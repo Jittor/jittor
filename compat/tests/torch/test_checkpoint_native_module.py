@@ -77,5 +77,31 @@ class TestCheckpointNativeModule:
         assert result.missing_keys == ["bias"]
         np.testing.assert_array_equal(model.weight.numpy(), [8., 9.])
 
+    def test_native_root_with_versioned_child_copies_its_own_parameters(self, device):
+        class Versioned(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.weight = torch.nn.Parameter(torch.zeros(1, device=device))
+
+            def _load_from_state_dict(self, state, prefix, *args):
+                state[prefix + "weight"] = state.pop(prefix + "legacy")
+                super()._load_from_state_dict(state, prefix, *args)
+
+        model = _NativeModel()
+        model.child = Versioned()
+        alias = model.weight.detach()
+        pointer = model.weight.device_raw_ptr
+        state = {
+            "weight": torch.tensor([4., 5.], device=device),
+            "bias": torch.tensor([6.], device=device),
+            "child.legacy": torch.tensor([7.], device=device),
+        }
+        result = set_model_state_dict(model, state)
+        assert not result.missing_keys and not result.unexpected_keys
+        assert model.weight.device_raw_ptr == pointer
+        np.testing.assert_array_equal(alias.numpy(), [4., 5.])
+        np.testing.assert_array_equal(model.child.weight.numpy(), [7.])
+        assert "child.legacy" in state
+
 
 instantiate_device_type_tests(TestCheckpointNativeModule, globals(), only_for=("cpu", "cuda"))
