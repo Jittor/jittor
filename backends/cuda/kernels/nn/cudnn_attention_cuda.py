@@ -620,8 +620,14 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *, check_a
                 if not tracing:
                     _MASK_TERMS.append((key, attn_mask if base < 0 else None, None, None))
                 return None, None
-        # cuDNN does not define an all -inf row. Give it valid probabilities,
-        # then zero that row outside the custom function (including its gradient).
+        # cuDNN does not define an all -inf row, and cuDNN 9.10 BF16/FP16 SDPA
+        # additive bias produces NaNs on -inf entries (e.g. captured boolean
+        # causal masks where causal_mask_rewrite is skipped). Replace -inf with
+        # finite -1e9f after computing `live`, so masked keys still get exact
+        # zero softmax weight (exp(-1e9) == 0.0) without NaN, and zero all-masked
+        # rows outside the custom function.
+        neg_inf = jt.isinf(bias) & (bias < 0)
+        bias = jt.ternary(neg_inf, jt.array(-1e9).float32().broadcast(bias.shape), bias)
         bias = jt.ternary(live, bias, jt.zeros_like(bias))
     if not tracing:
         _MASK_TERMS.append((key, attn_mask if base < 0 else None, bias, live))
