@@ -77,6 +77,31 @@ class TestModelBenchmarkContract(unittest.TestCase):
                 with self.subTest(case=case):
                     self.assertEqual(cases.get(case), (family, model, ranks, batch))
 
+    def test_cuda_stock_dual_presets_preserve_the_single_gpu_group(self):
+        flags = ["bench", "--torch-python", "reference-python"]
+        with mock.patch.object(sys, "argv", flags + ["--case", "stock"]):
+            single = cuda_runner.parse_args()
+        with mock.patch.object(sys, "argv", flags + ["--case", "stock-dual"]):
+            dual = cuda_runner.parse_args()
+        self.assertEqual(len(single.case), 14)
+        self.assertEqual(len(dual.case), 6)
+        for name in dual.case:
+            job = cuda_runner.make_job(dual, name, "torch", 1, "compiled")
+            self.assertIn(job["stock_workload"], single.case)
+            self.assertEqual(job["ranks"], 2)
+            self.assertEqual(job["mode"], "reduce-overhead")
+
+    def test_cuda_stock_dual_timing_uses_the_slowest_rank_per_step(self):
+        common = dict(execution="eager", peak_memory_bytes=1, peak_reserved_bytes=2)
+        first = dict(common, warmups=[dict(total_s=0.1)],
+                     measurements=[dict(total_s=0.01), dict(total_s=0.04)])
+        second = dict(common, warmups=[dict(total_s=0.2)],
+                      measurements=[dict(total_s=0.02), dict(total_s=0.03)])
+        result = cuda_runner.aggregate_stock_training([first, second])
+        self.assertEqual(result["strategy"], "DDP")
+        self.assertEqual(result["compile_warmup_s"], 0.2)
+        self.assertEqual(result["median_s"], 0.03)
+
     def test_cuda_stock_inference_excludes_fast_output_mismatch(self):
         import numpy as np
 

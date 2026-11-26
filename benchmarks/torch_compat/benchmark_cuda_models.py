@@ -33,7 +33,8 @@ the measurement window. Use an isolated --cache-dir to reuse Jittor builds
 across serial benchmark invocations.
 
 --case stock selects the 14 existing Torch compatibility workloads, including
-Qwen3, Stable Diffusion, DDPM, ResNet, ViT and BERT. Stock and ecosystem
+Qwen3, Stable Diffusion, DDPM, ResNet, ViT and BERT. --case stock-dual selects
+the six two-GPU DDP training variants. Stock and ecosystem
 inference measure Jittor replay first and eager next where both are supported.
 The comparison uses the fastest result that passes the output checks.
 Deterministic stock inference checks every output over one input-pool cycle.
@@ -147,14 +148,21 @@ EAGER_TRAINING = {
 
 def parse_args():
     stock_cases = {case["name"]: case for case in list_workloads()}
-    groups = {"wan": list(WAN_CASES), "stock": list(stock_cases), "training": list(TRAINING_CASES)}
+    stock_single = list(stock_cases)
+    stock_dual = {
+        f"{name}-r2": dict(case, workload=name, ranks=2)
+        for name, case in stock_cases.items() if case["mode"] == "train"
+    }
+    stock_cases.update(stock_dual)
+    groups = {"wan": list(WAN_CASES), "stock": stock_single, "stock-dual": list(stock_dual),
+              "training": list(TRAINING_CASES)}
     groups["ecosystem"] = list(MODEL_CASES)
-    groups["all"] = groups["wan"] + groups["stock"] + groups["training"] + groups["ecosystem"]
+    groups["all"] = list(itertools.chain.from_iterable(groups.values()))
     for name, case in MODEL_CASES.items():
         groups.setdefault(case.group, []).append(name)
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--case", action="append", metavar="NAME",
-                        help="a preset or group, including wan, stock, training, ecosystem, all")
+                        help="a preset or group, including wan, stock, stock-dual, training, ecosystem, all")
     parser.add_argument("--list", action="store_true", help="list presets without loading model dependencies")
     parser.add_argument("--checkpoint", type=Path, help="local TI2V-5B Diffusers snapshot")
     for variant in ("t2v", "i2v"):
@@ -200,7 +208,7 @@ def parse_args():
     parser.add_argument("--cache-dir", type=Path, help="isolated Jittor benchmark cache")
     args = parser.parse_args()
     if args.list:
-        for group in ("wan", "stock", "training"):
+        for group in ("wan", "stock", "stock-dual", "training"):
             for name in groups[group]:
                 print(f"{group:<9} {name}")
         for name, case in MODEL_CASES.items():
@@ -306,8 +314,11 @@ def make_job(args, name, runtime, round_id, mode=None):
                     dtype=case.dtype, shape=list(case.shape), warmup=args.warmup or 6, samples=args.samples or 12,
                     seed=args.seed if args.seed is not None else 0)
     if name in args.stock_cases:
+        stock = args.stock_cases[name]
+        ranks = stock.get("ranks", 1)
         warmup, samples = (1, 2) if args.stock_size == "tiny" else (6, 12)
-        return dict(job, kind="stock", mode=inference_mode, size=args.stock_size,
+        return dict(job, kind="stock", stock_workload=stock.get("workload", name), ranks=ranks,
+                    mode=inference_mode, size=args.stock_size,
                     seed=args.seed if args.seed is not None else 0,
                     warmup=args.warmup or warmup, samples=args.samples or samples)
     shape, warmup, samples = WAN_CASES[name]
@@ -459,7 +470,7 @@ def run_one(args, output, job, budget):
             write_json(spec, job)
             command = [python, "-u", str(Path(__file__).resolve()), "--worker", str(spec)]
             env = worker_env(args, output, runtime)
-            if job["kind"] == "training":
+            if job["kind"] == "training" or ranks > 1:
                 env = rank_env(env, job, directory, rank, port)
             with (workdir / "worker.log").open("w") as log:
                 processes.append(subprocess.Popen(command, env=env, stdout=log, stderr=subprocess.STDOUT,
@@ -471,7 +482,12 @@ def run_one(args, output, job, budget):
     result = job.copy()
     if status == "ok" and all(path.is_file() for path in paths):
         records = [json.loads(path.read_text()) for path in paths]
-        result = aggregate_training(job, records) if job["kind"] == "training" else records[0]
+        if job["kind"] == "training":
+            result = aggregate_training(job, records)
+        elif ranks > 1:
+            result = aggregate_stock_training(records)
+        else:
+            result = records[0]
         elapsed = sum(sample["total_s"] for sample in result["measurements"])
         if elapsed > budget:
             status = "measurement-timeout"
@@ -511,6 +527,24 @@ def aggregate_training(job, records):
                 peak_reserved_bytes=peak_reserved or None,
                 peak_vram_gb=round(peak_alloc / (1024 ** 3), 4) if peak_alloc else None,
                 strategy=strategy, dtype=dtype,
+                rank_results=records)
+
+
+def aggregate_stock_training(records):
+    result = records[0].copy()
+    for key in ("warmups", "measurements"):
+        samples = [row[key] for row in records]
+        if len(set(map(len, samples))) != 1:
+            raise RuntimeError(f"Stock training ranks disagree on the number of {key}")
+        result[key] = [{"total_s": max(step["total_s"] for step in steps)} for steps in zip(*samples)]
+    peak_alloc = max(row["peak_memory_bytes"] for row in records)
+    modes = sorted({row["execution"] for row in records})
+    return dict(result, execution=" / ".join(modes), strategy="DDP",
+                median_s=median(step["total_s"] for step in result["measurements"]),
+                compile_warmup_s=sum(step["total_s"] for step in result["warmups"]),
+                first_call_s=result["warmups"][0]["total_s"],
+                peak_memory_bytes=peak_alloc, peak_vram_gb=round(peak_alloc / (1024 ** 3), 4),
+                peak_reserved_bytes=max(row["peak_reserved_bytes"] for row in records),
                 rank_results=records)
 
 
@@ -778,11 +812,23 @@ def run_stock(job, directory, torch, jt, np):
 
     settings = configure(torch, "cuda", False, False, job["runtime"])
     torch.manual_seed(job["seed"])
-    task = WORKLOADS[job["case"]]
+    task = WORKLOADS[job.get("stock_workload", job["case"])]
     workload = task(torch, "cuda", task.default_dtype, job["size"], seed=job["seed"])
+    distributed = job.get("ranks", 1) > 1
+    if distributed:
+        rank = int(os.environ["LOCAL_RANK"])
+        if rank:
+            workload.rng = np.random.default_rng(np.random.SeedSequence(job["seed"], spawn_key=(rank,)))
     sync = Synchronizer(torch, job["runtime"], "cuda")
     start = perf_counter()
     workload.setup()
+    if task.mode == "train" and task.stochastic:
+        from training_tools.model_profile import disable_stochastic_layers
+
+        disable_stochastic_layers(workload.model, torch)
+    if distributed:
+        workload.model = torch.nn.parallel.DistributedDataParallel(
+            workload.model, device_ids=[rank])
     jittor_compile = jt is not None and job["mode"] == "reduce-overhead"
     compile_requested = (job.get("torch_mode") == "compiled"
                          or (jittor_compile and task.compile_what is not None))
@@ -807,7 +853,8 @@ def run_stock(job, directory, torch, jt, np):
         return values, {"total_s": elapsed, "value": float(value)}
 
     warmup_job = dict(job, warmup=max(3, job["warmup"])) if compile_training else job
-    warmups, index = warm_up(warmup_job, call, settled)
+    # A rank cannot independently choose to do more gradient reductions.
+    warmups, index = warm_up(warmup_job, call, None if distributed else settled)
     capture_before = compile_report(torch, "jittor", workload) if jittor_compile else None
     outputs, measurements = timed_calls(directory, job, call, index)
     residency = cuda_residency(torch, jt, outputs[0])
@@ -840,7 +887,9 @@ def run_stock(job, directory, torch, jt, np):
     return dict(execution=execution, measured_replay=replay, replay_refused=refusal,
                 setup_s=setup_s, warmups=warmups, measurements=measurements,
                 config=workload.config(), dtype=task.default_dtype, observed_output=residency,
-                settings=settings, workload_mode=task.mode, stochastic=task.stochastic,
+                settings=settings, workload_mode=task.mode,
+                stochastic=task.stochastic and task.mode != "train",
+                stochastic_layers_disabled=task.stochastic and task.mode == "train",
                 checked_output_batches=checked_batches)
 
 
@@ -1083,6 +1132,13 @@ def run_worker(spec):
     job = json.loads(spec.read_text())
     directory = spec.parent
     torch, jt, guard = checked_runtime(job)
+    stock_distributed = job["kind"] == "stock" and job.get("ranks", 1) > 1
+    if stock_distributed:
+        torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+        if not torch.distributed.is_initialized():
+            torch.distributed.init_process_group("nccl")
+        if torch.distributed.get_world_size() != job["ranks"]:
+            raise RuntimeError("Stock training worker has the wrong distributed world size")
     torch.cuda.reset_peak_memory_stats()
     before_fallback = jt.core.backend_fallback_count() if jt is not None else None
     with guard:
@@ -1091,7 +1147,7 @@ def run_worker(spec):
         elif job["kind"] == "stock":
             from workloads import WORKLOADS
 
-            inference = WORKLOADS[job["case"]].mode == "infer"
+            inference = WORKLOADS[job.get("stock_workload", job["case"])].mode == "infer"
             grad_scope = torch.no_grad() if inference else nullcontext()
             replay_scope = jt.flag_scope(auto_graph_replay=0) if inference and jt is not None else nullcontext()
             with grad_scope, replay_scope:
@@ -1137,6 +1193,8 @@ def run_worker(spec):
                versions=packages,
                fallback_count=jt.core.backend_fallback_count() - before_fallback if jt is not None else None)
     write_json(directory / "result.json", job)
+    if stock_distributed:
+        torch.distributed.destroy_process_group()
 
 
 def compare_training(np, reference, candidate):
@@ -1200,6 +1258,18 @@ def compare_pair(reference, candidate):
     kind = reference["kind"]
     if kind == "training":
         return compare_training(np, reference, candidate)
+    if kind == "stock" and (reference.get("rank_results") or candidate.get("rank_results")):
+        left, right = reference.get("rank_results", ()), candidate.get("rank_results", ())
+        if len(left) != len(right):
+            return dict(parity=False, comparable=False, parity_error="Stock training rank counts differ")
+        checks = [compare_pair(a, b) for a, b in zip(left, right)]
+        errors = {f"rank{rank}.{name}": metrics for rank, check in enumerate(checks)
+                  for name, metrics in check.get("output_errors", {}).items()}
+        return dict(parity=all(check.get("parity") is True for check in checks),
+                    comparable=all(check.get("comparable") and check.get("parity") is True for check in checks),
+                    same_inputs=all(check.get("same_inputs") for check in checks),
+                    same_dependencies=all(check.get("same_dependencies") for check in checks),
+                    output_errors=errors, rank_checks=checks)
     dependencies_match = all(reference["versions"].get(key) == candidate["versions"].get(key)
                              for key in ("diffusers", "transformers"))
     if kind == "model":
@@ -1243,7 +1313,8 @@ def compare_pair(reference, candidate):
                     same_dependencies=dependencies_match, parity_tier=tier,
                     atol=tol["atol"], rtol=tol["rtol"],
                     max_outside_fraction=tol["max_outside_fraction"], min_cosine=tol["min_cosine"])
-    inputs_match = reference["config"] == candidate["config"] and reference["seed"] == candidate["seed"]
+    inputs_match = (reference["config"] == candidate["config"] and reference["seed"] == candidate["seed"]
+                    and reference.get("stochastic_layers_disabled") == candidate.get("stochastic_layers_disabled"))
     result = dict(same_dependencies=dependencies_match, same_inputs=inputs_match,
                   comparable=dependencies_match and inputs_match)
     if reference.get("checked_output_batches") and candidate.get("checked_output_batches"):
