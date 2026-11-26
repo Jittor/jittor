@@ -174,6 +174,34 @@ def test_contiguous_storage_and_gradient_cuda():
 
 
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("row_width,start,width", [
+    (128, 8, 96),  # Aligned nonzero storage offset and aligned row strides.
+    (128, 1, 96),  # Misaligned storage offset.
+    (100, 0, 96),  # Consecutive rows do not all begin at vector boundaries.
+    (128, 0, 95),  # Partial vector at the end of every row.
+])
+def test_contiguous_packs_permuted_rows(device, row_width, start, width):
+    if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("No CUDA found")
+    shape = (1, 2, 3, 3, 2, row_width)
+    source_np = (np.arange(np.prod(shape)) % 127).astype(np.float16).reshape(shape)
+    with jt.flag_scope(use_cuda=int(device == "cuda"), auto_graph_replay=0), forbid_backend_fallbacks():
+        source = torch.tensor(source_np, device=device, requires_grad=True)
+        view = source[..., start:start + width].permute(0, 1, 3, 2, 4, 5)
+        assert not view.is_contiguous()
+        packed = view.contiguous()
+        packed.sync()
+        assert packed.is_contiguous()
+        assert packed.location() == ("cpu" if device == "cpu" else "device")
+        expected = source_np[..., start:start + width].transpose(0, 1, 3, 2, 4, 5)
+        np.testing.assert_array_equal(packed.detach().cpu().numpy(), expected)
+        gradient, = torch.autograd.grad(packed.float().sum(), source)
+        expected_gradient = np.zeros_like(source_np)
+        expected_gradient[..., start:start + width] = 1
+        np.testing.assert_array_equal(gradient.detach().cpu().numpy(), expected_gradient)
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_contiguous_restores_context_and_respects_native_override(device, monkeypatch):
     if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
         pytest.skip("No CUDA found")
