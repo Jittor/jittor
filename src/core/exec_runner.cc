@@ -434,7 +434,11 @@ struct ComputeHandoffScope {
     const uint64& devices;
     ~ComputeHandoffScope() {
         try {
-            backend_compute_stream_release(devices);
+            // Never record the global handoff event while the compute stream is
+            // under CUDA Graph capture: a capture-local event cannot be waited
+            // on by another thread's uncaptured stream (`cudaErrorInvalidValue`).
+            if (!graph_capture_active())
+                backend_compute_stream_release(devices);
         } catch (const std::exception& error) {
             LOGe << "Compute handoff failed:" << error.what();
         }

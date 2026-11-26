@@ -41,6 +41,8 @@ JT_MACRO = re.compile(r"\bJT_[A-Za-z0-9_]+\b")
 BUILD_PROVIDED = frozenset((
     "JT_BLAS_SGEMM", "JT_BLAS_DGEMM", "JT_BLAS_CGEMM", "JT_BLAS_ZGEMM",
     "JT_BLAS_INT", "JT_BLAS_SET_THREADS", "JT_BLAS_GET_THREADS",
+    # node_pool.h derives these from the compiler sanitizer and debug mode.
+    "JT_NODE_POOL_ASAN", "JT_NODE_POOL_ENABLED",
 ))
 
 

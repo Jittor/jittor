@@ -136,7 +136,7 @@ struct CommonOpType : OpByType {
             {"atanh", "(($1) std::atanh(($2)))"},
             {"sigmoid", "(($1)(($1)(1)/(($1)(1)+std::exp(-($1)($2)))))"},
             {"relu", "((($1)($2)>($1)(0.0f))?($1)($2):($1)(0.0f))"},
-            {"erf", "(($1) std::erf(($2)))"},
+            {"erf", "@if(@strcmp($1,float32)==0,jittor::_fast_erff((float)($2)),(($1) std::erf(($2))))"},
             {"erfinv", "(jittor::_erfinv($2))"},
             {"cast", "(($1)($2))"},
             {"pow", "std::pow(($2),($4))"},
@@ -250,6 +250,9 @@ struct CommonOpType : OpByType {
         if (src.find("jittor::_fp_is") != string::npos &&
             src.find("type/fp_class_compute.h") == string::npos)
             includes += "#include \"type/fp_class_compute.h\"\n";
+        if (src.find("jittor::_fast_erff") != string::npos &&
+            src.find("type/cpu_math.h") == string::npos)
+            includes += "#include \"type/cpu_math.h\"\n";
         if (includes.empty()) return;
         int i = src.rfind("#include");
         if (i<0) i=0;

@@ -678,11 +678,14 @@ bool try_stage_cuda_step_inputs(const vector<VarHolder*>& targets,
         held_targets.emplace_back(destinations[i]);
         held_sources.emplace_back(sources[i]->var);
     }
+    backend_compute_stream_acquire();
     for (size_t i = 0; i < targets.size(); ++i) {
         targets[i]->record_inplace_write();
         backend_copy(held_targets[i]->mem_ptr, device, held_sources[i]->mem_ptr,
                      device, held_targets[i]->size, true);
     }
+    if (device.index >= 0 && device.index < 64)
+        backend_compute_stream_release(1ull << device.index);
     return true;
 }
 
