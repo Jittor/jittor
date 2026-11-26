@@ -137,17 +137,25 @@ void RemoveIntermediatePass::run() {
     if (forward_stored_outputs(op, pm, ir))
         unrestrict(ir);
     unordered_set<string> names;
+    unordered_map<string, string> stored_types;
     for (auto& vi : op->vars) {
         // intermediate
         if (vi.type != 1) continue;
         Op* op = vi.var->input();
         if (!pm->oc->op_exist(op)) continue;
-        for (uint i=0; i<op->outputs().size(); i++)
-            if (op->output(i)==vi.var)
-                names.insert(pm->oc->get_name_by_op_output(op, i));
+        for (uint i=0; i<op->outputs().size(); i++) {
+            if (op->output(i)!=vi.var) continue;
+            string name = pm->oc->get_name_by_op_output(op, i);
+            names.insert(name);
+            // A half result must round even when its next consumer reads it
+            // from a register instead of a half-precision allocation.
+            auto dtype = vi.var->dtype();
+            if (dtype == ns_float16 || dtype == ns_bfloat16)
+                stored_types.emplace(name, dtype.to_cstring());
+        }
     }
     LOGvvvv << "Remove intermediate:" << names;
-    ir->remove_intermediate(names);
+    ir->remove_intermediate(names, stored_types);
     ir->remove_all_unused();
     ir->solve_conflict_define();
 

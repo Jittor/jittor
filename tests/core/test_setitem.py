@@ -37,14 +37,17 @@ class TestSetitem(unittest.TestCase):
         data1.data[0,0] = 1
         assert arr1[3,0,0] == 1
 
-        arr21 = jt.ones((2,2))
-        arr22 = jt.ones((2,2)) * 2
-        arr2 = jt.concat([arr21, arr22], dim=0)
-        arr2.sync()
-        arr21.data[0,0] = 3
-        arr22.data[0,0] = 4
-        assert arr2[0,0] == 3
-        assert arr2[2,0] == 4
+    def test_concat_with_materialized_inputs(self):
+        a = jt.ones((2, 2))
+        b = jt.ones((2, 2)) * 2
+        # Concat can compute a pending input straight into its output. Use
+        # inputs that already have storage to test copying past that fast path.
+        jt.sync([a, b])
+        joined = jt.concat([a, b], dim=0)
+        joined.sync()
+        a.data[0, 0] = 3
+        b.data[0, 0] = 4
+        np.testing.assert_array_equal(joined.numpy(), [[1, 1], [1, 1], [2, 2], [2, 2]])
 
     def test_getitem(self):
         # test for different slice type
