@@ -1,56 +1,40 @@
-"""Dense rotary embedding compatible with ``flash_attn.ops.triton.rotary``."""
+"""Rotary application helper matching flash_attn.ops.triton.rotary.apply_rotary."""
+from __future__ import annotations
 
 import torch
 
 
-def apply_rotary(
-    x,
-    cos,
-    sin,
-    seqlen_offsets=0,
-    cu_seqlens=None,
-    max_seqlen=None,
-    interleaved=False,
-    inplace=False,
-    conjugate=False,
-):
-    if cu_seqlens is not None or max_seqlen is not None:
-        raise NotImplementedError("Jittor flash-attn rotary does not support packed sequences")
-    if not isinstance(seqlen_offsets, int) or seqlen_offsets != 0:
-        raise NotImplementedError("Jittor flash-attn rotary requires zero sequence offsets")
+def apply_rotary(x, cos, sin, seqlen_offsets=0, cu_seqlens=None, max_seqlen=None,
+                 interleaved=False, inplace=False, conjugate=False):
+    """Apply rotary position embeddings using public torch tensor operations."""
     rotary_dim = int(cos.shape[-1]) * 2
-    if rotary_dim > int(x.shape[-1]):
-        raise ValueError("rotary table is wider than the input head dimension")
-
-    cos_value = cos
-    sin_value = -sin if conjugate else sin
-    while cos_value.ndim < x.ndim:
-        axis = -2 if cos_value.ndim == x.ndim - 1 else 0
-        cos_value = cos_value.unsqueeze(axis)
-        sin_value = sin_value.unsqueeze(axis)
-    cos_value = cos_value.to(x.dtype)
-    sin_value = sin_value.to(x.dtype)
-
-    rotated_input = x[..., :rotary_dim]
+    x_rot = x[..., :rotary_dim]
+    x_pass = x[..., rotary_dim:]
+    seq_dim = -3 if x.ndim >= 4 else -2
+    seqlen = int(x.shape[seq_dim])
+    offset = int(seqlen_offsets) if isinstance(seqlen_offsets, int) else 0
+    cos_slice = cos[offset:offset + seqlen].to(device=x.device, dtype=x.dtype)
+    sin_slice = sin[offset:offset + seqlen].to(device=x.device, dtype=x.dtype)
+    if conjugate:
+        sin_slice = -sin_slice
+    if x.ndim == 4:
+        cos_slice = cos_slice.unsqueeze(0).unsqueeze(2)
+        sin_slice = sin_slice.unsqueeze(0).unsqueeze(2)
+    elif x.ndim == 3:
+        cos_slice = cos_slice.unsqueeze(1)
+        sin_slice = sin_slice.unsqueeze(1)
     if interleaved:
-        first = rotated_input[..., ::2]
-        second = rotated_input[..., 1::2]
-        rotated = torch.stack(
-            (first * cos_value - second * sin_value, second * cos_value + first * sin_value),
-            dim=-1,
-        ).flatten(-2)
+        x1 = x_rot[..., 0::2]
+        x2 = x_rot[..., 1::2]
+        o1 = x1 * cos_slice - x2 * sin_slice
+        o2 = x1 * sin_slice + x2 * cos_slice
+        out_rot = torch.stack((o1, o2), dim=-1).flatten(-2)
     else:
-        first, second = torch.chunk(rotated_input, 2, dim=-1)
-        rotated = torch.cat(
-            (first * cos_value - second * sin_value, second * cos_value + first * sin_value),
-            dim=-1,
-        )
-    if rotary_dim < int(x.shape[-1]):
-        rotated = torch.cat((rotated, x[..., rotary_dim:]), dim=-1)
-    if inplace:
-        x.copy_(rotated)
-        return x
-    return rotated
+        half = rotary_dim // 2
+        x1 = x_rot[..., :half]
+        x2 = x_rot[..., half:]
+        out_rot = torch.cat((x1 * cos_slice - x2 * sin_slice, x1 * sin_slice + x2 * cos_slice), dim=-1)
+    return torch.cat((out_rot, x_pass), dim=-1) if x_pass.shape[-1] > 0 else out_rot
 
 
 __all__ = ["apply_rotary"]
