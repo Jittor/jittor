@@ -983,7 +983,10 @@ class StepCapture:
             jt.flags.keep_graph = before
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
+        rank_before = jt.flags.auto_compile_shapes_rank
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         handle = 0
         try:
             with _pool_scope(self._pool, allocate=True):
@@ -1006,6 +1009,7 @@ class StepCapture:
                 _core.graph_release(handle)
             return
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         if not handle:
             refusal = _core.graph_capture_refusal()
@@ -1140,9 +1144,15 @@ class StepCapture:
                 self.invalidate()
                 raise RuntimeError("a replay hook changed the dynamic prefix; "
                                    "the training step was not launched")
-            with _pool_allocations(self._pool):
-                jt.sync(cap.roots, False, False)
-                self._write_back(cap)
+            rank_before = jt.flags.auto_compile_shapes_rank
+            if rank_before > 4:
+                jt.flags.auto_compile_shapes_rank = 4
+            try:
+                with _pool_allocations(self._pool):
+                    jt.sync(cap.roots, False, False)
+                    self._write_back(cap)
+            finally:
+                jt.flags.auto_compile_shapes_rank = rank_before
             return self._results(cap, cap.outputs, (args, kwargs))
         finally:
             jt.flags.keep_graph = before

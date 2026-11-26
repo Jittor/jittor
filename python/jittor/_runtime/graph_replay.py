@@ -797,6 +797,7 @@ class GraphReplay:
             return False
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
+        rank_before = jt.flags.auto_compile_shapes_rank
         # 2, as for a replay: an intermediate's memory goes back after its
         # last use. While recording, the pools hold such a free for the
         # recording and hand the block to a later allocation of the same
@@ -804,6 +805,8 @@ class GraphReplay:
         # PyTorch's private graph pool does -- rather than every buffer it
         # touches: an SD1.5 UNet step held 4.2 GB that way against 1.9 GB.
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         handle = 0
         try:
             # Drain first: the recording must contain the step, not the
@@ -827,6 +830,7 @@ class GraphReplay:
                 _core.graph_release(handle)
             return False
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         if not handle:
             refusal = _core.graph_capture_refusal()
@@ -925,7 +929,10 @@ class GraphReplay:
             self.stats["graph"] += 1
             return _rebuild(cap.template, outs)
         before = jt.flags.keep_graph
+        rank_before = jt.flags.auto_compile_shapes_rank
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         try:
             # Syncing the captured outputs is what re-runs the graph, once
             # for all of them; the copies build no op, so it does not grow.
@@ -933,6 +940,7 @@ class GraphReplay:
             for out, src in zip(outs, cap.outputs):
                 out._copy_into(src, False)
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         return _rebuild(cap.template, outs)
 
