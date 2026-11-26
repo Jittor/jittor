@@ -604,6 +604,12 @@ class GraphReplay:
                     self._refused = "the module returned no Var"
                     return None
                 outputs[:] = [_dense(o) for o in outputs]
+                if _graph_has_nondeterministic_op():
+                    self._refused = "the graph draws random numbers, so a replay would repeat them"
+                    return None
+                private_inputs = _input_vars((private_args, private_kwargs), [])
+                guarded_leaves = [p for p in params if isinstance(p, jt.Var)]
+                _core._fold_graph_constants(outputs, private_inputs, guarded_leaves)
                 # These vars' own graph and nothing else. A plain `sync()` is a
                 # weak sync: it also sweeps in whatever other holder vars happen
                 # to be pending, and with `keep_graph` on those become part of
@@ -611,9 +617,6 @@ class GraphReplay:
                 # replay. Measured through nsys, a capture taken with unrelated
                 # work pending executed 219 kernels a call instead of 132.
                 jt.sync(outputs, False, False)
-            if _graph_has_nondeterministic_op():
-                self._refused = "the graph draws random numbers, so a replay would repeat them"
-                return None
             if any(o.is_finished for o in outputs):
                 # Nothing outside this method has touched the graph yet, so
                 # what can have finished it is the traced call reading a value
@@ -636,9 +639,10 @@ class GraphReplay:
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)
         cap.outputs = outputs
         cap.template = template
-        # Identity, not value: an optimizer step or a load rebinds the holder
-        # to a new Var, and the captured graph would keep reading the old one.
-        cap.params = [(p, p.var_ptr) for p in params]
+        # Identity and storage version: an optimizer step, load, or in-place
+        # mutation changes the holder's Var or storage version, which must
+        # invalidate both the captured graph and any folded constant leaves.
+        cap.params = [(p, p.var_ptr, p._saved_storage_version()) for p in params]
         cap.training = _training(self._module)
         cap.signature = _signature(args, kwargs)
         return cap
@@ -658,8 +662,8 @@ class GraphReplay:
             return "the inputs changed shape or dtype"
         if _training(self._module) != cap.training:
             return "the module changed training mode"
-        for holder, ptr in cap.params:
-            if holder.var_ptr != ptr:
+        for holder, ptr, ver in cap.params:
+            if holder.var_ptr != ptr or holder._saved_storage_version() != ver:
                 return "a parameter or buffer was replaced since the graph was captured"
         return None
 
@@ -1491,8 +1495,9 @@ def auto_replay_for(module, args, kw):
     # parameter/buffer holders too. A live capture already owns this list, so
     # steady calls need no second traversal of the module tree.
     capture = state.replay._capture if state.replay is not None else None
-    holders = (p for p, _ in capture.params) if capture is not None else _module_vars(module)
-    signature = (_signature(args, kw), tuple((id(p), p.var_ptr) for p in holders))
+    holders = (p for p, _, _ in capture.params) if capture is not None else _module_vars(module)
+    signature = (_signature(args, kw),
+                 tuple((id(p), p.var_ptr, p._saved_storage_version()) for p in holders))
     if signature != state.signature:
         state.signature = signature
         state.seen = 1

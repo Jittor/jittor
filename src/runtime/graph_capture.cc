@@ -626,6 +626,167 @@ void graph_wait() {
         backend_synchronize({accelerator_backend_id(), current_device()});
 }
 
+namespace {
+bool constant_fold_pure_op(Op* op) {
+    if (!op || op->outputs().size() != 1) return false;
+    if (dynamic_cast<TapeOp*>(op)) return false;
+    if (auto* copy = dynamic_cast<DeviceCopyOp*>(op))
+        return copy->device >= 0;
+    if (op->flag(OpFlags::_manual_device)) return false;
+    if (std::strcmp(op->name(), "setitem") == 0) {
+        // Pure functional slice-write into a freshly traced pending tensor
+        // (e.g. shifted-window attention masks built from zeros + slice assigns).
+        return op->inputs().size() > 0 && !op->inputs().front()->is_finished();
+    }
+    static const std::unordered_set<string> names{
+        "array", "unary", "binary", "ternary", "broadcast_to", "reduce",
+        "reindex", "reindex_reduce", "reshape", "transpose", "getitem",
+        "index", "concat", "contiguous", "clone", "copy", "fuse_transpose",
+        "where", "cub_where", "cub_sort", "cub_cumsum", "cublas_matmul"
+    };
+    return names.count(op->name());
+}
+
+bool constant_fold_trivial_op(Op* op) {
+    if (!op) return true;
+    const char* name = op->name();
+    return std::strcmp(name, "array") == 0
+        || std::strcmp(name, "broadcast_to") == 0
+        || op->is_storage_view()
+        || std::strcmp(name, "clone") == 0;
+}
+} // namespace
+
+int64 fold_graph_constants(const vector<VarHolder*>& outputs,
+                           const vector<VarHolder*>& inputs,
+                           const vector<VarHolder*>& guarded_leaves,
+                           int64 max_total_bytes,
+                           int64 max_var_bytes) {
+    ExecutorEntryScope entry;
+    if (outputs.empty() || max_total_bytes <= 0 || max_var_bytes <= 0) return 0;
+
+    std::unordered_set<Var*> output_set, input_set, guarded_set;
+    for (auto* h : outputs) if (h && h->var) output_set.insert(h->var);
+    for (auto* h : inputs) if (h && h->var) input_set.insert(h->var);
+    for (auto* h : guarded_leaves) if (h && h->var) guarded_set.insert(h->var);
+
+    // Collect reachable pending Vars in topological order (inputs before outputs)
+    // and track their in-subgraph consumers.
+    std::unordered_set<Var*> visited, visiting;
+    vector<Var*> topo;
+    std::unordered_map<Var*, vector<Op*>> consumers;
+    vector<std::pair<Var*, bool>> stack;
+    for (auto* h : outputs) {
+        if (h && h->var && !h->var->is_finished() && h->var->input())
+            stack.emplace_back(h->var, false);
+    }
+    while (!stack.empty()) {
+        auto frame = stack.back();
+        stack.pop_back();
+        Var* v = frame.first;
+        if (visited.count(v)) continue;
+        Op* op = v->input();
+        if (v->is_finished() || !op) {
+            visited.insert(v);
+            continue;
+        }
+        if (frame.second) {
+            visiting.erase(v);
+            visited.insert(v);
+            topo.push_back(v);
+            continue;
+        }
+        if (!visiting.insert(v).second) continue;
+        stack.emplace_back(v, true);
+        for (Var* in : op->inputs()) {
+            consumers[in].push_back(op);
+            if (!visited.count(in) && !in->is_finished() && in->input())
+                stack.emplace_back(in, false);
+        }
+    }
+    if (topo.empty()) return 0;
+
+    // Bottom-up purity and non-triviality analysis.
+    std::unordered_map<Var*, bool> is_const;
+    std::unordered_map<Var*, bool> has_work;
+    for (Var* v : topo) {
+        if (input_set.count(v)) {
+            is_const[v] = false;
+            has_work[v] = false;
+            continue;
+        }
+        Op* op = v->input();
+        bool pure = constant_fold_pure_op(op);
+        bool work = !constant_fold_trivial_op(op);
+        if (pure) {
+            for (Var* in : op->inputs()) {
+                if (input_set.count(in)) { pure = false; break; }
+                if (in->is_finished() || !in->input()) {
+                    // Only fold over leaves the caller guards against
+                    // replacement and in-place mutation.
+                    if (!guarded_set.count(in)) { pure = false; break; }
+                } else {
+                    auto it = is_const.find(in);
+                    if (it == is_const.end() || !it->second) { pure = false; break; }
+                    if (has_work[in]) work = true;
+                }
+            }
+        }
+        is_const[v] = pure;
+        has_work[v] = pure && work;
+    }
+
+    // Collect maximal constant frontier nodes directly consumed by dynamic ops.
+    // Unwrap outer broadcast_to wrappers so scalar/small broadcasts stay fused
+    // instead of materializing expanded buffers.
+    vector<Var*> frontier;
+    std::unordered_set<Var*> frontier_seen;
+    int64 total_bytes = 0;
+    for (Var* v : topo) {
+        if (!is_const[v] || output_set.count(v)) continue;
+        bool feeds_dynamic = false;
+        auto cit = consumers.find(v);
+        if (cit != consumers.end()) {
+            for (Op* c : cit->second) {
+                for (Var* out : c->outputs()) {
+                    auto oit = is_const.find(out);
+                    if (oit == is_const.end() || !oit->second || output_set.count(out)) {
+                        feeds_dynamic = true;
+                        break;
+                    }
+                }
+                if (feeds_dynamic) break;
+            }
+        }
+        if (!feeds_dynamic) continue;
+
+        Var* target = v;
+        while (target && !target->is_finished() && target->input()
+                && std::strcmp(target->input()->name(), "broadcast_to") == 0) {
+            if (target->input()->inputs().size() == 0) break;
+            target = target->input()->inputs().front();
+        }
+        if (!target || target->is_finished() || !target->input()) continue;
+        if (output_set.count(target) || !is_const[target] || !has_work[target]) continue;
+        if (std::strcmp(target->input()->name(), "array") == 0) continue;
+        if (target->num <= 0 || target->size <= 0 || target->size > max_var_bytes) continue;
+        if (total_bytes > max_total_bytes - target->size) continue;
+        if (frontier_seen.insert(target).second) {
+            frontier.push_back(target);
+            total_bytes += target->size;
+        }
+    }
+    if (frontier.empty()) return 0;
+
+    struct ClearKeepGraph {
+        int previous;
+        ClearKeepGraph() : previous(keep_graph) { keep_graph = 0; }
+        ~ClearKeepGraph() { keep_graph = previous; }
+    } clear_keep;
+    runtime_executor().run_sync(frontier, false, false);
+    return (int64)frontier.size();
+}
+
 void graph_release(int64 graph) {
     ExecutorEntryScope entry;
     backend_graph_release(reinterpret_cast<void*>(graph));

@@ -927,3 +927,63 @@ def test_graph_replay_specializes_4d_shapes_only_during_capture():
             assert int(jt.flags.auto_compile_shapes_rank) == 0
         finally:
             replay.invalidate()
+
+
+def test_graph_replay_folds_constant_parameter_and_mask_subgraphs():
+    class MaskedBias(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.table = jt.array(np.arange(16, dtype="float32").reshape(4, 4))
+            self.register_buffer("idx", jt.array(np.array([0, 2, 1, 3], dtype="int32")))
+
+        def execute(self, x):
+            bias = self.table[self.idx].transpose(1, 0).contiguous()
+            mask = jt.zeros((4, 4), dtype="float32")
+            mask[2:, :2] = -10.0
+            return x + bias + mask
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0), jt.no_grad():
+        model = MaskedBias()
+        x1 = jt.array(np.ones((4, 4), dtype="float32"))
+        x2 = jt.array(np.full((4, 4), 2.0, dtype="float32"))
+        expected1 = model(x1).numpy()
+        expected2 = model(x2).numpy()
+        replay = GraphReplay(model)
+        try:
+            np.testing.assert_allclose(replay(x1).numpy(), expected1, rtol=1e-5, atol=1e-5)
+            # Both constant branches (indexed/transposed bias and setitem mask)
+            # must be folded into finished leaves so replay skips them.
+            out = replay._capture.outputs[0]
+            assert not out.is_finished
+            # Output is (x + bias) + mask; mask (rhs of outer add) and bias (rhs of inner add)
+            # must both be finished constant leaves.
+            assert out._input(1).is_finished
+            assert out._input(0)._input(1).is_finished
+            # In-place mutation of a guarded parameter must invalidate the folded graph.
+            before_captures = replay.stats["captured"]
+            model.table._write_inplace(np.full((4, 4), 5.0, dtype="float32"))
+            expected3 = model(x2).numpy()
+            np.testing.assert_allclose(replay(x2).numpy(), expected3, rtol=1e-5, atol=1e-5)
+            assert replay.stats["captured"] > before_captures
+        finally:
+            replay.invalidate()
+
+
+def test_graph_replay_does_not_fold_unguarded_external_tensor():
+    external = jt.array(np.full((4, 4), 3.0, dtype="float32"))
+    external.sync(True, False)
+
+    class UsesExternal(nn.Module):
+        def execute(self, x):
+            return x + (external * 2.0)
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0), jt.no_grad():
+        model = UsesExternal()
+        x = jt.array(np.ones((4, 4), dtype="float32"))
+        replay = GraphReplay(model)
+        try:
+            np.testing.assert_allclose(replay(x).numpy(), np.full((4, 4), 7.0, dtype="float32"))
+            external._write_inplace(np.full((4, 4), 10.0, dtype="float32"))
+            np.testing.assert_allclose(replay(x).numpy(), np.full((4, 4), 21.0, dtype="float32"))
+        finally:
+            replay.invalidate()

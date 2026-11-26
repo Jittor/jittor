@@ -196,6 +196,19 @@ string graph_capture_refusal();
 bool graph_leaves_moved(int64 graph);
 
 /**
+    Fold pending input-independent subgraphs into finished leaves before
+    keeping a captured inference graph. Only finished leaves present in
+    `guarded_leaves` (which the caller guards for replacement and in-place
+    mutation) may feed a folded subgraph. Returns the number of folded vars.
+ */
+// @pyjt(_fold_graph_constants)
+int64 fold_graph_constants(const vector<VarHolder*>& outputs,
+                           const vector<VarHolder*>& inputs,
+                           const vector<VarHolder*>& guarded_leaves,
+                           int64 max_total_bytes=67108864,
+                           int64 max_var_bytes=16777216);
+
+/**
     Release a graph handle. Launching a released graph is undefined, so the
     owner must not keep using it.
  */

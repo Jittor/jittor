@@ -91,6 +91,10 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
     padding = widths
     left = [0] * (x.ndim - len(padding) // 2) + padding[::2][::-1]
     right = [0] * (x.ndim - len(padding) // 2) + padding[1::2][::-1]
+    if all(w == 0 for w in padding):
+        # Avoid emitting a scalar multi-axis ReindexOp with overflow checks
+        # for a no-op pad while preserving PyTorch's non-aliasing copy contract.
+        return jt.core.ops.copy(x)
 
     if mode == "constant":
         acl_pad = _backend_hooks.acl_constant_pad
