@@ -16,15 +16,16 @@ from .matmul_op import align_operands, mapped_matmul
 
 
 class BmmACL:
-    def __init__(self, trans_x2=False):
+    def __init__(self, trans_x2=False, trans_x1=False):
         self.trans_x2 = trans_x2
+        self.trans_x1 = trans_x1
 
     def __call__(self, x1, x2):
         return self.execute(x1, x2)
 
     def execute(self, x1, x2):
         x1, x2 = align_operands(x1, x2)
-        return mapped_matmul(x1, x2, False, self.trans_x2)
+        return mapped_matmul(x1, x2, self.trans_x1, self.trans_x2)
 
 
 __all__ = ["BmmACL"]

@@ -14,6 +14,33 @@ namespace jittor {
 static auto make_mapped_matmul =
     op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("mapped_matmul");
 
+bool MappedMatmulOp::accepts_strided_input(const Var* v) {
+    if (!v || v->num <= 0 || v->shape.size() < 2) return false;
+    const int r = v->shape.size();
+    const int64 dm = v->shape[r - 2];
+    const int64 dk = v->shape[r - 1];
+    const int64 sm = v->storage_stride(r - 2);
+    const int64 sk = v->storage_stride(r - 1);
+    if (sm < 0 || sk < 0) return false;
+    // Matrix axes must form a non-overlapping row-major or col-major 2-D slice
+    // as required by BLAS / Cube GEMM descriptors.
+    const bool row_major = (sk == 1) && (dm <= 1 || sm >= dk);
+    const bool col_major = (sm == 1) && (dk <= 1 || sk >= dm);
+    if (!row_major && !col_major) return false;
+    // Leading batch axes [0 .. r-3] must fold into one uniform positive batch
+    // stride (skipping size-1 axes) so rank-3 batched GEMM descriptors need no copy.
+    int64 expected = -1;
+    for (int i = r - 3; i >= 0; --i) {
+        const int64 d = v->shape[i];
+        if (d <= 1) continue;
+        const int64 s = v->storage_stride(i);
+        if (s <= 0) return false;
+        if (expected >= 0 && s != expected) return false;
+        expected = s * d;
+    }
+    return true;
+}
+
 MappedMatmulOp::MappedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, bool allow_reduced_precision) : a(a), b(b), trans_a(trans_a), trans_b(trans_b), allow_reduced_precision(allow_reduced_precision) {
     set_flag(OpFlags::_cuda, 1);
     set_flag(OpFlags::_cpu, 0);

@@ -196,10 +196,8 @@ class tensor_frontend:
             if placement is not None:
                 self._placement_token = core._set_tensor_placement(*placement)
             # backend.autograd.policy_scope(EXPLICIT_REQUIRES_GRAD), inline.
-            policy = backend.autograd.EXPLICIT_REQUIRES_GRAD
             self._policy_bits = core._get_autograd_policy()
-            core._set_autograd_policy(policy.stop_outputs_when_inputs_stopped,
-                                      policy.preserve_requires_grad_on_assignment)
+            core._set_autograd_policy(True, True)
         except BaseException:
             self._restore()
             raise

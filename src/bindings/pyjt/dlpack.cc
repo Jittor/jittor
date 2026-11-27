@@ -83,6 +83,9 @@ static DLDataType ns_to_dltype(NanoString ns) {
     // order matters here.
     if (ns.is_complex()) dt.code = kDLComplex;
     else if (ns == ns_bfloat16) dt.code = kDLBfloat;
+    else if (ns == ns_float8_e4m3fn) dt.code = kDLFloat8_e4m3fn;
+    else if (ns == ns_float8_e5m2) dt.code = kDLFloat8_e5m2;
+    else if (ns == ns_float8_e8m0fnu) dt.code = kDLFloat8_e8m0fnu;
     else if (ns.is_bool()) dt.code = kDLBool;
     else if (ns.is_unsigned()) dt.code = kDLUInt;
     else if (ns.is_int()) dt.code = kDLInt;
@@ -124,6 +127,15 @@ static NanoString dltype_to_ns(DLDataType dt) {
         case kDLComplex:
             if (dt.bits == 64) return ns_complex64;
             if (dt.bits == 128) return ns_complex128;
+            break;
+        case kDLFloat8_e4m3fn:
+            if (dt.bits == 8) return ns_float8_e4m3fn;
+            break;
+        case kDLFloat8_e5m2:
+            if (dt.bits == 8) return ns_float8_e5m2;
+            break;
+        case kDLFloat8_e8m0fnu:
+            if (dt.bits == 8) return ns_float8_e8m0fnu;
             break;
     }
     LOGf << "dlpack: unsupported DLDataType(code=" << (int)dt.code

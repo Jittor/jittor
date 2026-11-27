@@ -144,8 +144,12 @@ def test_acl_install_publishes_real_owners_idempotently_without_facade_writes(pr
     # A literal count is the canary that a new registration was deliberate.
     # The duplicate check above catches a name registered twice, but not a
     # kernel that appears because an import side effect grew the table.
-    # 51: Adds the measured 310P last-axis Euclidean inference subset.
-    assert len(operations) == 51, "ACL kernel count changed; update deliberately"
+    # 54: Adds Ascend950 FP8/MXFP8 dynamic quant and quant matmul kernels.
+    # 57: Adds native ACL tril, softplus, and fused fp8_linear kernels.
+    # 58: Adds native ACL rsqrt kernel.
+    # 63: Adds Wave 5/5D BatchNorm training/running-stats, linear_bias_accumulator,
+    #     grouped_mm, and histc kernels.
+    assert len(operations) == 63, "ACL kernel count changed; update deliberately"
     assert len(first) == len(operations)
     assert providers.dispatch.registered_kernel("conv3d", "acl") is providers.neural.conv3d_acl
     assert providers.dispatch.registered_kernel("conv_transpose2d", "acl") is providers.neural.conv_transpose2d_acl
@@ -313,7 +317,7 @@ def test_acl_pool_uses_canonical_output_geometry(
     )
     assert result.shape == (1, 2, expected, expected)
     assert geometry_calls == [(size, kernel, stride, padding, ceil_mode)] * 2
-    assert launches[0][0] == ("Maxpool" if op == "maximum" else "Avgpool")
+    assert launches[0][0] == ("MaxpoolInfer" if op == "maximum" else "Avgpool")
     assert launches[0][2]["countIncludePad"] is False
 
 

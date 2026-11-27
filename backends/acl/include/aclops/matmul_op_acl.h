@@ -31,4 +31,25 @@ namespace jittor
     public:
         PackedMatMulOpRunner();
     };
+
+    class GroupedMatMulOpRunner : public BaseOpRunner
+    {
+    protected:
+        void setupInputDesc() override;
+        void setupOutputDesc() override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        GroupedMatMulOpRunner();
+    };
+
+    class AddmmOpRunner : public BaseOpRunner
+    {
+    protected:
+        void setupInputDesc() override;
+        void setupOutputDesc() override;
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        int cube_math_type = 0;
+        AddmmOpRunner();
+    };
 }

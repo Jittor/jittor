@@ -28,9 +28,16 @@ _KERNEL_GAPS = {
             # Fixed-window pooling aclnn entries are not implemented for
             # Ascend310P (161002); the adaptive variants are.
             "Maxpool",  # aclnnMaxPool2dWithIndices
+            "MaxpoolInfer",  # aclnnMaxPool
             "MaxpoolBackward",  # aclnnMaxPool2dWithIndicesBackward
             "Avgpool",  # aclnnAvgPool2d
             "AvgpoolBackward",  # aclnnAvgPool2dBackward
+        )
+    ),
+    "Ascend950": frozenset(
+        (
+            "StridedSliceAssignV2",  # not registered in CANN 9.2 Ascend950 opp
+            "IncreFlashAttention",  # V1-V4 removed on Ascend950 (use FlashAttentionScore/composite)
         )
     ),
 }
@@ -67,6 +74,11 @@ def supports_bfloat16():
     return not soc_name().startswith("Ascend310P")
 
 
+def supports_fp8():
+    """Whether aclnn supports native FP8 / MXFP8 kernels on this SoC (Ascend950+: yes)."""
+    return soc_name().startswith("Ascend950")
+
+
 def supports_fp32_cube():
     """Whether the cube unit runs FP32 with KEEP_DTYPE (Ascend310*: no)."""
     return not soc_name().startswith("Ascend310")
@@ -96,6 +108,7 @@ __all__ = [
     "soc_name",
     "kernel_available",
     "supports_bfloat16",
+    "supports_fp8",
     "supports_fp32_cube",
     "ieee_comparisons",
     "allow_reduced_precision",

@@ -382,7 +382,12 @@ class _BroadcastingList:
 
 
 def _api_rsqrt(x):
-    return 1.0 / jt.sqrt(x)
+    if (isinstance(x, jt.Var) and jt.flags.use_cuda
+            and x.placement_backend == 2
+            and str(x.dtype) in ("float32", "float16", "bfloat16",
+                                 "torch.float32", "torch.float16", "torch.bfloat16")):
+        return jt.core.ops.mapped_unary(x, 0, 0.0, 0.0)
+    return jt.rsqrt(x)
 
 
 def _api_gt(a, b):

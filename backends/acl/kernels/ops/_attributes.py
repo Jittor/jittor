@@ -12,6 +12,8 @@ SCHEMAS = {
     "SoftmaxBackward": {"dim": {"type": "int64"}},
     "SwiGlu": {"dim": {"type": "int64"}},
     "Triu": {"diagonal": {"type": "int64"}},
+    "Tril": {"diagonal": {"type": "int64"}},
+    "Softplus": {"beta": {"type": "float64"}, "threshold": {"type": "float64"}},
     "Flip": {"axes": {"type": "int64[]"}},
     "Transpose": {"axes": {"type": "int64[]"}},
     "Cumsum": {"dim": {"type": "int64"}},
@@ -66,6 +68,14 @@ SCHEMAS = {
     "AdaptiveAvgPool2d": {"outputSize": {"type": "int64[]"}},
     "AdaptiveAvgPool2dBackward": {},
     "Maxpool": {
+        "kernel_size": {"type": "int64[]"},
+        "poolStrides": {"type": "int64[]"},
+        "poolPads": {"type": "int64[]"},
+        "poolDilations": {"type": "int64[]"},
+        "poolCeil": {"type": "bool"},
+        "countIncludePad": {"type": "bool"},
+    },
+    "MaxpoolInfer": {
         "kernel_size": {"type": "int64[]"},
         "poolStrides": {"type": "int64[]"},
         "poolPads": {"type": "int64[]"},
@@ -209,6 +219,23 @@ SCHEMAS = {
         "axes": {"type": "int64[]"},
         "keepdims": {"type": "bool"},
         "reduce_all": {"type": "bool"},
+    },
+    "DynamicBlockQuant": {
+        "minScale": {"type": "float64"},
+        "rowBlockSize": {"type": "int64"},
+        "colBlockSize": {"type": "int64"},
+    },
+    "DynamicMxQuant": {
+        "axis": {"type": "int64"},
+        "blockSize": {"type": "int64"},
+        "scaleAlg": {"type": "int64"},
+    },
+    "QuantMatmul": {
+        "transposeX1": {"type": "bool"},
+        "transposeX2": {"type": "bool"},
+        "transposeX2Scale": {"type": "bool"},
+        "groupSize": {"type": "int64"},
+        "hasBias": {"type": "bool"},
     },
 }
 
@@ -413,6 +440,8 @@ def _attribute_program_uncached(name, attributes, *, variable="op", slot=None):
 _RUNNER_ALIASES = {
     "softmax": "Softmax",
     "triu": "Triu",
+    "tril": "Tril",
+    "softplus": "Softplus",
     "flip": "Flip",
     "transpose": "Transpose",
     "cumsum": "Cumsum",
@@ -429,6 +458,7 @@ _RUNNER_ALIASES = {
     "groupnorm": "GroupNorm",
     "rmsnorm": "RmsNorm",
     "maxpool": "Maxpool",
+    "maxpoolinfer": "MaxpoolInfer",
     "avgpool": "Avgpool",
     "maxpoolbackward": "MaxpoolBackward",
     "avgpoolbackward": "AvgpoolBackward",
@@ -462,6 +492,9 @@ _RUNNER_ALIASES = {
     "relubackward": "LeakyReLUBackward",
     "contiguous_slice_grad": "Concat",
     "expand_rotary_cache": "SplitWithSize",
+    "dynamic_block_quant": "DynamicBlockQuant",
+    "dynamic_mx_quant": "DynamicMxQuant",
+    "quant_matmul": "QuantMatmul",
 }
 
 

@@ -42,6 +42,8 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "SwiGlu") return {{"dim", required(Type::int64)}};
     if (name == "SoftmaxBackward") return {{"dim", required(Type::int64)}};
     if (name == "Triu") return {{"diagonal", required(Type::int64)}};
+    if (name == "Tril") return {{"diagonal", required(Type::int64)}};
+    if (name == "Softplus") return {{"beta", required(Type::float64)}, {"threshold", required(Type::float64)}};
     if (name == "Flip") return {{"axes", required(Type::int64_vector)}};
     if (name == "Transpose") return {{"axes", required(Type::int64_vector)}};
     if (name == "Cumsum") return {{"dim", required(Type::int64)}};
@@ -61,6 +63,7 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "AdaptiveAvgPool2d") return {{"outputSize", required(Type::int64_vector)}};
     if (name == "AdaptiveAvgPool2dBackward") return {};
     if (name == "Maxpool") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
+    if (name == "MaxpoolInfer") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "Avgpool") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "MaxpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
     if (name == "AvgpoolBackward") return {{"kernel_size", required(Type::int64_vector)}, {"poolStrides", required(Type::int64_vector)}, {"poolPads", required(Type::int64_vector)}, {"poolDilations", required(Type::int64_vector)}, {"poolCeil", required(Type::boolean)}, {"countIncludePad", required(Type::boolean)}};
@@ -93,6 +96,9 @@ inline acl_data::AclAttrSchema acl_code_attribute_schema(const string& name) {
     if (name == "TruthReduce") return {{"axes", required(Type::int64_vector)}, {"keepdims", required(Type::boolean)}, {"reduce_all", required(Type::boolean)}};
     if (name == "Sort") return {{"stable", required(Type::boolean)}, {"dim", required(Type::int64)}, {"descending", required(Type::boolean)}};
     if (name == "Multinomial") return {{"num_samples", required(Type::int64)}, {"replacement", required(Type::boolean)}};
+    if (name == "DynamicBlockQuant") return {{"minScale", required(Type::float64)}, {"rowBlockSize", required(Type::int64)}, {"colBlockSize", required(Type::int64)}};
+    if (name == "DynamicMxQuant") return {{"axis", required(Type::int64)}, {"blockSize", required(Type::int64)}, {"scaleAlg", required(Type::int64)}};
+    if (name == "QuantMatmul") return {{"transposeX1", required(Type::boolean)}, {"transposeX2", required(Type::boolean)}, {"transposeX2Scale", required(Type::boolean)}, {"groupSize", required(Type::int64)}, {"hasBias", required(Type::boolean)}};
     acl_data::internal_error("ACL runner has no attribute schema: " + name); return {};
 }
 template<class Runner>
@@ -132,11 +138,19 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         op.jt_name="softmax";
         return;
     }
-    if (name == "Triu") {
+    if (name == "Triu" || name == "Tril") {
         auto attr=std::unique_ptr<TriuAttr>(new TriuAttr());
         attr->diagonal = fields.at("diagonal").int_value;
         op.op_attr=std::move(attr);
-        op.jt_name="triu";
+        op.jt_name=name == "Triu" ? "triu" : "tril";
+        return;
+    }
+    if (name == "Softplus") {
+        auto attr=std::unique_ptr<SoftplusAttr>(new SoftplusAttr());
+        attr->beta = fields.at("beta").float_value;
+        attr->threshold = fields.at("threshold").float_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="softplus";
         return;
     }
     if (name == "Flip") {
@@ -306,6 +320,18 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         attr->countIncludePad = fields.at("countIncludePad").bool_value;
         op.op_attr=std::move(attr);
         op.jt_name="maxpool";
+        return;
+    }
+    if (name == "MaxpoolInfer") {
+        auto attr=std::unique_ptr<PoolAttr>(new PoolAttr());
+        attr->kernel_size = fields.at("kernel_size").int_values;
+        attr->poolStrides = fields.at("poolStrides").int_values;
+        attr->poolPads = fields.at("poolPads").int_values;
+        attr->poolDilations = fields.at("poolDilations").int_values;
+        attr->poolCeil = fields.at("poolCeil").bool_value;
+        attr->countIncludePad = fields.at("countIncludePad").bool_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="maxpoolinfer";
         return;
     }
     if (name == "Avgpool") {
@@ -606,6 +632,35 @@ void assign_acl_code_attributes(Runner& op, const acl_data::AclDecodedData& deco
         bool all=fields.at("reduce_all").bool_value;
         if (op.name != (all ? "All" : "Any")) acl_data::internal_error("truth reducer construction disagrees with data");
         op.jt_name=all ? "all" : "any";
+        return;
+    }
+    if (name == "DynamicBlockQuant") {
+        auto attr=std::unique_ptr<DynamicBlockQuantAttr>(new DynamicBlockQuantAttr());
+        attr->minScale = fields.at("minScale").float_value;
+        attr->rowBlockSize = fields.at("rowBlockSize").int_value;
+        attr->colBlockSize = fields.at("colBlockSize").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="dynamic_block_quant";
+        return;
+    }
+    if (name == "DynamicMxQuant") {
+        auto attr=std::unique_ptr<DynamicMxQuantAttr>(new DynamicMxQuantAttr());
+        attr->axis = fields.at("axis").int_value;
+        attr->blockSize = fields.at("blockSize").int_value;
+        attr->scaleAlg = fields.at("scaleAlg").int_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="dynamic_mx_quant";
+        return;
+    }
+    if (name == "QuantMatmul") {
+        auto attr=std::unique_ptr<QuantMatmulAttr>(new QuantMatmulAttr());
+        attr->transposeX1 = fields.at("transposeX1").bool_value;
+        attr->transposeX2 = fields.at("transposeX2").bool_value;
+        attr->transposeX2Scale = fields.at("transposeX2Scale").bool_value;
+        attr->groupSize = fields.at("groupSize").int_value;
+        attr->hasBias = fields.at("hasBias").bool_value;
+        op.op_attr=std::move(attr);
+        op.jt_name="quant_matmul";
         return;
     }
     acl_data::internal_error("ACL runner has no attribute schema: " + name);

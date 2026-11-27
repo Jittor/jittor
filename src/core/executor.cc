@@ -157,7 +157,8 @@ void Executor::auto_flush() {
         // `auto_flush_ops` 120 and 136. What such a var reads is launched
         // when something that must be written out -- a matmul, a
         // convolution, a reduction -- needs it.
-        if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
+        if (op && (op->type() == OpType::element || op->type() == OpType::broadcast
+                || op->is_op(op_ids::setitem())))
             return true;
         vars.push_back(var);
         pending_bytes += var->size;
@@ -178,14 +179,27 @@ void Executor::auto_flush() {
 #endif
 }
 
+static inline int effective_async_flush_ops() {
+    if (async_flush_ops == 64 && accelerator_backend_id() == BackendId::Acl)
+        return 128;
+    return async_flush_ops;
+}
+
+static inline int effective_auto_flush_ops() {
+    if (auto_flush_ops == 128 && accelerator_backend_id() == BackendId::Acl)
+        return 256;
+    return auto_flush_ops;
+}
+
 void Executor::flush_at_module_boundary() {
     // Counted in operators, never timed: the cut points have to repeat
     // identically from step to step (see `SubmissionPipeline::last_run_ops`).
     // At a module's return rather than mid-module, so a block -- a residual
     // unit, a transformer layer -- stays in one batch where it can.
     auto& pipeline = runtime_submission_pipeline();
-    if (deferrable_flush()
-            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops) {
+    const int threshold = effective_async_flush_ops();
+    if (deferrable_flush() && threshold > 0
+            && Op::number_of_created_ops - pipeline.last_run_ops >= threshold) {
         const auto previous = pipeline.last_run_ops;
         const int calls = exec_called;
         auto_flush();
@@ -210,7 +224,8 @@ void Executor::submit_pending(Var* target, bool force) {
     }
 
 #ifdef HAS_ACCELERATOR
-    if (auto_flush_ops > 0 && Op::number_of_created_ops - pipeline.last_run_ops >= auto_flush_ops)
+    const int auto_threshold = effective_auto_flush_ops();
+    if (auto_threshold > 0 && Op::number_of_created_ops - pipeline.last_run_ops >= auto_threshold)
         auto_flush();
 #endif
 

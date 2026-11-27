@@ -19,6 +19,9 @@ def exp(input):
 
 def pow(input, exponent):
     """Use the Tensor power's weak-scalar and result-type semantics."""
+    if type(exponent) in (int, float) and exponent == 2 and hasattr(input, "_mem_ptr_now"):
+        from ..tensor.method_api import _tensor_pow
+        return _tensor_pow(input, exponent)
     import jittor as jt
     from ...context import get_install_context
     from ...frontend import tensor_frontend

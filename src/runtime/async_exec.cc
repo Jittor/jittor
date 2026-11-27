@@ -182,6 +182,7 @@ std::atomic<bool> job_posted{false};
 std::chrono::steady_clock::time_point submitted_at;
 int64 caller_work_ns = -1;
 int declines_since_probe = 0;
+bool probe_active = false;
 
 // Python objects the worker was the last owner of, waiting for the Python
 // thread to drop them (`async_exec_defer_python_release`).
@@ -356,6 +357,7 @@ void in_child() {
     async_exec_inflight.store(0);
     job_posted.store(false, std::memory_order_relaxed);
     error_pending.store(false);
+    probe_active = false;
 }
 #endif
 
@@ -461,10 +463,15 @@ bool async_exec_handover_pays() {
     if (caller_work_ns < 0) return true;  // nothing handed over yet
     if (caller_work_ns >= (int64)async_min_caller_us * 1000) {
         declines_since_probe = 0;
+        probe_active = false;
         return true;
     }
+    // Keep a triggered 1-in-64 probe admitted across flush_at_module_boundary ->
+    // auto_flush -> may_run_async until async_exec_submit actually consumes it.
+    if (probe_active) return true;
     if (++declines_since_probe >= 64) {
         declines_since_probe = 0;
+        probe_active = true;
         return true;
     }
     return false;
@@ -495,6 +502,7 @@ void async_exec_run_python_releases() {
 }
 
 void async_exec_submit(std::function<void()>&& job) {
+    probe_active = false;
     submitted_at = std::chrono::steady_clock::now();
     bool need_wake;
     {

@@ -58,6 +58,10 @@ struct BackendExecutionPolicy {
     // its readers. A backend admits this when overlapping fresh submissions
     // with graph construction pays for those extra materializations.
     bool async_admits_grad = false;
+    // All threads share one hardware compute stream per device (e.g. ACL's
+    // per-device compute stream), so cross-thread handoffs on the same device
+    // are already FIFO-ordered without recording/waiting on backend events.
+    bool shared_compute_stream = false;
 };
 
 // The registry copies this versioned table; callback code and allocator pools

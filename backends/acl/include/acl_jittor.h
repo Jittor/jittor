@@ -377,4 +377,33 @@ namespace jittor
         {
         }
     };
+
+    struct DynamicBlockQuantAttr : AclOpAttr
+    {
+        double minScale = 0.0;
+        int64_t rowBlockSize = 1;
+        int64_t colBlockSize = 128;
+    };
+
+    struct DynamicMxQuantAttr : AclOpAttr
+    {
+        int64_t axis = -1;
+        int64_t blockSize = 32;
+        int64_t scaleAlg = 0;
+    };
+
+    struct QuantMatmulAttr : AclOpAttr
+    {
+        bool transposeX1 = false;
+        bool transposeX2 = false;
+        bool transposeX2Scale = false;
+        int64_t groupSize = 0;
+        bool hasBias = false;
+    };
+
+    struct SoftplusAttr : AclOpAttr
+    {
+        double beta = 1.0;
+        double threshold = 20.0;
+    };
 }

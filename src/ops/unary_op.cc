@@ -266,6 +266,21 @@ static unordered_set<string> unary_ops = {
     "bfloat16",
 
     /**
+    Returns a copy of the input var, casted to float8_e4m3fn (OCP FP8 E4M3FN).
+     */
+    "float8_e4m3fn",
+
+    /**
+    Returns a copy of the input var, casted to float8_e5m2 (IEEE/OCP FP8 E5M2).
+     */
+    "float8_e5m2",
+
+    /**
+    Returns a copy of the input var, casted to float8_e8m0fnu (OCP MX E8M0 scale).
+     */
+    "float8_e8m0fnu",
+
+    /**
     Returns a copy of the input var, casted to float32.
 
     ----------------

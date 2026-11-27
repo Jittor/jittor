@@ -11,6 +11,7 @@
 #include "ops/composite/code_op.h"
 #include "mem/allocator.h"
 #include <cstring>
+#include <cmath>
 #include "runtime/device.h"
 #include "runtime/backend.h"
 #include "runtime/dispatch_context.h"
@@ -24,6 +25,7 @@ namespace jittor {
 
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
+DECLARE_FLAG(int, acl_allow_hf32);
 
 PyObject* grad_optional_prepare(VarHolder* loss,
     const vector<VarHolder*>& targets, bool retain_graph, bool create_graph) {
@@ -971,6 +973,26 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
         || (PyTuple_CheckExact(index) && PyTuple_GET_SIZE(index) == 1
             && PyLong_CheckExact(PyTuple_GET_ITEM(index, 0)));
     if (registered && !cascade_integer) {
+        // ACL's default `getitem_acl` returns `jt.core.ops.getitem(x, slices)`
+        // directly for every no-grad static positive-step basic index (already
+        // validated above). Cache that check per kernel-registry generation so
+        // hot inference slicing avoids 1000+ Python round-trips per forward.
+        static uint64_t cached_acl_getitem_gen = ~uint64_t(0);
+        static bool cached_acl_getitem_default = false;
+        static PyObject* getitem_op_name = nullptr;
+        if (!getitem_op_name) getitem_op_name = PyUnicode_InternFromString("tensor.getitem");
+        const bool on_acl_var = runtime_flag_use_cuda()
+            && accelerator_backend_id() == BackendId::Acl
+            && (!var->placement.explicit_backend
+                || var->placement.device.backend == BackendId::Acl);
+        const uint64_t cur_gen = kernel_select_generation();
+        if (on_acl_var && cached_acl_getitem_gen == cur_gen && cached_acl_getitem_default) {
+            VarSlices slices = from_py_object<VarSlices>(index, holders);
+            VarSlices recorded(slices);
+            auto* out = new VarHolder(make_getitem(var, move(slices)));
+            out->set_view_of(holder, move(recorded));
+            return to_py_object<VarHolder*>(out);
+        }
         // _dispatch_slices creates a fresh tuple for tuple indices. The items
         // need no conversion in this subset, but supports sees that same form.
         PyObjHolder normalized;
@@ -985,11 +1007,36 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
             Py_INCREF(index);
             normalized.assign(index);
         }
-        PyObjHolder name(PyUnicode_FromString("tensor.getitem"));
         PyObjHolder call_args(PyTuple_Pack(3, self, normalized.obj, Py_None));
-        PyObject* selected = kernel_select(name.obj, call_args.obj, nullptr);
+        PyObject* selected = kernel_select(getitem_op_name, call_args.obj, nullptr);
         if (!selected) return nullptr;
         PyObjHolder kernel(selected);
+        if (on_acl_var) {
+            bool is_default_acl = false;
+            if (selected != Py_None && PyFunction_Check(selected)) {
+                PyObject* fname = PyObject_GetAttrString(selected, "__name__");
+                PyObject* fmod = PyObject_GetAttrString(selected, "__module__");
+                if (fname && fmod && PyUnicode_Check(fname) && PyUnicode_Check(fmod)) {
+                    const char* ns = PyUnicode_AsUTF8(fname);
+                    const char* ms = PyUnicode_AsUTF8(fmod);
+                    is_default_acl = (ns && ms
+                        && std::strcmp(ns, "getitem_acl") == 0
+                        && std::strcmp(ms, "jittor.backends.acl.kernels.tensor") == 0);
+                }
+                Py_XDECREF(fname);
+                Py_XDECREF(fmod);
+                if (PyErr_Occurred()) PyErr_Clear();
+            }
+            cached_acl_getitem_gen = cur_gen;
+            cached_acl_getitem_default = is_default_acl;
+            if (is_default_acl) {
+                VarSlices slices = from_py_object<VarSlices>(index, holders);
+                VarSlices recorded(slices);
+                auto* out = new VarHolder(make_getitem(var, move(slices)));
+                out->set_view_of(holder, move(recorded));
+                return to_py_object<VarHolder*>(out);
+            }
+        }
         if (selected != Py_None) {
             PyObject* result = PyObject_CallObject(selected, call_args.obj);
             if (!result) return nullptr;
@@ -1459,6 +1506,45 @@ PyObject* wrap_like(PyObject* self, VarHolder* holder) {
     PyTensorFrontendScope scope(self, nullptr, 0, false);
     return to_py_object<VarHolder*>(owned.release());
 }
+
+// Construct a UnaryOp inside `self`'s frontend scope so its float32_precision
+// and placement match the surrounding frontend ops (allowing fusion).
+PyObject* wrap_unary_like(PyObject* self, Var* input, NanoString op_or_dtype) {
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    return to_py_object<VarHolder*>(new VarHolder(make_unary(input, op_or_dtype)));
+}
+
+// Exact bit-for-bit representability of a finite Python scalar in bf16 / fp16.
+// When true, `cast(float(x) op float(s), half)` is bit-identical to running
+// `x op s_half` in half precision, avoiding two cast kernels per scalar op.
+bool exact_half_bits(NanoString own, double d, uint16_t& bits) {
+    if (!std::isfinite(d)) return false;
+    if (d == 0.0) {
+        uint64_t u64 = 0;
+        std::memcpy(&u64, &d, sizeof(u64));
+        bits = (u64 >> 63) ? uint16_t(0x8000u) : uint16_t(0x0000u);
+        return true;
+    }
+    float f = static_cast<float>(d);
+    if (static_cast<double>(f) != d) return false;
+    uint32_t u = 0;
+    std::memcpy(&u, &f, sizeof(u));
+    if (own == ns_bfloat16) {
+        if ((u & 0xFFFFu) != 0) return false;
+        bits = static_cast<uint16_t>(u >> 16);
+        return true;
+    }
+    if (own == ns_float16) {
+        uint32_t sign = (u >> 31) & 1u;
+        int exp = int((u >> 23) & 0xFFu) - 127;
+        uint32_t mant = u & 0x7FFFFFu;
+        if (exp < -14 || exp > 15) return false;
+        if ((mant & 0x1FFFu) != 0) return false;
+        bits = static_cast<uint16_t>((sign << 15) | (uint32_t(exp + 15) << 10) | (mant >> 13));
+        return true;
+    }
+    return false;
+}
 } // namespace
 
 void compat_fast_bind_binary(PyObject* natives, PyObject* mark_cpu_like, bool widen_scalar_division) {
@@ -1554,6 +1640,25 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
     } else {
         return none();
     }
+    if (scalar && !division && !amp_reg && (own == ns_bfloat16 || own == ns_float16)) {
+        double val = PyFloat_CheckExact(other)
+            ? PyFloat_AS_DOUBLE(other) : PyLong_AsDouble(other);
+        if (PyErr_Occurred()) {
+            PyErr_Clear();
+        } else {
+            uint16_t bits = 0;
+            if (exact_half_bits(own, val, bits)) {
+                PyTensorFrontendScope scope(self, nullptr, 0, false);
+                PyObjHolder b(to_py_object<VarHolder*>(
+                    new VarHolder(make_array((const void*)&bits, {}, own))));
+                GET_RAW_PTR(VarHolder, b.obj)->stop_grad();
+                PyObject* out = binary_reflected[code]
+                    ? binary_slots[code](b.obj, self) : binary_slots[code](self, b.obj);
+                if (!out || out == Py_NotImplemented || !is_var(out)) return out;
+                return mark_like(out, self, other);
+            }
+        }
+    }
     PyObject* out = binary_reflected[code]
         ? binary_slots[code](other, self) : binary_slots[code](self, other);
     if (!out || out == Py_NotImplemented || !is_var(out)) return out;
@@ -1562,7 +1667,7 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
         Var* result = GET_RAW_PTR(VarHolder, out)->var;
         if (result->dtype() != own) {
             PyObjHolder uncast(out);
-            out = wrap_like(self, new VarHolder(make_unary(result, own)));
+            out = wrap_unary_like(self, result, own);
         }
     }
     return mark_like(out, self, other);
@@ -1655,8 +1760,194 @@ PyObject* fast_gelu(PyObject* x) {
         out.obj = nullptr;
         return result;
     }
-    return wrap_like(out.obj, new VarHolder(
-        make_unary(GET_RAW_PTR(VarHolder, out.obj)->var, own)));
+    return wrap_unary_like(out.obj, GET_RAW_PTR(VarHolder, out.obj)->var, own);
+}
+
+namespace {
+auto make_mapped_unary = op_constructor<VarPtr, Var*, int, double, double>("mapped_unary");
+auto make_mapped_fp8_linear = op_constructor<VarPtr, Var*, Var*, Var*, int64, int64, NanoString>("mapped_fp8_linear");
+auto make_mapped_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("mapped_matmul");
+
+inline bool var_is_acl_eligible(const Var* v) {
+    return !v->placement.explicit_backend || v->placement.device.backend == BackendId::Acl;
+}
+} // namespace
+
+PyObject* fast_mapped_unary(PyObject* x, int kind, double p0, double p1) {
+    if (!is_var(x) || !runtime_flag_use_cuda()
+            || accelerator_backend_id() != BackendId::Acl || amp_reg)
+        return none();
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    Var* v = holder->var;
+    if (!var_is_acl_eligible(v)) return none();
+    const NanoString dt = v->dtype();
+    const bool acl_float = (dt == ns_float16 || dt == ns_bfloat16 || dt == ns_float32);
+    switch (kind) {
+        case 0: // rsqrt
+        case 1: // silu
+            if (!acl_float) return none();
+            break;
+        case 2: // softplus
+            if (!acl_float || !(p0 > 0.0)) return none();
+            break;
+        case 3: // triu
+        case 4: // tril
+            if (v->shape.size() < 2) return none();
+            break;
+        case 5: // cumsum
+            if (!no_grad || v->shape.size() < 1) return none();
+            break;
+        case 6: // softmax
+        {
+            const int64 ndim = int64(v->shape.size());
+            if (!acl_float || ndim < 1) return none();
+            int64 axis = int64(p0);
+            if (axis < 0) axis += ndim;
+            if (axis < 0 || axis >= ndim) return none();
+            break;
+        }
+        default:
+            return none();
+    }
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    return to_py_object<VarHolder*>(new VarHolder(make_mapped_unary(holder->grad_input(), kind, p0, p1)));
+}
+
+PyObject* fast_fp8_linear(PyObject* x, PyObject* weight_fp8, PyObject* weight_scale,
+                          int mode_id, int block_size, PyObject* out_dtype) {
+    if (!no_grad || !runtime_flag_use_cuda()
+            || accelerator_backend_id() != BackendId::Acl
+            || !is_var(x) || !is_var(weight_fp8) || !is_var(weight_scale))
+        return none();
+    Var* xv = GET_RAW_PTR(VarHolder, x)->var;
+    Var* wv = GET_RAW_PTR(VarHolder, weight_fp8)->var;
+    Var* sv = GET_RAW_PTR(VarHolder, weight_scale)->var;
+    if (xv->placement.device.backend != BackendId::Acl
+            || wv->placement.device.backend != BackendId::Acl
+            || sv->placement.device.backend != BackendId::Acl
+            || !xv->placement.explicit_backend
+            || !wv->placement.explicit_backend
+            || !sv->placement.explicit_backend
+            || !xv->is_contiguous() || !wv->is_contiguous() || !sv->is_contiguous())
+        return none();
+    const NanoString xdt = xv->dtype();
+    const NanoString wdt = wv->dtype();
+    const NanoString sdt = sv->dtype();
+    if ((xdt != ns_bfloat16 && xdt != ns_float16)
+            || (wdt != ns_float8_e4m3fn && wdt != ns_float8_e5m2))
+        return none();
+    const auto& xs = xv->shape;
+    const auto& ws = wv->shape;
+    const auto& ss = sv->shape;
+    if (xs.size() < 2 || ws.size() != 2 || xs[xs.size() - 1] != ws[1] || xv->num <= 0)
+        return none();
+    if (mode_id == 1) {
+        if (block_size != 32 || ss.size() != 3 || sdt != ns_float8_e8m0fnu
+                || ss[0] != ws[0] || ss[2] != 2 || ss[1] * 64 != ws[1])
+            return none();
+    } else if (mode_id == 0) {
+        if (block_size <= 0 || ss.size() != 2 || sdt != ns_float32
+                || ss[0] * block_size != ws[0] || ss[1] * block_size != ws[1])
+            return none();
+    } else {
+        return none();
+    }
+    NanoString target = xdt;
+    if (out_dtype && out_dtype != Py_None) {
+        const char* name = nullptr;
+        PyObjHolder name_holder;
+        if (PyUnicode_Check(out_dtype)) {
+            name = PyUnicode_AsUTF8(out_dtype);
+        } else {
+            PyObject* attr = PyObject_GetAttrString(out_dtype, "name");
+            if (attr) {
+                name_holder.assign(attr);
+                if (PyUnicode_Check(attr)) name = PyUnicode_AsUTF8(attr);
+            } else {
+                PyErr_Clear();
+            }
+        }
+        if (!name) return none();
+        if (std::strcmp(name, "bfloat16") == 0 || std::strcmp(name, "torch.bfloat16") == 0)
+            target = ns_bfloat16;
+        else if (std::strcmp(name, "float16") == 0 || std::strcmp(name, "torch.float16") == 0)
+            target = ns_float16;
+        else
+            return none();
+    }
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    return to_py_object<VarHolder*>(new VarHolder(
+        make_mapped_fp8_linear(xv, wv, sv, int64(mode_id), int64(block_size), target)));
+}
+
+PyObject* fast_acl_matmul(PyObject* a, PyObject* b, bool allow_hf32, bool require_batched) {
+    if (!is_var(a) || !is_var(b) || !runtime_flag_use_cuda()
+            || accelerator_backend_id() != BackendId::Acl || amp_reg)
+        return none();
+    auto* ah = GET_RAW_PTR(VarHolder, a);
+    auto* bh = GET_RAW_PTR(VarHolder, b);
+    Var* av = ah->var;
+    Var* bv = bh->var;
+    if (!var_is_acl_eligible(av) || !var_is_acl_eligible(bv)) return none();
+    if (av->placement.explicit_backend && bv->placement.explicit_backend
+            && av->device_id != bv->device_id)
+        return none();
+    const NanoString dt = av->dtype();
+    if (dt != bv->dtype() || (dt != ns_bfloat16 && dt != ns_float16 && dt != ns_float32))
+        return none();
+    const auto& as = av->shape;
+    const auto& bs = bv->shape;
+    const int rank_a = int(as.size());
+    const int rank_b = int(bs.size());
+    if (require_batched ? (rank_a <= 2 || rank_b <= 2) : (rank_a < 2 || rank_b < 2))
+        return none();
+    if (av->num <= 0 || bv->num <= 0 || as[rank_a - 1] != bs[rank_b - 2]) return none();
+
+    const bool a_is_t = ah->is_last2_transpose_view();
+    const bool b_is_t = bh->is_last2_transpose_view();
+    if (a_is_t && b_is_t) return none();
+    if (!no_grad && ((a_is_t && !av->is_stop_grad()) || (b_is_t && !bv->is_stop_grad())))
+        return none();
+    const bool hf32 = (dt == ns_float32) && (allow_hf32 || acl_allow_hf32);
+
+    if (rank_a == rank_b) {
+        for (int i = 0; i < rank_a - 2; ++i)
+            if (as[i] != bs[i]) return none();
+        unique_ptr<VarHolder> a_base_own, b_base_own;
+        VarHolder* aa = ah;
+        VarHolder* bb = bh;
+        if (a_is_t) {
+            a_base_own.reset(ah->transpose_view_base());
+            aa = a_base_own.get();
+        }
+        if (b_is_t) {
+            b_base_own.reset(bh->transpose_view_base());
+            bb = b_base_own.get();
+        }
+        PyTensorFrontendScope scope(a, nullptr, 0, false);
+        return to_py_object<VarHolder*>(new VarHolder(
+            make_mapped_matmul(aa->grad_input(), bb->grad_input(), a_is_t, b_is_t, hf32)));
+    }
+    if (!require_batched && rank_a > 2 && rank_b == 2 && !a_is_t
+            && av->is_contiguous() && as[rank_a - 1] > 0) {
+        unique_ptr<VarHolder> b_base_own;
+        VarHolder* bb = bh;
+        if (b_is_t) {
+            b_base_own.reset(bh->transpose_view_base());
+            bb = b_base_own.get();
+        }
+        NanoVector flat_shape;
+        flat_shape.push_back(av->num / as[rank_a - 1]);
+        flat_shape.push_back(as[rank_a - 1]);
+        NanoVector out_shape;
+        for (int i = 0; i < rank_a - 1; ++i) out_shape.push_back(as[i]);
+        out_shape.push_back(bs[1]);
+        PyTensorFrontendScope scope(a, nullptr, 0, false);
+        VarPtr flat = make_reshape(ah->grad_input(), flat_shape);
+        VarPtr prod = make_mapped_matmul(flat.ptr, bb->grad_input(), false, b_is_t, hf32);
+        return to_py_object<VarHolder*>(new VarHolder(make_reshape(prod.ptr, out_shape)));
+    }
+    return none();
 }
 
 namespace {
@@ -1676,12 +1967,12 @@ PyObject* storage_view(PyObject* self, const NanoVector& shape) {
 }
 } // namespace
 
-PyObject* fast_view(PyObject* self, PyObject* shape) {
+PyObject* fast_view(PyObject* self, PyObject* shape, bool allow_copy) {
     if (!is_var(self) || !PyTuple_Check(shape)) return none();
     PyObject* items = shape;
     if (PyTuple_GET_SIZE(shape) == 1) {
         PyObject* first = PyTuple_GET_ITEM(shape, 0);
-        if (PyTuple_CheckExact(first) || PyList_CheckExact(first)) items = first;
+        if (PyTuple_Check(first) || PyList_CheckExact(first)) items = first;
     }
     PyObjHolder seq(PySequence_Fast(items, "shape"));
     Py_ssize_t n = PySequence_Fast_GET_SIZE(seq.obj);
@@ -1697,20 +1988,104 @@ PyObject* fast_view(PyObject* self, PyObject* shape) {
         target.push_back(size);
     }
     Var* var = GET_RAW_PTR(VarHolder, self)->var;
-    if (!var->is_contiguous()) return none();
+    if (!var->is_contiguous()) {
+        if (!allow_copy) return none();
+        auto* holder = GET_RAW_PTR(VarHolder, self);
+        PyTensorFrontendScope scope(self, nullptr, 0, false);
+        VarPtr contig = contiguous_storage(holder->grad_input());
+        return to_py_object<VarHolder*>(new VarHolder(make_reshape(contig.ptr, target)));
+    }
     return storage_view(self, target);
 }
 
+namespace {
+inline bool parse_common_dtype(const char* name, NanoString& out) {
+    if (!name || !name[0]) return false;
+    switch (name[0]) {
+        case 'b':
+            if (std::strcmp(name, "bfloat16") == 0) { out = ns_bfloat16; return true; }
+            if (std::strcmp(name, "bool") == 0) { out = ns_bool; return true; }
+            return false;
+        case 'f':
+            if (std::strcmp(name, "float32") == 0) { out = ns_float32; return true; }
+            if (std::strcmp(name, "float16") == 0) { out = ns_float16; return true; }
+            if (std::strcmp(name, "float64") == 0) { out = ns_float64; return true; }
+            if (std::strcmp(name, "float8_e4m3fn") == 0) { out = ns_float8_e4m3fn; return true; }
+            if (std::strcmp(name, "float8_e5m2") == 0) { out = ns_float8_e5m2; return true; }
+            if (std::strcmp(name, "float8_e8m0fnu") == 0) { out = ns_float8_e8m0fnu; return true; }
+            return false;
+        case 'i':
+            if (std::strcmp(name, "int64") == 0) { out = ns_int64; return true; }
+            if (std::strcmp(name, "int32") == 0) { out = ns_int32; return true; }
+            if (std::strcmp(name, "int16") == 0) { out = ns_int16; return true; }
+            if (std::strcmp(name, "int8") == 0) { out = ns_int8; return true; }
+            return false;
+        case 'u':
+            if (std::strcmp(name, "uint8") == 0) { out = ns_uint8; return true; }
+            return false;
+        default:
+            return false;
+    }
+}
+} // namespace
+
+PyObject* fast_to_dtype(PyObject* self, PyObject* target_name, bool require_contiguous) {
+    if (!is_var(self) || !PyUnicode_Check(target_name) || amp_reg) return none();
+    NanoString target_ns;
+    if (!parse_common_dtype(PyUnicode_AsUTF8(target_name), target_ns)) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    Var* var = holder->var;
+    if (var->dtype().is_complex()) return none();
+    const TensorPlacement placement = var->placement;
+    if (!placement.explicit_backend) return none();
+    if (placement.device.backend != BackendId::Cpu) {
+        // Accelerator tensor parked on host must take the full migration path.
+        if (var->mem_ptr && var->allocator && !var->allocator->is_cuda()) return none();
+    }
+    if (var->dtype() == target_ns) {
+        if (!require_contiguous || var->is_contiguous()) {
+            Py_INCREF(self);
+            return self;
+        }
+        PyTensorFrontendScope scope(self, nullptr, 0, false);
+        TensorPlacementScope input_placement(placement);
+        return to_py_object<VarHolder*>(new VarHolder(contiguous_storage(holder->grad_input())));
+    }
+    auto** dict_ptr = _PyObject_GetDictPtr(self);
+    if (dict_ptr && *dict_ptr) {
+        static PyObject* k_torch_0d = PyUnicode_InternFromString("_torch_0d");
+        static PyObject* k_torch_meta = PyUnicode_InternFromString("_jittor_torch_meta");
+        PyObject* flag = PyDict_GetItem(*dict_ptr, k_torch_0d);
+        if (flag && PyObject_IsTrue(flag)) return none();
+        PyObject* mflag = PyDict_GetItem(*dict_ptr, k_torch_meta);
+        if (mflag && PyObject_IsTrue(mflag)) return none();
+    }
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    TensorPlacementScope input_placement(placement);
+    Var* src = holder->grad_input();
+    VarPtr contig;
+    if (require_contiguous && !src->is_contiguous()) {
+        contig = contiguous_storage(src);
+        src = contig.ptr;
+    }
+    VarPtr out = make_unary(src, target_ns);
+    if (require_contiguous && !out->is_contiguous())
+        out = contiguous_storage(out.ptr);
+    return to_py_object<VarHolder*>(new VarHolder(move(out)));
+}
+
 bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
+    const BackendId accel = accelerator_backend_id();
     if (!no_grad || graph_capture_active() || !runtime_use_cuda()
-            || accelerator_backend_id() != BackendId::Cuda
+            || (accel != BackendId::Cuda && accel != BackendId::Acl)
             || !is_var(self) || !is_var(value)) return false;
     PyTensorFrontendScope frontend(self, nullptr, 0, false);
     // Stay under the generated binding's graph lock, as assign does. This
     // builds new dependencies; it neither enters nor drains the executor.
     auto* target = GET_RAW_PTR(VarHolder, self);
+    auto* replacement = GET_RAW_PTR(VarHolder, value);
     Var* a = target->var;
-    Var* b = GET_RAW_PTR(VarHolder, value)->var;
+    Var* b = replacement->var;
     NanoString dtype = a->dtype();
     // WriteBack orders and copies storage without floating-point arithmetic.
     // Integer updates need the same alias/version guards, not a global drain.
@@ -1720,23 +2095,21 @@ bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
             || !a->allocator->is_cuda() || target->view || target->views
             || a->share_src || a->liveness.forward.count() != 1
             || a->capture_owners || a->flag(VarFlags::_kept) || b->flag(VarFlags::_kept)
-            || !a->is_stop_grad() || !b->is_stop_grad()
-            || !a->is_contiguous() || !b->is_contiguous()
+            || !a->is_stop_grad()
+            || !a->is_contiguous()
             || a->shape != b->shape || a->dtype() != b->dtype()
             || a->placement != b->placement || a->device_id != b->device_id)
         return false;
-    if (a->placement.explicit_backend && a->placement.device.backend != BackendId::Cuda)
+    if (b->share_src == a) return false;
+    if (a->placement.explicit_backend && a->placement.device.backend != accel)
         return false;
     // Foreign/DLPack allocations may still have consumers in another runtime.
     // Admit only storage from this device's current ordinary allocator stack.
-    if (a->allocator != get_allocator(Device{BackendId::Cuda, a->device_id}, false))
+    if (a->allocator != get_allocator(Device{accel, a->device_id}, false))
         return false;
     Op* update = b->input();
-    if (!update || !update->is_op(op_ids::binary())) return false;
-    bool consumes_target = false;
-    for (Var* input : update->inputs())
-        consumes_target = consumes_target || input == a;
-    if (!consumes_target) return false;
+    if (update && !update->saved_storage_versions.empty()) return false;
+    if (b->mem_ptr && b->mem_ptr == a->mem_ptr) return false;
     // An unexecuted native view has no physical share ring yet. Future reads
     // through that alias would not depend on the replacement holder. Also
     // decline if any live producer/consumer recorded a lazy saved storage version.
@@ -1757,18 +2130,29 @@ bool try_ordered_unaliased_inplace(PyObject* self, PyObject* value) {
         std::lock_guard<std::mutex> guard(share_ring_mutex());
         if (a->share_next) return false;
     }
+    VarPtr b_contig;
+    if (!b->is_contiguous()) {
+        b_contig = contiguous_storage(b);
+        b = b_contig.ptr;
+    }
     static auto make_write_back = op_constructor<vector<VarPtr>, vector<Var*>&&, vector<Var*>&&>("write_back");
     auto written = make_write_back(vector<Var*>{a}, vector<Var*>{b});
+    written[0]->set_stop_grad();
     VarHolder result(move(written[0]));
+    // Keep `a` alive across assign() so clearing its detached alias state can
+    // never touch a freed node if no other consumer holds `a`.
+    VarPtr keep_a(a);
     // WriteBackOp orders earlier readers and shares the destination's storage
     // and mutation token. assign advances that token exactly once.
     target->assign(&result);
+    a->autograd_alias.reset();
     return true;
 }
 
 bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_result) {
+    const BackendId accel = accelerator_backend_id();
     if (!no_grad || graph_capture_active() || !runtime_use_cuda()
-            || accelerator_backend_id() != BackendId::Cuda
+            || (accel != BackendId::Cuda && accel != BackendId::Acl)
             || !is_var(self) || !is_var(value)) return false;
     PyTensorFrontendScope frontend(self, nullptr, 0, false);
     // The generated binding holds GraphEntryScope, as assign does. This
@@ -1779,44 +2163,124 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
     Var* a = target->var;
     Var* b = replacement->var;
     NanoString dtype = a->dtype();
-    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
+    if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16
+            && dtype != ns_int32 && dtype != ns_int64) return false;
+    // Walk any private unallocated `share_src` chain owned exclusively by `a`
+    // (for example `torch.zeros(...)` -> CloneOp -> BroadcastToOp -> ArrayOp).
+    // Every ancestor must be unallocated, unheld, single-consumer (feeding only
+    // its child in the chain), and share no external alias/version observer.
+    auto version = a->peek_storage_version();
+    bool private_share_src = true;
+    long shared_autograd_versions = (a->autograd_alias && a->autograd_alias->version) ? 1 : 0;
+    long shared_storage_versions = version ? 2 : 0; // local `version` + `a`
+    Var* private_chain[8];
+    int private_chain_len = 0;
+    if (a->share_src) {
+        Var* child = a;
+        Var* cur = a->share_src;
+        while (cur) {
+            if (private_chain_len >= 8
+                    || cur->mem_ptr || cur->is_finished()
+                    || cur->share_next
+                    || cur->liveness.forward.count() != 0
+                    || cur->outputs().size() != 1) {
+                private_share_src = false;
+                break;
+            }
+            Op* only_reader = cur->outputs().front();
+            if (!only_reader || only_reader != child->input()
+                    || !only_reader->saved_storage_versions.empty()) {
+                private_share_src = false;
+                break;
+            }
+            auto cur_ver = cur->peek_storage_version();
+            if (cur_ver) {
+                if (!version || cur_ver != version) {
+                    private_share_src = false;
+                    break;
+                }
+                ++shared_storage_versions;
+            }
+            if (cur->autograd_alias) {
+                if (cur->autograd_alias.use_count() != 1
+                        || !a->autograd_alias
+                        || cur->autograd_alias->version != a->autograd_alias->version) {
+                    private_share_src = false;
+                    break;
+                }
+                ++shared_autograd_versions;
+            }
+            private_chain[private_chain_len++] = cur;
+            child = cur;
+            cur = cur->share_src;
+        }
+    }
+    const bool a_non_trainable = a->is_stop_grad()
+        || (a->flag(VarFlags::_requires_grad_disabled)
+            && (!a->autograd_alias || !a->autograd_alias->requires_grad()));
+    const bool b_non_trainable = b->is_stop_grad()
+        || (b->flag(VarFlags::_requires_grad_disabled)
+            && (!b->autograd_alias || !b->autograd_alias->requires_grad()));
     if (a == b || a->mem_ptr || a->is_finished() || target->view || target->views
-            || a->share_src || a->share_next || a->liveness.forward.count() != 1
-            || !a->is_stop_grad() || !b->is_stop_grad() || !a->is_contiguous()
+            || (a->share_src && !private_share_src) || a->share_next
+            || a->liveness.forward.count() != 1
+            || a->capture_owners || a->flag(VarFlags::_kept) || b->flag(VarFlags::_kept)
+            || !a_non_trainable || !a->is_contiguous()
+            || (fresh_result && (replacement->view || b->share_src || b->share_next
+                                 || !b_non_trainable || !b->is_contiguous()))
             || a->shape != b->shape || a->dtype() != b->dtype()
             || a->placement != b->placement || a->device_id != b->device_id)
         return false;
-    if (a->placement.explicit_backend && a->placement.device.backend != BackendId::Cuda)
+    if (a->placement.explicit_backend && a->placement.device.backend != accel)
         return false;
-    // These providers allocate a fresh result, rather than a view or an
-    // output aliased with an input. Broader producers retain the store path.
     Op* producer = a->input();
     if (!producer || !producer->saved_storage_versions.empty()) return false;
-    bool dtype_cast = fresh_result && producer->is_op(op_ids::unary()) && producer->ns == ns_cast;
-    if (!dtype_cast && !((has_op("cublas_matmul")
-                && producer->is_op(get_op_id("cublas_matmul")))
-            || (has_op("cublas_batched_matmul")
-                && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
     Op* update = b->input();
-    if (!update || !update->is_op(op_ids::binary())
-            || !update->saved_storage_versions.empty()) return false;
-    int readers = 0;
-    for (auto* consumer : a->outputs())
-        if (consumer != update || ++readers > 1) return false;
-    if (readers != 1) return false;
-    auto version = a->peek_storage_version();
-    if (version && version.use_count() != 2) return false;
+    if (update && !update->saved_storage_versions.empty()) return false;
+    for (Op* reader : a->outputs()) {
+        if (!reader->saved_storage_versions.empty()) return false;
+        for (Var* output : reader->outputs())
+            if (output->share_src == a) return false;
+    }
+    if (version && (version.use_count() != shared_storage_versions
+            || version->externally_visible.load(std::memory_order_relaxed))) return false;
     if (a->autograd_alias && (a->autograd_alias.use_count() != 1
-            || a->autograd_alias->version.use_count() != 1)) return false;
+            || a->autograd_alias->version.use_count() != shared_autograd_versions)) return false;
     if (!version) version = a->storage_version_token();
-    if (dtype_cast) {
+    // Keep `a` alive across assign(): when `b` does not depend on `a` (e.g.
+    // copy_ into a pending tensor), assign() releases the last live owner of `a`.
+    VarPtr keep_a(a);
+    Var* assigned_src = b;
+    if (fresh_result && b->liveness.forward.count() == 1) {
+        // Fresh, unaliased RHS (e.g. setitem or unary/binary result): rebinding
+        // preserves earlier pending readers of `a` without a sync or extra copy.
         target->assign(replacement);
     } else {
         // copy_(rhs) must leave the destination independent of its live RHS.
+        // A non-contiguous or view RHS materializes into a fresh contiguous
+        // buffer without forcing a sync on the unallocated destination.
         static auto make_copy = op_constructor<VarPtr, Var*>("copy");
-        VarHolder copied(make_copy(b));
+        VarHolder copied(b->is_contiguous() ? make_copy(b) : contiguous_storage(b));
+        copied.stop_grad();
+        assigned_src = copied.var;
         target->assign(&copied);
     }
+    // `a` was exclusively owned by `target` (no views, no external aliases) and
+    // is now an unreachable internal graph node (e.g. input to a chained
+    // SetitemOp). Detach `a`'s version and autograd-alias links after assign()
+    // transfers them so subsequent in-place updates still observe exclusive
+    // ownership instead of falling back to Var.sync().
+    a->set_storage_version({});
+    a->autograd_alias.reset();
+    for (int i = 0; i < private_chain_len; ++i) {
+        private_chain[i]->set_storage_version({});
+        private_chain[i]->autograd_alias.reset();
+    }
+    // If assign() wrapped `assigned_src` in a CloneOp to preserve a reversible
+    // `requires_grad_(False)` policy, keep the shared version token aligned
+    // across the private 1-hop share_src link.
+    if (target->var != assigned_src && target->var->share_src == assigned_src)
+        assigned_src->set_storage_version(version);
     target->var->set_storage_version(move(version));
     return true;
 }
@@ -1826,7 +2290,8 @@ PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type) {
     auto* holder = GET_RAW_PTR(VarHolder, self);
     TensorPlacement placement = holder->var->placement;
     if (!placement.explicit_backend || (placement.device.backend != BackendId::Cpu
-            && placement.device.backend != BackendId::Cuda)) return none();
+            && placement.device.backend != BackendId::Cuda
+            && placement.device.backend != BackendId::Acl)) return none();
     // As tensor_frontend(..., like=self): the owner selects the result type
     // and AD policy, while the input outranks any ambient construction device.
     PyTensorFrontendScope frontend(reinterpret_cast<PyTypeObject*>(tensor_type));

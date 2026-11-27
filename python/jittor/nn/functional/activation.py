@@ -4,10 +4,37 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 
 import jittor as jt
+from jittor._runtime import dispatch as _dispatch
 from jittor._runtime.dispatch import try_dispatch
 from jittor.nn.functional._layout import channels_last_source
 
 from ... import _arg_policy
+
+_FAST_MAPPED_UNARY = getattr(jt.core, "_fast_mapped_unary", None)
+_SILU_CUDA_IMPORTED = False
+_ACL_ACT_GEN = -1
+_ACL_SILU_DEFAULT = False
+_ACL_SOFTPLUS_DEFAULT = False
+
+
+def _refresh_acl_act_cache():
+    global _ACL_ACT_GEN, _ACL_SILU_DEFAULT, _ACL_SOFTPLUS_DEFAULT
+    gen = _dispatch.generation
+    if gen == _ACL_ACT_GEN:
+        return
+    s_entries = _dispatch._candidates("nn.silu", "acl")
+    _ACL_SILU_DEFAULT = (
+        len(s_entries) == 1
+        and getattr(s_entries[0].implementation, "__name__", None) == "_silu_acl"
+        and getattr(s_entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.neural"
+    )
+    sp_entries = _dispatch._candidates("nn.softplus", "acl")
+    _ACL_SOFTPLUS_DEFAULT = (
+        len(sp_entries) == 1
+        and getattr(sp_entries[0].implementation, "__name__", None) == "softplus_acl"
+        and getattr(sp_entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.neural"
+    )
+    _ACL_ACT_GEN = gen
 
 
 _INPLACE_CONSEQUENCE = (
@@ -352,6 +379,16 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         >>> nn.silu(a)
         jt.Var([-0.15552104 -0.27603802  1.9016962 ], dtype=float32)
     '''
+    global _SILU_CUDA_IMPORTED
+    if not inplace and _FAST_MAPPED_UNARY is not None and not _RESIDUAL_OFFERS:
+        xd = getattr(x, "__dict__", None)
+        if not xd or "_fuse_activation" not in xd:
+            if _dispatch.generation != _ACL_ACT_GEN:
+                _refresh_acl_act_cache()
+            if _ACL_SILU_DEFAULT and _dispatch.dispatch_context is _dispatch._NATIVE_DISPATCH_CONTEXT:
+                fast = _FAST_MAPPED_UNARY(x, 1, 0.0, 0.0)
+                if fast is not None:
+                    return fast
     if inplace:
         _arg_policy.ignored("jittor.nn.silu", "inplace", inplace,
                             _INPLACE_CONSEQUENCE)
@@ -361,7 +398,9 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     if fused is not None:
         return fused
     # Register lazily, then retain the shared dispatch entry for every backend.
-    from jittor.backends.cuda.kernels.nn.silu_cuda import _silu_no_grad_cuda  # noqa: F401
+    if not _SILU_CUDA_IMPORTED:
+        from jittor.backends.cuda.kernels.nn.silu_cuda import _silu_no_grad_cuda  # noqa: F401
+        _SILU_CUDA_IMPORTED = True
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast
@@ -450,6 +489,13 @@ def get_init_var_rand(shape, dtype):
 
 
 def softplus(x, beta=1.0, threshold=20.0):
+    if _FAST_MAPPED_UNARY is not None and isinstance(beta, (int, float)) and isinstance(threshold, (int, float)):
+        if _dispatch.generation != _ACL_ACT_GEN:
+            _refresh_acl_act_cache()
+        if _ACL_SOFTPLUS_DEFAULT and _dispatch.dispatch_context is _dispatch._NATIVE_DISPATCH_CONTEXT:
+            fast = _FAST_MAPPED_UNARY(x, 2, float(beta), float(threshold))
+            if fast is not None:
+                return fast
     dtype = _jittor_dtype_name(x.dtype)
     if dtype not in ("float16", "bfloat16", "float32", "float64"):
         raise TypeError("softplus requires a real floating input")

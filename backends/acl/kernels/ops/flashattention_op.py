@@ -21,6 +21,7 @@ _causal_mask_cache_limit = 16
 _prompt_causal_mask_cache = OrderedDict()
 _prompt_full_mask_cache = OrderedDict()
 _prompt_attention_programs = {}
+_flash_attention_programs = {}
 _prompt_padding_cache = OrderedDict()
 _prompt_padding_cache_limit = 128
 _prompt_padding_cache_max_entry_bytes = 8 << 20
@@ -29,7 +30,62 @@ _prompt_padding_cache_bytes = 0
 
 
 from ._code import acl_code as flashattention_cmd
-from .._soc import kernel_available, soc_name
+from .._soc import kernel_available, soc_name, supports_bfloat16
+
+
+_FLASH_BACKWARD_SRC = code_program(
+    [
+        "\n            // aclop\n            FlashAttentionBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(dout, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in5, true);\n            op.add(in6, true);\n            op.add(pout0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
+        "\n            op.run();\n",
+    ]
+)
+
+
+def _flash_attention_program(
+    scale, prob, pretokens, nexttokens, headnum, layout, innerprecise,
+    sparsemode, psetype, prefix, qstart, kvstart,
+    has_realshift, has_dropmask, has_paddingmask, has_attenmask,
+):
+    key = (
+        scalar_key(scale), scalar_key(prob), int(pretokens), int(nexttokens),
+        int(headnum), str(layout), int(innerprecise), int(sparsemode),
+        int(psetype), tuple(prefix), tuple(qstart), tuple(kvstart),
+        bool(has_realshift), bool(has_dropmask), bool(has_paddingmask), bool(has_attenmask),
+    )
+    program = _flash_attention_programs.get(key)
+    if program is None:
+        attributes = {
+            "scale": scale,
+            "keepProb": prob,
+            "preToken": pretokens,
+            "nextToken": nexttokens,
+            "headNum": headnum,
+            "inputLayout": layout,
+            "innerPrecise": innerprecise,
+            "sparseMode": sparsemode,
+            "psetype": psetype,
+            "prefix": list(prefix),
+            "qStartIdx": list(qstart),
+            "kvStartIdx": list(kvstart),
+            "hasRealshift": bool(has_realshift),
+            "hasDropmask": bool(has_dropmask),
+            "hasPaddingmask": bool(has_paddingmask),
+            "hasAttentmask": bool(has_attenmask),
+        }
+        program = acl_program(
+            "FlashAttention",
+            7,
+            3,
+            attributes=attributes,
+            multi_grad_output=2,
+            multi_grad_input_count=3,
+            multi_grad_src=_FLASH_BACKWARD_SRC,
+            multi_grad_attributes=attributes,
+        )
+        if len(_flash_attention_programs) >= 256:
+            _flash_attention_programs.clear()
+        _flash_attention_programs[key] = program
+    return program
 
 
 class FlashAttentionACL:
@@ -96,48 +152,35 @@ class FlashAttentionACL:
         has_paddingmask = paddingMask is not None
         has_attenmask = attenMask is not None
 
-        dummy = jt.empty((1,), q.dtype)
-        realshift = realshift if realshift is not None else dummy
-        dropMask = dropMask if dropMask is not None else dummy
-        paddingMask = paddingMask if paddingMask is not None else dummy
-        attenMask = attenMask if attenMask is not None else dummy
+        # FlashAttentionOpRunner / FlashAttentionBackwardOpRunner pass nullptr
+        # to aclnn whenever hasRealshift/hasDropmask/hasPaddingmask/hasAttentmask
+        # is false; a single stop_grad dummy avoids allocating 4 buffers while
+        # keeping input_grad_ids[3..6] = -1 so q's gradient slot is untouched.
+        if not (has_realshift and has_dropmask and has_paddingmask and has_attenmask):
+            dummy = jt.empty((1,), q.dtype)
+            if hasattr(dummy, "stop_grad"):
+                dummy = dummy.stop_grad()
+            if realshift is None:
+                realshift = dummy
+            if dropMask is None:
+                dropMask = dummy
+            if paddingMask is None:
+                paddingMask = dummy
+            if attenMask is None:
+                attenMask = dummy
 
-        attributes = {
-            "scale": self.scale,
-            "keepProb": self.prob,
-            "preToken": self.pretokens,
-            "nextToken": self.nexttokens,
-            "headNum": self.headnum,
-            "inputLayout": self.layout,
-            "innerPrecise": self.innerprecise,
-            "sparseMode": self.sparsemode,
-            "psetype": self.psetype,
-            "prefix": list(prefix),
-            "qStartIdx": list(qstart),
-            "kvStartIdx": list(kvstart),
-            "hasRealshift": bool(has_realshift),
-            "hasDropmask": bool(has_dropmask),
-            "hasPaddingmask": bool(has_paddingmask),
-            "hasAttentmask": bool(has_attenmask),
-        }
-
+        program = _flash_attention_program(
+            self.scale, self.prob, self.pretokens, self.nexttokens,
+            self.headnum, self.layout, self.innerprecise, self.sparsemode,
+            self.psetype, prefix, qstart, kvstart,
+            has_realshift, has_dropmask, has_paddingmask, has_attenmask,
+        )
         inputs = [q, k, v, realshift, dropMask, paddingMask, attenMask]
-
-        result = flashattention_cmd(
-            "FlashAttention",
+        result = acl_emit(
+            program,
             inputs,
             output_dtypes=["float", "float", q.dtype],
             output_shapes=[output_shape, output_shape, q.shape],
-            attributes=attributes,
-            multi_grad_output=2,
-            multi_grad_input_count=3,
-            multi_grad_src=code_program(
-                [
-                    "\n            // aclop\n            FlashAttentionBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(dout, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in5, true);\n            op.add(in6, true);\n            op.add(pout0, true);\n            op.add(pout1, true);\n            op.add(pout2, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            ",
-                    "\n            op.run();\n",
-                ]
-            ),
-            multi_grad_attributes=attributes,
         )
         return result[2]
 
@@ -558,7 +601,9 @@ def scaled_dot_product_attention_acl(
     # noise. SD1.5's UNet runs its attention in float16 and was rejected
     # here, falling through to a decomposed BatchMatMul+Softmax+BatchMatMul
     # that was 19%+22% of sd15_sample's device time in an aclprof capture.
-    if _jittor_dtype_name(query.dtype) not in ("float32", "bfloat16", "float16"):
+    if dtype_name not in ("float32", "bfloat16", "float16"):
+        return None
+    if dtype_name == "bfloat16" and not supports_bfloat16():
         return None
 
     query_heads = int(q_shape[-3])
@@ -569,10 +614,9 @@ def scaled_dot_product_attention_acl(
     if query_heads != key_heads:
         if not enable_gqa or query_heads % key_heads != 0:
             return None
-    # The fused runner's training coverage is float32 with equal head counts;
-    # the composite path is built from differentiable primitives and has no
-    # such restriction.
-    if flash_available and training and (dtype_name != "float32" or query_heads != key_heads):
+    # aclnnFlashAttentionScoreGradV2 supports float32/float16/bfloat16 and GQA;
+    # decline training only when the backward kernel is absent on this SoC.
+    if flash_available and training and not kernel_available("FlashAttentionBackward"):
         return None
     head_dim = int(q_shape[-1])
     if head_dim <= 0 or head_dim > 256 or head_dim % 8 != 0:
@@ -696,7 +740,7 @@ def scaled_dot_product_attention_acl(
             sparse_mode = 2
     scale_factor = 1.0 / math.sqrt(head_dim) if scale is None else float(scale)
     decode_single = query_length == 1 and attn_mask is None and not is_causal
-    if dtype_name == "bfloat16" and decode_single:
+    if dtype_name == "bfloat16" and decode_single and kernel_available("IncreFlashAttention"):
         scaled_dot_product_attention_acl.backend_name = "acl_incre_flash_attention_v4"
         return IncreFlashAttentionACL(query_heads, key_heads, scale_factor)(query, key, value)
     if not flash_available:
@@ -709,6 +753,19 @@ def scaled_dot_product_attention_acl(
         return _sdpa_composite(query, key, value, real_shift, is_causal, scale_factor)
 
     scaled_dot_product_attention_acl.backend_name = "acl_flash_attention_score_v2"
+    if not training:
+        mapped_fa = getattr(getattr(jt.core, "ops", None), "mapped_flash_attention", None)
+        if mapped_fa is not None:
+            if real_shift is not None:
+                mask_var, has_mask, is_rs = real_shift, True, True
+            elif causal_mask is not None:
+                mask_var, has_mask, is_rs = causal_mask, True, False
+            else:
+                mask_var, has_mask, is_rs = query, False, False
+            return mapped_fa(
+                query, key, value, mask_var,
+                float(scale_factor), int(sparse_mode), has_mask, is_rs,
+            )
     return FlashAttentionACL(
         query_heads,
         "BNSD",

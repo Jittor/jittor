@@ -269,7 +269,7 @@ def _allocate_empty_like(input, dtype=None, memory_format=None):
 def _fresh_cuda_empty(namespace, name, implementation, args, kwargs, device, like):
     if (not args or kwargs.keys() - {"dtype", "device", "requires_grad"}
             or kwargs.get("requires_grad", False) is not False
-            or (device is None and (not isinstance(like, jt.Var) or like.placement_backend != 1))
+            or (device is None and (not isinstance(like, jt.Var) or like.placement_backend not in (1, 2)))
             or (device is not None and not _device_is_cuda(device))):
         return None
     if name == "empty":
@@ -298,7 +298,7 @@ def _fresh_cuda_empty(namespace, name, implementation, args, kwargs, device, lik
     if getattr(tensor_type, "_frontend_backend", None) is not jt:
         return None
     placement = _placement_request(jt, device, like)
-    if placement[0] != 1:
+    if placement[0] not in (1, 2):
         return None
     dtype = kwargs.get("dtype")
     if dtype is None:
@@ -501,7 +501,7 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         out._jittor_torch_ext_mutable = True
         return out
     g = get_install_context(jt).target_namespace
-    if (name == "empty" and orig is _native_creation.empty and _accepts_dtype
+    if (name in ("empty", "zeros", "ones") and orig is getattr(_native_creation, name) and _accepts_dtype
             and args and (len(args) == 1 or all(type(dim) is int for dim in args))
             and kwargs.keys() <= {"device", "dtype", "requires_grad"}
             and kwargs.get("requires_grad", False) is False):
@@ -510,14 +510,25 @@ def _constructor_adapter(name, orig, _accepts_dtype, *args, **kwargs):
         if type(shape) in (tuple, list):
             native_shape = all(type(dim) is int for dim in shape)
         if native_shape:
-            # EmptyOp creates independent uninitialized storage with the exact
-            # dtype. Mark its holder directly to avoid a second detached alias.
             dtype = kwargs.get("dtype")
             dtype = _dtype_to_str(g.get_default_dtype() if dtype is None else dtype)
-            out = orig(*args, dtype=dtype)
-            out._jittor_torch_ext_mutable = True
-            out.requires_grad_(False)
-            return out
+            if name == "empty":
+                # EmptyOp creates independent uninitialized storage with the exact
+                # dtype. Mark its holder directly to avoid a second detached alias.
+                out = orig(*args, dtype=dtype)
+                out._jittor_torch_ext_mutable = True
+                out.requires_grad_(False)
+                return out
+            if _jittor_dtype_name(dtype) not in _COMPLEX_COMPONENTS:
+                # Fresh constant broadcasts have no trainable inputs. Stop their
+                # internal constant/broadcast history without creating a second
+                # detached CloneOp alias, matching the *_like fast path above.
+                out = orig(*args, dtype=dtype)
+                if _jittor_dtype_name(out.dtype) != _jittor_dtype_name(dtype):
+                    out = out.cast(dtype)
+                out = out.stop_grad()
+                out._jittor_torch_ext_mutable = True
+                return out
     # _invoke_factory already established native construction placement.
     if name == "empty" and kwargs.get("memory_format") == CHANNELS_LAST_3D:
         orig = empty_channels_last_3d

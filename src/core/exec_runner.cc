@@ -432,13 +432,19 @@ namespace {
 // here must not replace whatever error is already unwinding.
 struct ComputeHandoffScope {
     const uint64& devices;
+    bool released = false;
+    void release_now() {
+        if (released) return;
+        released = true;
+        // Never record the global handoff event while the compute stream is
+        // under CUDA Graph capture: a capture-local event cannot be waited
+        // on by another thread's uncaptured stream (`cudaErrorInvalidValue`).
+        if (!graph_capture_active())
+            backend_compute_stream_release(devices);
+    }
     ~ComputeHandoffScope() {
         try {
-            // Never record the global handoff event while the compute stream is
-            // under CUDA Graph capture: a capture-local event cannot be waited
-            // on by another thread's uncaptured stream (`cudaErrorInvalidValue`).
-            if (!graph_capture_active())
-                backend_compute_stream_release(devices);
+            release_now();
         } catch (const std::exception& error) {
             LOGe << "Compute handoff failed:" << error.what();
         }
@@ -518,7 +524,18 @@ static bool dies_after(Var* v, FusedOp& fused, const vector<Var*>& last_used,
 // store would see the new value, a read at another index another thread's.
 static bool reads_before_writing(Var* v, Var* out, FusedOp& fused) {
     Op* producer = out->input();
-    if (!producer || producer->type() != OpType::element || !fused.op_index.has(producer))
+    if (!producer || !fused.op_index.has(producer))
+        return false;
+    // A standalone basic setitem starts from input(0) and overwrites a slice
+    // from input(1). When input(0) dies here and does not alias input(1),
+    // reusing its buffer lets the backend skip copying the base tensor.
+    if (fused.ops.size() == 1 && producer->is_op(op_ids::setitem())
+            && producer->inputs().size() == 2 && v == producer->input(0)) {
+        Var* val = producer->input(1);
+        return val != v && !v->shares_allocation_with(val)
+            && (!v->mem_ptr || !val->mem_ptr || v->mem_ptr != val->mem_ptr);
+    }
+    if (producer->type() != OpType::element)
         return false;
     unordered_set<Op*> feeds;
     vector<Op*> stack = {producer};
@@ -690,7 +707,7 @@ static void finish_unfused(Op* op, vector<Var*>& outputs_bk) {
         var->finish_pending_liveness();
 }
 
-DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them; they are otherwise applied whenever the lock is free. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
+DEFINE_FLAG(int64, async_release_lag_bytes, 64<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them; they are otherwise applied opportunistically once queued releases reach a quarter of this threshold. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
 
 namespace {
 // The async worker's graph bookkeeping, applied behind its launches.
@@ -768,10 +785,16 @@ struct DeferredGraphWork {
         std::lock_guard<GraphMutationMutex> graph(graph_mutation_mutex());
         apply();
     }
-    // Between operators: when the lock is free, or when waiting for it is
-    // cheaper than the memory the queued releases keep.
+    // Between operators: avoid touching `graph_mutation_mutex()` on every tiny
+    // decode op (which otherwise cache-bounces against Python's GraphEntryScope
+    // and blocks Python on GIL-released mutex waits). Only try to drain once
+    // queued releases reach a quarter of `async_release_lag_bytes`, and force
+    // a drain if they exceed the full lag budget; everything remaining is
+    // still applied once in ~DeferredGraphWork() at batch end.
     void step() {
         if (empty()) return;
+        const int64 soft_lag = async_release_lag_bytes >> 2;
+        if (lag_bytes < soft_lag) return;
         if (try_apply_and_hold()) graph_mutation_mutex().unlock();
         else if (lag_bytes > async_release_lag_bytes) apply_now();
     }
@@ -800,16 +823,6 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     auto temp_allocator = exe.temp_allocator;
     #ifdef HAS_ACCELERATOR
     uint64 touched_devices = 0;
-    // Nothing this batch launches is ordered against work another thread left
-    // on its own compute stream -- that stream is per-thread and the graph is
-    // not. Wait for it before issuing anything, and publish what this batch
-    // issued on the way out so the next thread in can do the same.
-    //
-    // On the way out even if the batch threw: the kernels launched before the
-    // throw are still in flight, and a thread that never publishes them leaves
-    // the next one free to read what they are still writing.
-    backend_compute_stream_acquire();
-    ComputeHandoffScope compute_handoff{touched_devices};
     #else
     (void)entry_device;
     #endif
@@ -849,12 +862,25 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
     // generated source path when V_ON(1).
     string prepared_jit_key;
     const bool on_worker = on_async_worker();
-    // On the worker the loop runs without the graph lock; see
-    // DeferredGraphWork. Declared in this order so that on the way out the
-    // lock is back before the queue is applied.
+    // On the worker the loop (and stream handoff) runs without the graph lock;
+    // see DeferredGraphWork. Declared in this order so on both normal exit and
+    // exception: compute_handoff publishes unlocked, loop_unlocked restores the
+    // graph lock, deferred applies under it, and setup_free_buffer drains under it.
     DeferredGraphWork deferred(plan, fused_op);
     unique_ptr<GraphLockSuspend> loop_unlocked;
     if (on_worker) loop_unlocked.reset(new GraphLockSuspend());
+    #ifdef HAS_ACCELERATOR
+    // Nothing this batch launches is ordered against work another thread left
+    // on its own compute stream -- that stream is per-thread and the graph is
+    // not. Wait for it before issuing anything, and publish what this batch
+    // issued on the way out so the next thread in can do the same.
+    //
+    // On the way out even if the batch threw: the kernels launched before the
+    // throw are still in flight, and a thread that never publishes them leaves
+    // the next one free to read what they are still writing.
+    backend_compute_stream_acquire();
+    ComputeHandoffScope compute_handoff{touched_devices};
+    #endif
     for (uint rid=0; rid<queue.size(); rid++) {
         // Segment rid-1 has run, whichever `continue` it left by: nothing later
         // in the batch uses the vars scheduled after it, so their memory goes
@@ -1219,6 +1245,9 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         }
     }
     if (on_worker) {
+        #ifdef HAS_ACCELERATOR
+        compute_handoff.release_now();
+        #endif
         loop_unlocked.reset();
         deferred.apply();
     }

@@ -150,6 +150,16 @@ def _acl_bfloat16_rms_norm(value, weight, epsilon):
         and _jittor_dtype_name(weight.dtype) == "bfloat16"
     ):
         return None
+    if getattr(jt.flags, "no_grad", 0):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_rms_norm", None)
+        if (
+            mapped is not None
+            and value.ndim >= 1
+            and weight.ndim == 1
+            and int(weight.shape[0]) == int(value.shape[-1])
+            and float(epsilon) > 0.0
+        ):
+            return mapped(value, weight, float(epsilon), True)
     unit_weight = getattr(weight, "_torch_acl_rms_norm_unit_weight", None)
     if unit_weight is None or tuple(unit_weight.shape) != tuple(weight.shape):
         unit_weight = jt.ones(weight.shape, dtype="bfloat16")
@@ -1643,6 +1653,7 @@ def _install_module_methods(nn, registry=None):
         "linear_execute": _NativeLinear.execute,
         "linear_training_state": _linear_training_dispatch_state(nn, _kernel_dispatch),
         "matmul_kernel": _matrix._cublas_matmul,
+        "acl_matmul_kernel": _kernel_dispatch.registered_kernel("matmul", "acl"),
         "rms_norm_inference": _rms_norm_cuda.__wrapped__,
         "rms_norm_source": _rms_norm_source,
         "dropout_execute": _NativeDropout.execute,

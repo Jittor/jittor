@@ -1193,6 +1193,62 @@ class _ForkRng:
         return False
 
 
+def _scaled_mm(
+    mat_a,
+    mat_b,
+    scale_a,
+    scale_b,
+    bias=None,
+    scale_result=None,
+    out_dtype=None,
+    use_fast_accum=False,
+):
+    """FP8 / MXFP8 scaled matrix multiplication compatible with ``torch._scaled_mm``."""
+    from jittor.nn.functional.quant import (
+        GROUP_SIZE_BLOCK_128,
+        GROUP_SIZE_MXFP8_32,
+        GROUP_SIZE_PER_TENSOR,
+        quant_matmul,
+    )
+
+    if scale_result is not None:
+        raise NotImplementedError("torch._scaled_mm: scale_result (FP8 output) is not implemented")
+    out_name = _dtype_to_str(out_dtype) if out_dtype is not None else "bfloat16"
+    s1_dt = _jittor_dtype_name(scale_a.dtype)
+    s2_dt = _jittor_dtype_name(scale_b.dtype)
+    group_size = GROUP_SIZE_PER_TENSOR
+    trans_x2_scale = False
+    if s1_dt == "float8_e8m0fnu" and s2_dt == "float8_e8m0fnu":
+        group_size = GROUP_SIZE_MXFP8_32
+        if scale_b.ndim == 3 and int(scale_b.shape[0]) == int(mat_b.shape[-1]):
+            trans_x2_scale = True
+    elif scale_a.ndim == 2 and int(scale_a.shape[-1]) > 1 and scale_b.ndim == 2 and int(scale_b.shape[0]) > 1:
+        k_dim = int(mat_a.shape[-1])
+        n_dim = int(mat_b.shape[-1])
+        k_blk = k_dim // int(scale_a.shape[-1])
+        if int(scale_b.shape[0]) == k_dim // k_blk and int(scale_b.shape[1]) == n_dim // k_blk:
+            group_size = (1 << 32) | (k_blk << 16) | k_blk
+        elif int(scale_b.shape[0]) == n_dim // k_blk and int(scale_b.shape[1]) == k_dim // k_blk:
+            group_size = (1 << 32) | (k_blk << 16) | k_blk
+            trans_x2_scale = True
+        else:
+            group_size = GROUP_SIZE_BLOCK_128
+    out = quant_matmul(
+        mat_a,
+        mat_b,
+        scale_a,
+        scale_b,
+        bias=bias,
+        out_dtype=out_name,
+        trans_a=False,
+        trans_b=False,
+        trans_x2_scale=trans_x2_scale,
+        group_size=group_size,
+    )
+    g = _misc_context().target_namespace
+    return out if isinstance(out, g.Tensor) else g.Tensor(out)
+
+
 _MISC_BINDINGS = {
     "manual_seed": manual_seed,
     "initial_seed": initial_seed,
@@ -1243,6 +1299,7 @@ _MISC_BINDINGS = {
     "get_device_module": get_device_module,
     "as_strided": as_strided,
     "empty_strided": empty_strided,
+    "_scaled_mm": _scaled_mm,
 }
 _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
@@ -1276,6 +1333,7 @@ _MISC_DETAILS = {
     "are_deterministic_algorithms_enabled": "reads the accelerator runtime's own deterministic option",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
+    "_scaled_mm": "routes FP8 / MXFP8 scaled matmul to native quant_matmul (Ascend 950PR ACL or CPU reference)",
 }
 for _name, _implementation in _MISC_BINDINGS.items():
     _level = (

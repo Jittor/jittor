@@ -15,12 +15,13 @@ from ..core import _promote_pair
 
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
+_FAST_TO_DTYPE = getattr(_owner.jt.core, "_fast_to_dtype", None)
 
 _DTYPE_BYTES = {
     "float64": 8, "float32": 4, "float16": 2, "bfloat16": 2,
     "int64": 8, "int32": 4, "int16": 2, "int8": 1, "uint8": 1,
     "uint16": 2, "uint32": 4, "uint64": 8, "bool": 1,
-    "float8_e4m3fn": 1, "float8_e5m2": 1,
+    "float8_e4m3fn": 1, "float8_e5m2": 1, "float8_e8m0fnu": 1,
     "complex64": 8, "complex128": 16,
 }
 
@@ -81,11 +82,12 @@ def _write_data_owner_numpy(view, value, slices):
         target = target[_numpy_data_value(index)]
     if not getattr(getattr(target, "flags", None), "writeable", True):
         return _assign_data_owner(view, value, (slices,))
-    if _jittor_dtype_name(owner.dtype) == "bfloat16":
-        # Native DataView exposes bfloat16 storage as uint16. Assign the
+    owner_dtype = _jittor_dtype_name(owner.dtype)
+    if owner_dtype in ("bfloat16", "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu"):
+        # Native DataView exposes bfloat16 as uint16 and FP8 as uint8. Assign the
         # converted tensor's bits, not the float values returned by numpy().
         source = value if isinstance(value, _NativeVar) else _owner.jt.array(value)
-        source = source.to("cpu").cast("bfloat16")
+        source = source.to("cpu").cast(owner_dtype)
         payload = _native_data_descriptor.__get__(source, Var)
         if payload.size == 1:
             payload = payload.reshape(())[()]
@@ -184,7 +186,7 @@ def _set_data_owner(view, slices, value):
     if not isinstance(owner, _NativeVar):
         return False
     if (_data_owner_uses_device(owner)
-            or _jittor_dtype_name(owner.dtype) == "bfloat16"):
+            or _jittor_dtype_name(owner.dtype) in ("bfloat16", "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu")):
         # A BF16 owner cannot be updated through its NumPy DataView on either
         # CPU or device: NumPy has no native BF16 scalar, so assigning a float
         # source there stores the converted integer bits as a BF16 value (for
@@ -313,7 +315,7 @@ def _torch_setitem(self, slices, value):
     if _owner.jt.flags.no_grad or not self.requires_grad:
         # Detached indexed stores must keep shared allocations (NumPy,
         # DLPack and retained aliases), like copy_ and the other in-place ops.
-        return _ip(self, self.setitem(slices, value), preserve_storage=True)
+        return _ip(self, self.setitem(slices, value), preserve_storage=True, fresh_result=True)
     result = _orig_setitem(self, slices, value)
     return result
 
@@ -961,6 +963,22 @@ def _align_advanced_index(data, index):
 
 
 def _torch_getitem(self, slices):
+    # Fast path for basic indexing (int, slice, or tuple of int/slice/None/Ellipsis):
+    # avoid 4 recursive Python tuple passes before calling native _fast_getitem.
+    st = type(slices)
+    if st is int or st is slice or slices is None or slices is Ellipsis:
+        fast = _owner.jt.core._fast_getitem(self, slices)
+        if fast is not NotImplemented:
+            return fast
+    elif st is tuple:
+        for item in slices:
+            it = type(item)
+            if not (it is int or it is slice or item is None or item is Ellipsis):
+                break
+        else:
+            fast = _owner.jt.core._fast_getitem(self, slices)
+            if fast is not NotImplemented:
+                return fast
     slices = _normalize_index_sequence(slices)
     # Convert advanced masks before the native fast path or dispatcher.
     def normalize(index):
@@ -1111,27 +1129,53 @@ def _to_channels_last_3d(source, result, copy):
 
 
 def _to(self, *args, **kwargs):
-    # A dtype-only no-op is common between model layers. Explicit placement
-    # already names this tensor's device, so there is no target to resolve.
-    # A device tensor parked on the host must still take the migration path.
-    if (len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype)
-            and _jittor_dtype_name(self.dtype) == args[0].name):
+    # A dtype-only no-op or in-place-device cast is common between model layers
+    # (including `.to(dtype, memory_format=torch.contiguous_format)`). Explicit
+    # placement already names this tensor's device, so there is no target to
+    # resolve. A device tensor parked on the host must still take the migration
+    # path.
+    if (len(args) == 1 and isinstance(args[0], _owner.dtype)
+            and (not kwargs or (len(kwargs) == 1 and kwargs.get("memory_format") == "contiguous_format"))):
+        if _FAST_TO_DTYPE is not None:
+            fast = _FAST_TO_DTYPE(self, args[0].name, bool(kwargs))
+            if fast is not None:
+                return fast
         placement = self.placement_backend
         if placement == 0 or (placement > 0 and self.location() != "cpu"):
-            return self
-    # Matching another tensor need not turn its explicit placement into a
-    # Python device and resolve it again. Keep copies, casts, meta tensors and
-    # accelerator storage parked on the host on the ordinary conversion path.
+            src = self
+            if kwargs and not src._storage_is_contiguous():
+                src = src.contiguous()
+            if src.dtype is args[0]:
+                return src
+            target_name = args[0].name
+            if _jittor_dtype_name(src.dtype) == target_name:
+                return src
+            out = src.cast(target_name)
+            if kwargs and not out._storage_is_contiguous():
+                out = out.contiguous()
+            if getattr(self, "_torch_0d", False):
+                out._torch_0d = True
+            return out
+    # Matching another tensor (including `type_as`) need not turn its explicit
+    # placement into a Python device and resolve it again. Keep copies, meta
+    # tensors and accelerator storage parked on the host on the ordinary path.
     if len(args) == 1 and not kwargs and isinstance(args[0], _NativeVar):
         other = args[0]
         placement = self.placement_backend
         if (placement >= 0 and placement == other.placement_backend
                 and self.device_id == other.device_id
-                and _jittor_dtype_name(self.dtype) == _jittor_dtype_name(other.dtype)
                 and not getattr(self, "_jittor_torch_meta", False)
                 and not getattr(other, "_jittor_torch_meta", False)
                 and (placement == 0 or self.location() != "cpu")):
-            return self
+            if self.dtype is other.dtype:
+                return self
+            target_name = _jittor_dtype_name(other.dtype)
+            if _jittor_dtype_name(self.dtype) == target_name:
+                return self
+            out = self.cast(target_name)
+            if getattr(self, "_torch_0d", False):
+                out._torch_0d = True
+            return out
     ds = None
     dev = None
     copy = bool(kwargs.get("copy", False))
@@ -1875,7 +1919,10 @@ def _binary_native(opname, left, right, native_api=None):
 #: A Python scalar of these kinds against a tensor of these dtypes leaves the
 #: tensor's dtype, in torch's promotion: a float against a floating tensor, an
 #: int against any non-bool tensor. Everything else asks `result_type`.
-_FLOATING_NAMES = frozenset(("float16", "bfloat16", "float32", "float64"))
+_FLOATING_NAMES = frozenset((
+    "float16", "bfloat16", "float32", "float64",
+    "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu",
+))
 _SCALAR_KEEPS_DTYPE = {
     float: _FLOATING_NAMES,
     int: _FLOATING_NAMES | frozenset(("uint8", "int8", "int16", "int32", "int64")),
@@ -2216,6 +2263,13 @@ def _tensor_rmod(self, other):
 
 
 def _tensor_pow(self, other):
+    if (type(other) in (int, float) and other == 2
+            and not _preserve_autocast_arithmetic()
+            and _FAST_BINARY is not None
+            and _jittor_dtype_name(self.dtype) in ("float32", "float16", "bfloat16")):
+        out = _FAST_BINARY(self, self, 4)
+        if out is not None:
+            return out
     if _preserve_autocast_arithmetic():
         self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
         with _owner.jt.flag_scope(amp_reg=0):

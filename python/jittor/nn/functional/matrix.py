@@ -5,9 +5,14 @@ from math import prod
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+from jittor._runtime import dispatch as _dispatch
 from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from ._amp import prefers_half as _amp_retypes_output_to_half
+
+_FAST_ACL_MATMUL = getattr(jt.core, "_fast_acl_matmul", None)
+_ACL_MM_GEN = -1
+_ACL_MM_DEFAULT = False
 
 
 #: The AMP register the generic ``(a * b).sum(axis)`` contraction runs under.
@@ -690,6 +695,27 @@ def matmul(a, b):
         c = jt.matmul(a, b)
         assert c.shape == [8, 10, 3, 5]
     """
+    global _ACL_MM_GEN, _ACL_MM_DEFAULT
+    if _FAST_ACL_MATMUL is not None:
+        gen = _dispatch.generation
+        if gen != _ACL_MM_GEN:
+            m_entries = _dispatch._candidates("matmul", "acl")
+            b_entries = _dispatch._candidates("batched_matmul", "acl")
+            _ACL_MM_DEFAULT = (
+                len(m_entries) == 1
+                and getattr(m_entries[0].implementation, "__name__", None) == "matmul_acl"
+                and getattr(m_entries[0].implementation, "__module__", None)
+                == "jittor.backends.acl.kernels.neural"
+                and len(b_entries) == 1
+                and getattr(b_entries[0].implementation, "__name__", None) == "bmm_acl"
+                and getattr(b_entries[0].implementation, "__module__", None)
+                == "jittor.backends.acl.kernels.neural"
+            )
+            _ACL_MM_GEN = gen
+        if _ACL_MM_DEFAULT and _dispatch.dispatch_context is _dispatch._NATIVE_DISPATCH_CONTEXT:
+            fast = _FAST_ACL_MATMUL(a, b, bool(getattr(jt, "acl_allow_hf32", False)), False)
+            if fast is not None:
+                return fast
     return jt.core._matmul_contraction_call(_matmul_impl, _matmul_fallback, a, b)
 
 

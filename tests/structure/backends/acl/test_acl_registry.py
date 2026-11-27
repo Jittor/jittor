@@ -60,7 +60,20 @@ aclnnStatus execute(void* workspace, uint64_t size, aclOpExecutor* exec, aclrtSt
 int main() {
     static_assert(sizeof(AclOpFunctions) <= 64, "registry entries must not regain per-op callable slots");
     assert(from_a() == from_b() && from_a() == &acl_op_registry());
-    assert(acl_op_registry().size() == 137); // 139 rows, two identical duplicate keys (Floor, Sigmoid).
+    assert(acl_op_registry().size() == 150); // 152 rows, two identical duplicate keys (Floor, Sigmoid).
+    assert(acl_op_registry().at("MaxpoolInfer").launcher() == &aclnnMaxPool);
+    assert(acl_op_registry().at("Mod").launcher() == &aclnnRemainderTensorTensor);
+    assert(acl_op_registry().at("Fmod").launcher() == &aclnnFmodTensor);
+    assert(acl_op_registry().at("Histc").launcher() == &aclnnHistc);
+    assert(acl_op_registry().at("GroupedMatMul").launcher() == &aclnnGroupedMatmulV5);
+    assert(acl_op_registry().at("Addmm").launcher() == &aclnnAddmm);
+    assert(acl_op_registry().at("Tril").launcher() == &aclnnTril);
+    assert(acl_op_registry().at("InplaceCopy").launcher() == &aclnnInplaceCopy);
+    assert(acl_op_registry().at("Softplus").launcher() == &aclnnSoftplus);
+    assert(acl_op_registry().at("Rsqrt").launcher() == &aclnnRsqrt);
+    assert(acl_op_registry().at("DynamicBlockQuant").launcher() == &aclnnDynamicBlockQuant);
+    assert(acl_op_registry().at("DynamicMxQuant").launcher() == &aclnnDynamicMxQuant);
+    assert(acl_op_registry().at("QuantMatmul").launcher() == &aclnnQuantMatmulV5);
     assert(acl_op_registry().at("AdaptiveAvgPool2d").launcher() == &aclnnAdaptiveAvgPool2d);
     assert(acl_op_registry().at("AdaptiveAvgPool2dBackward").launcher() == &aclnnAdaptiveAvgPool2dBackward);
     assert(acl_op_registry().at("Abs").launcher() == &aclnnAbs);

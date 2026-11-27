@@ -169,6 +169,7 @@ void backend_default_stream_wait_side(BackendStreamKind kind, int stream_device,
 // device-wide wait, and while one thread does all the work -- the normal case
 // -- the waiting side is skipped after one thread-id comparison.
 void backend_compute_stream_acquire() {
+    if (backend_ops(accelerator_backend_id()).execution.shared_compute_stream) return;
     if (!handoff_owner_known) return;
     if (handoff_owner == std::this_thread::get_id()) return;
     const auto& ops = backend_ops(accelerator_backend_id());
@@ -192,7 +193,7 @@ void backend_compute_stream_acquire() {
 // `devices` is the batch's touched-device set, so a batch that ran entirely on
 // the host records nothing and leaves the previous owner in place.
 void backend_compute_stream_release(uint64 devices) {
-    if (!devices) return;
+    if (!devices || backend_ops(accelerator_backend_id()).execution.shared_compute_stream) return;
     handoff_devices |= devices;
     handoff_owner = std::this_thread::get_id();
     handoff_owner_known = true;

@@ -40,6 +40,7 @@ _CANONICAL_ALIASES = {
 #: arbitrary object whose text is not a dtype name at all.
 _CANONICAL_NAMES = {}
 _CANONICAL_NAMES_LIMIT = 256
+_VALUE_TO_CANONICAL = {}
 
 
 #: `jittor_core.NanoString`, learned from the first one seen here. A native
@@ -51,29 +52,44 @@ _NATIVE_DTYPE_TYPE = None
 def dtype_name(value):
     """Return a canonical name for metadata; this does not enable computation."""
     global _NATIVE_DTYPE_TYPE
-    cls = value.__class__
-    if cls is str:
-        # The overwhelmingly common non-native spelling, and the one the two
-        # attribute probes below can never answer for.
-        name = value
-    elif cls is _NATIVE_DTYPE_TYPE:
-        name = str(value)
-    elif value is None:
+    if value is None:
         return None
+    cls = value.__class__
+    if cls is _NATIVE_DTYPE_TYPE:
+        name = str(value)
+        canonical = _CANONICAL_NAMES.get(name)
+        if canonical is not None:
+            return canonical
     else:
-        name = getattr(value, "name", None)
-        if not isinstance(name, str):
-            name = getattr(value, "__name__", None)
+        try:
+            cached = _VALUE_TO_CANONICAL.get(value)
+            if cached is not None:
+                return cached
+        except TypeError:
+            pass
+        if cls is str:
+            # The overwhelmingly common non-native spelling, and the one the two
+            # attribute probes below can never answer for.
+            name = value
+        else:
+            name = getattr(value, "name", None)
             if not isinstance(name, str):
-                name = str(value)
-                if cls.__name__ == "NanoString" and cls.__module__ == "jittor_core":
-                    _NATIVE_DTYPE_TYPE = cls
-    canonical = _CANONICAL_NAMES.get(name)
+                name = getattr(value, "__name__", None)
+                if not isinstance(name, str):
+                    name = str(value)
+                    if cls.__name__ == "NanoString" and cls.__module__ == "jittor_core":
+                        _NATIVE_DTYPE_TYPE = cls
+        canonical = _CANONICAL_NAMES.get(name)
     if canonical is None:
         canonical = name[6:] if name.startswith("torch.") else name
         canonical = _CANONICAL_ALIASES.get(canonical, canonical)
         if len(_CANONICAL_NAMES) < _CANONICAL_NAMES_LIMIT:
             _CANONICAL_NAMES[name] = canonical
+    if (cls is str or cls in _python_dtype_types) and len(_VALUE_TO_CANONICAL) < _CANONICAL_NAMES_LIMIT:
+        try:
+            _VALUE_TO_CANONICAL[value] = canonical
+        except TypeError:
+            pass
     return canonical
 
 

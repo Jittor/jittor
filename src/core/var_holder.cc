@@ -29,6 +29,7 @@
 #include "ops/composite/reshape_op.h"
 #include "ops/composite/clone_op.h"
 #include "type/fp16_compute.h"
+#include "type/fp8_compute.h"
 #include "mem/swap.h"
 #include "runtime/executor_entry.h"
 #include "runtime/holder_state.h"
@@ -2402,6 +2403,16 @@ inline static void cast_item_data(ItemData& data) {
         auto* fp32 = (float32*)&data;
         fp32[0] = value;
         data.dtype = ns_float32;
+    } else if (ns_is_fp8(data.dtype)) {
+        uint8 raw = *(uint8*)&data;
+        float32 value = data.dtype == ns_float8_e4m3fn
+            ? fp8_detail::e4m3fn_to_f32(raw)
+            : data.dtype == ns_float8_e5m2
+                ? fp8_detail::e5m2_to_f32(raw)
+                : fp8_detail::e8m0fnu_to_f32(raw);
+        auto* fp32 = (float32*)&data;
+        fp32[0] = value;
+        data.dtype = ns_float32;
     }
 }
 
@@ -2449,7 +2460,7 @@ ItemData VarHolder::item() {
         {
             std::memcpy(&data.data, var->mem_ptr, dsize);
         }
-        if (data.dtype == ns_float16 || data.dtype == ns_bfloat16)
+        if (data.dtype == ns_float16 || data.dtype == ns_bfloat16 || ns_is_fp8(data.dtype))
             cast_item_data(data);
     }
     graph_check();

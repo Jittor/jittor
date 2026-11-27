@@ -32,6 +32,13 @@ namespace jittor
         return value;
     }
 
+    bool acl_soc_supports_fp8()
+    {
+        static const bool value =
+            std::strncmp(acl_soc_name(), "Ascend950", 9) == 0;
+        return value;
+    }
+
     bool acl_soc_supports_fp32_cube()
     {
         static const bool value =
@@ -82,6 +89,39 @@ namespace jittor
             return ACL_BOOL;
         if (s == ns_complex64)
             return ACL_COMPLEX64;
+        if (s == ns_float8_e4m3fn)
+        {
+            USER_CHECK(acl_soc_supports_fp8())
+                << "float8_e4m3fn is not supported on" << acl_soc_name()
+                << ": native FP8 requires Ascend950-class hardware";
+#if JT_ACL_HAS_FP8_OPS
+            return ACL_FLOAT8_E4M3FN;
+#else
+            return static_cast<aclDataType>(36);
+#endif
+        }
+        if (s == ns_float8_e5m2)
+        {
+            USER_CHECK(acl_soc_supports_fp8())
+                << "float8_e5m2 is not supported on" << acl_soc_name()
+                << ": native FP8 requires Ascend950-class hardware";
+#if JT_ACL_HAS_FP8_OPS
+            return ACL_FLOAT8_E5M2;
+#else
+            return static_cast<aclDataType>(35);
+#endif
+        }
+        if (s == ns_float8_e8m0fnu)
+        {
+            USER_CHECK(acl_soc_supports_fp8())
+                << "float8_e8m0fnu is not supported on" << acl_soc_name()
+                << ": native MXFP8 scale requires Ascend950-class hardware";
+#if JT_ACL_HAS_FP8_OPS
+            return ACL_FLOAT8_E8M0;
+#else
+            return static_cast<aclDataType>(37);
+#endif
+        }
         LOGf << "Not supported dtype: " << s;
         return ACL_FLOAT;
     }
@@ -183,38 +223,57 @@ namespace jittor
         return *tensor == nullptr ? ACL_ERROR_FAILURE : ACL_SUCCESS;
     }
 
+    aclError AcquireRawAclTensor(std::vector<aclTensor *> &pool,
+                                 const int64_t *view_dims, size_t rank,
+                                 aclDataType dataType, const int64_t *strides,
+                                 const int64_t *storage_dims, size_t storage_rank,
+                                 void *deviceAddr, aclTensor **tensor,
+                                 aclFormat format)
+    {
+        *tensor = nullptr;
+        while (rank > 0 && !pool.empty()) {
+            aclTensor* recycled = pool.back();
+            pool.pop_back();
+            auto status = aclInitTensor(recycled, view_dims, rank, dataType,
+                                        strides, 0, format,
+                                        storage_dims, storage_rank, deviceAddr);
+            if (status == ACL_SUCCESS) {
+                *tensor = recycled;
+                return ACL_SUCCESS;
+            }
+            aclDestroyTensor(recycled);
+        }
+        *tensor = aclCreateTensor(view_dims, rank, dataType, strides, 0,
+                                  format, storage_dims, storage_rank, deviceAddr);
+        return *tensor == nullptr ? ACL_ERROR_FAILURE : ACL_SUCCESS;
+    }
+
+    aclError AcquireFakeTransAclTensor(std::vector<aclTensor *> &pool,
+                                       std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
+                                       aclDataType dataType, aclTensor **tensor, bool use_nchw, const Var* storage)
+    {
+        AclTensorLayout layout;
+        describe_tensor(shape.data(), shape.size(), use_nchw, storage, layout);
+        int n = shape.size();
+        if (n > 1)
+        {
+            std::swap(shape[n - 1], shape[n - 2]);
+            std::swap(layout.strides[n - 1], layout.strides[n - 2]);
+        }
+        return AcquireRawAclTensor(pool, shape.data(), shape.size(), dataType,
+                                   layout.strides, layout.storage_dims, layout.storage_rank,
+                                   deviceAddr, tensor, layout.format);
+    }
+
     aclError AcquireAclTensor(std::vector<aclTensor *> &pool,
                               const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                               aclDataType dataType, aclTensor **tensor, bool use_nchw, const Var* storage)
     {
         AclTensorLayout layout;
         describe_tensor(shape.data(), shape.size(), use_nchw, storage, layout);
-        *tensor = nullptr;
-        // Measured on CANN 9.1.1: aclInitTensor treats viewDimsNum == 0 as
-        // "leave the view alone" and returns ACL_SUCCESS, so a recycled
-        // descriptor would keep the rank and dims of the operator that used it
-        // last. A rank-0 descriptor is therefore always built fresh. Every
-        // rank >= 1 case -- growing, shrinking, dtype and format changes -- was
-        // checked element by element and does rewrite the descriptor.
-        while (!shape.empty() && !pool.empty()) {
-            aclTensor* recycled = pool.back();
-            pool.pop_back();
-            // Every descriptor field is rewritten here, so nothing survives
-            // from the operator that last used this object.
-            auto status = aclInitTensor(recycled, shape.data(), shape.size(), dataType,
-                                        layout.strides, 0, layout.format,
-                                        layout.storage_dims, layout.storage_rank, deviceAddr);
-            if (status == ACL_SUCCESS) {
-                *tensor = recycled;
-                return ACL_SUCCESS;
-            }
-            // A descriptor that refuses re-initialisation is dropped, never
-            // reused with stale fields.
-            aclDestroyTensor(recycled);
-        }
-        *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, layout.strides, 0,
-                                  layout.format, layout.storage_dims, layout.storage_rank, deviceAddr);
-        return *tensor == nullptr ? ACL_ERROR_FAILURE : ACL_SUCCESS;
+        return AcquireRawAclTensor(pool, shape.data(), shape.size(), dataType,
+                                   layout.strides, layout.storage_dims, layout.storage_rank,
+                                   deviceAddr, tensor, layout.format);
     }
 
     void RecycleAclTensor(std::vector<aclTensor *> &pool, aclTensor *tensor)

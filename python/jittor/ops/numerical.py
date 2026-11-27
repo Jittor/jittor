@@ -6,7 +6,12 @@ import math
 from jittor_core import Var
 import jittor_core as _jittor_core
 from jittor_core import ops as _native_ops
+from .._runtime import dispatch as _dispatch
 from .._runtime.dispatch import select_kernel, try_dispatch
+
+_FAST_MAPPED_UNARY = getattr(_jittor_core, "_fast_mapped_unary", None)
+_ACL_RSQRT_GEN = -1
+_ACL_RSQRT_DEFAULT = False
 
 # `jittor.ops.any_` and `all_` are the native ops (jittor/ops/__init__.py
 # resolves every name it does not define there); asked for directly, without
@@ -352,6 +357,24 @@ def isposinf(x):
 
 
 def rsqrt(x):
+    global _ACL_RSQRT_GEN, _ACL_RSQRT_DEFAULT
+    if _FAST_MAPPED_UNARY is not None:
+        gen = _dispatch.generation
+        if gen != _ACL_RSQRT_GEN:
+            entries = _dispatch._candidates("tensor.rsqrt", "acl")
+            _ACL_RSQRT_DEFAULT = (
+                len(entries) == 1
+                and getattr(entries[0].implementation, "__name__", None) == "rsqrt_acl"
+                and getattr(entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.tensor"
+            )
+            _ACL_RSQRT_GEN = gen
+        if _ACL_RSQRT_DEFAULT and _dispatch.dispatch_context is _dispatch._NATIVE_DISPATCH_CONTEXT:
+            fast = _FAST_MAPPED_UNARY(x, 0, 0.0, 0.0)
+            if fast is not None:
+                return fast
+    fast = try_dispatch("tensor.rsqrt", x)
+    if fast is not None:
+        return fast
     import jittor as jt
     return 1/jt.sqrt(x)
 
@@ -383,14 +406,37 @@ class Finfo:
 
 bfloat16_finfo = Finfo()
 
+_FP8_FINFO = {}
+
+
+def _make_finfo(bits, eps, max_val, min_val, tiny, smallest_normal=None):
+    info = Finfo()
+    info.bits = bits
+    info.eps = eps
+    info.max = max_val
+    info.min = min_val
+    info.tiny = tiny
+    info.smallest_normal = tiny if smallest_normal is None else smallest_normal
+    info.resolution = eps
+    return info
+
+
+_FP8_FINFO["float8_e4m3fn"] = _make_finfo(8, 0.125, 448.0, -448.0, 2.0**-6)
+_FP8_FINFO["float8_e5m2"] = _make_finfo(8, 0.25, 57344.0, -57344.0, 2.0**-14)
+_FP8_FINFO["float8_e8m0fnu"] = _make_finfo(8, 1.0, 2.0**127, 2.0**-127, 2.0**-127)
+
+
 def finfo(dtype):
     import jittor as jt
-    if _jittor_dtype_name(dtype) == "bfloat16":
+    name = _jittor_dtype_name(dtype)
+    if name == "bfloat16":
         return jt.misc.bfloat16_finfo
+    if name in _FP8_FINFO:
+        return _FP8_FINFO[name]
     if callable(dtype) and hasattr(dtype, "__name__"):
         dtype = dtype.__name__.split('.')[-1]
     else:
-        dtype = _jittor_dtype_name(dtype).split('.')[-1]
+        dtype = name.split('.')[-1]
     return np.finfo(dtype)
 
 

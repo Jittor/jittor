@@ -53,4 +53,20 @@ namespace jittor
         void run();
     };
 
+    // Direct C++ inference runner for MappedFlashAttentionOp (BNSD), avoiding
+    // CodeOp attribute parsing, dummy input tensors, and per-call dict keys.
+    class DirectFlashAttentionOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        double scale = 1.0;
+        int64_t head_num = 0;
+        int64_t sparse_mode = 0;
+        bool has_mask = false;
+        bool mask_is_realshift = false;
+        DirectFlashAttentionOpRunner();
+    };
+
 }

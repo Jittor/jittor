@@ -54,6 +54,7 @@ struct Op : Node {
     // Dense-only kernels receive explicit contiguous graph inputs at the
     // generated construction boundary, before storing their Var members.
     static constexpr bool accepts_storage_strides = false;
+    static inline bool accepts_strided_input(const Var*) { return accepts_storage_strides; }
     static constexpr bool mutates_storage_inputs = false;
     static constexpr bool accepts_cpu_scalar_operands = false;
     virtual bool is_storage_view() const { return false; }

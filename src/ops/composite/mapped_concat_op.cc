@@ -15,6 +15,19 @@ namespace jittor {
 
 DECLARE_FLAG(bool, no_grad);
 
+bool MappedConcatOp::accepts_strided_input(const Var* v) {
+    if (!v || v->num <= 0) return false;
+    if (v->is_contiguous()) return true;
+    const int rank = static_cast<int>(v->shape.size());
+    if (rank == 0 || static_cast<int>(v->storage_strides.size()) != rank) return false;
+    for (int d = 0; d < rank; ++d) {
+        const int64 s = v->storage_stride(d);
+        if (s < 0) return false;
+        if (v->shape[d] > 1 && s == 0) return false;
+    }
+    return true;
+}
+
 MappedConcatOp::MappedConcatOp(vector<Var*>&& tensors, int dim)
     : tensors(tensors), dim(dim) {
     // The generated constructor still reads its argument to add graph edges.

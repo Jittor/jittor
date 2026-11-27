@@ -42,6 +42,7 @@ class dtype:
     _supported = frozenset({
         "bool", "uint8", "uint16", "uint32", "uint64", "int8", "int16", "int32",
         "int64", "float16", "bfloat16", "float32", "float64", "complex64", "complex128",
+        "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu",
     })
 
     def __new__(cls, name, is_floating_point=False):

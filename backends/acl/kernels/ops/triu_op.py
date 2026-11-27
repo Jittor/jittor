@@ -3,8 +3,9 @@ from ._code import acl_emit, acl_program
 
 
 #: One assembled program per diagonal; the gradient uses the same one, because
-#: the derivative of ``triu(x, k)`` masks with exactly the same triangle.
+#: the derivative of ``triu(x, k)`` / ``tril(x, k)`` masks with the same triangle.
 _TRIU_PROGRAMS = {}
+_TRIL_PROGRAMS = {}
 
 
 def _triu_program(diagonal):
@@ -12,6 +13,14 @@ def _triu_program(diagonal):
     if program is None:
         program = acl_program("Triu", 1, 1, attributes={"diagonal": diagonal})
         _TRIU_PROGRAMS[diagonal] = program
+    return program
+
+
+def _tril_program(diagonal):
+    program = _TRIL_PROGRAMS.get(diagonal)
+    if program is None:
+        program = acl_program("Tril", 1, 1, attributes={"diagonal": diagonal})
+        _TRIL_PROGRAMS[diagonal] = program
     return program
 
 
@@ -30,5 +39,19 @@ class TriuACL(jt.Function):
         # ternary) has always produced the masked one, and so does torch.
         return acl_emit(
             _triu_program(self.diagonal), [grad_output],
+            [grad_output.dtype], [grad_output.shape],
+        )[0]
+
+
+class TrilACL(jt.Function):
+    def execute(self, input, diagonal):
+        self.diagonal = diagonal
+        return acl_emit(
+            _tril_program(diagonal), [input], [input.dtype], [input.shape]
+        )[0]
+
+    def grad(self, grad_output):
+        return acl_emit(
+            _tril_program(self.diagonal), [grad_output],
             [grad_output.dtype], [grad_output.shape],
         )[0]

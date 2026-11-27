@@ -57,6 +57,30 @@ namespace jittor
         launch(ret, aclnnAdaptiveAvgPool2dBackward, true);
     }
 
+    MaxpoolInferOpRunner::MaxpoolInferOpRunner() : BaseOpRunner("MaxpoolInfer")
+    {
+        use_nchw = true;
+    }
+
+    void MaxpoolInferOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<PoolAttr *>(op_attr.get());
+        aclIntArray *kernel_size = aclCreateIntArray(attr->kernel_size.data(), 2);
+        aclIntArray *strides = aclCreateIntArray(attr->poolStrides.data(), 2);
+        aclIntArray *pads = aclCreateIntArray(attr->poolPads.data(), 2);
+        aclIntArray *dilations = aclCreateIntArray(attr->poolDilations.data(), 2);
+        const int64_t auto_pad = 0;
+        const int64_t ceil_mode = attr->poolCeil ? 1 : 0;
+        ret = aclnnMaxPoolGetWorkspaceSize(
+            inputTensors[0], kernel_size, strides, auto_pad, pads, dilations,
+            ceil_mode, outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnMaxPool, true);
+        aclDestroyIntArray(strides);
+        aclDestroyIntArray(pads);
+        aclDestroyIntArray(dilations);
+        aclDestroyIntArray(kernel_size);
+    }
+
     MaxpoolOpRunner::MaxpoolOpRunner() : BaseOpRunner("Maxpool")
     {
         use_nchw = true;

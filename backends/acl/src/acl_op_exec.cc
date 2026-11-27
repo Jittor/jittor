@@ -34,6 +34,19 @@
 #include "ops/composite/mapped_concat_op.h"
 #include "ops/composite/mapped_packed_matmul_op.h"
 #include "ops/composite/mapped_rms_norm_op.h"
+#include "ops/composite/mapped_fp8_linear_op.h"
+#include "ops/composite/mapped_unary_op.h"
+#include "ops/composite/mapped_grouped_matmul_op.h"
+#include "ops/composite/mapped_histc_op.h"
+#include "ops/composite/mapped_addmm_op.h"
+#include "ops/composite/mapped_flash_attention_op.h"
+#include "ops/composite/mapped_conv2d_op.h"
+#include "ops/composite/mapped_conv2d_backward_op.h"
+#include "ops/composite/mapped_batch_norm_op.h"
+#include "ops/composite/mapped_batch_norm_backward_op.h"
+#include "ops/composite/mapped_layer_norm_op.h"
+#include "ops/composite/mapped_layer_norm_backward_op.h"
+#include "ops/composite/mapped_unary_grad_op.h"
 #include "ops/composite/write_back_op.h"
 #include "core/fused_op.h"
 #include "ops/unary_op.h"
@@ -61,6 +74,8 @@ namespace jittor
     // scans the core source tree, and a DEFINE here would leave
     // `jt.flags.acl_allow_hf32` unbound.
     DECLARE_FLAG(int, acl_allow_hf32);
+    DECLARE_FLAG(int, profiler_enable);
+    DECLARE_FLAG(int, trace_py_var);
 
     void free_var_mem(Var *v);
 
@@ -221,6 +236,7 @@ namespace jittor
         {ns_divide, "RealDiv"},
         {ns_floor_divide, "FloorDiv"},
         {ns_mod, "Mod"},
+        {ns_fmod, "Fmod"},
         {ns_less, "Less"},
         {ns_less_equal, "LessEqual"},
         {ns_greater, "Greater"},
@@ -373,20 +389,157 @@ namespace jittor
         return found->second;
     }
 
+    static inline bool op_name_is(const Op *op, const char *target)
+    {
+        return std::strcmp(op->name(), target) == 0;
+    }
+
+    // Fast cached lookup from NanoString index -> (ACL op name, registry entry)
+    // so fused preflight and unary/binary launches avoid per-op std::string
+    // construction and unordered_map hashing on every operator.
+    struct FastAclOpEntry
+    {
+        const char *name = nullptr;
+        AclOpRegistry::const_iterator iter;
+        bool valid = false;
+        bool is_add_sub = false;
+        bool is_cast = false;
+    };
+
+    static const FastAclOpEntry &fast_acl_ns_entry(NanoString ns)
+    {
+        static constexpr size_t kMaxIdx = ns_max_size;
+        static const struct Table
+        {
+            FastAclOpEntry by_idx[kMaxIdx];
+            FastAclOpEntry empty;
+            Table()
+            {
+                const auto &reg = acl_op_registry();
+                for (const auto &kv : opname_map)
+                {
+                    NanoString key;
+                    key.data = kv.first;
+                    const uint32 idx = key.index();
+                    if (idx < kMaxIdx)
+                    {
+                        auto found = reg.find(kv.second);
+                        if (found != reg.end())
+                        {
+                            FastAclOpEntry &e = by_idx[idx];
+                            e.name = found->first.c_str();
+                            e.iter = found;
+                            e.valid = true;
+                            e.is_add_sub = (kv.second == "Add" || kv.second == "Sub");
+                            e.is_cast = (kv.second == "Cast");
+                        }
+                    }
+                }
+            }
+        } table;
+        const uint32 idx = ns.index();
+        return idx < kMaxIdx ? table.by_idx[idx] : table.empty;
+    }
+
+    static const FastAclOpEntry *fast_acl_entry_for_op(Op *op, const char *cname)
+    {
+        if (std::strcmp(cname, "unary") == 0)
+        {
+            if (PREDICT_BRANCH_NOT_TAKEN(op->ns == ns_conj))
+            {
+                if (!static_cast<UnaryOp *>(op)->x->dtype().is_complex())
+                {
+                    const auto &e = fast_acl_ns_entry(ns_cast);
+                    return e.valid ? &e : nullptr;
+                }
+                return nullptr;
+            }
+            const auto &e = fast_acl_ns_entry(op->ns);
+            return e.valid ? &e : nullptr;
+        }
+        if (std::strcmp(cname, "binary") == 0)
+        {
+            auto *bop = static_cast<BinaryOp *>(op);
+            NanoString key = bop->ns;
+            if (bop->x->dtype() == ns_bool && bop->y->dtype() == ns_bool)
+            {
+                if (bop->ns == ns_bitwise_or) key = ns_logical_or;
+                else if (bop->ns == ns_bitwise_and) key = ns_logical_and;
+                else if (bop->ns == ns_bitwise_xor) key = ns_logical_xor;
+            }
+            const auto &e = fast_acl_ns_entry(key);
+            return e.valid ? &e : nullptr;
+        }
+        if (std::strcmp(cname, "contiguous") == 0)
+        {
+            const auto &e = fast_acl_ns_entry(ns_cast);
+            return e.valid ? &e : nullptr;
+        }
+        return nullptr;
+    }
+
+    template<class Runner>
+    class AclCachedEntryRunner : public Runner
+    {
+    public:
+        using Runner::Runner;
+
+        void run_cached(AclOpRegistry::const_iterator entry)
+        {
+            try
+            {
+                this->setupInputDesc();
+                this->setupOutputDesc();
+                this->executeOp(entry);
+                this->cleanupDesc();
+            }
+            catch (...)
+            {
+                aclrtSynchronizeStream(aclstream);
+                for (auto *tensor : this->inputTensors)
+                    if (tensor) aclDestroyTensor(tensor);
+                for (auto *tensor : this->outputTensors)
+                    if (tensor) aclDestroyTensor(tensor);
+                throw;
+            }
+        }
+    };
+
     static string fused_acl_name(Op *op)
     {
-        const string name = op->name();
-        if (name == "contiguous") return "Cast";
-        if (name == "unary")
+        const char *name = op->name();
+        if (std::strcmp(name, "contiguous") == 0) return "Cast";
+        if (std::strcmp(name, "unary") == 0)
         {
+            if (PREDICT_BRANCH_NOT_TAKEN(op->ns == ns_conj))
+            {
+                if (!static_cast<UnaryOp *>(op)->x->dtype().is_complex())
+                    return "Cast";
+                return {};
+            }
+            const auto &fast = fast_acl_ns_entry(op->ns);
+            if (fast.valid) return string(fast.name);
             auto found = opname_map.find(op->ns);
             return found == opname_map.end() ? string() : found->second;
         }
-        if (name == "binary") return binary_acl_name(static_cast<BinaryOp *>(op));
-        if (name == "ternary") return "Select";
-        if (name == "broadcast_to") return "Expand";
-        if (name == "fuse_transpose") return "Transpose";
-        if (name == "reduce")
+        if (std::strcmp(name, "binary") == 0)
+        {
+            auto *bop = static_cast<BinaryOp *>(op);
+            NanoString key = bop->ns;
+            if (bop->x->dtype() == ns_bool && bop->y->dtype() == ns_bool)
+            {
+                if (bop->ns == ns_bitwise_or) key = ns_logical_or;
+                else if (bop->ns == ns_bitwise_and) key = ns_logical_and;
+                else if (bop->ns == ns_bitwise_xor) key = ns_logical_xor;
+            }
+            const auto &fast = fast_acl_ns_entry(key);
+            if (fast.valid) return string(fast.name);
+            return binary_acl_name(bop);
+        }
+        if (std::strcmp(name, "ternary") == 0) return "Select";
+        if (std::strcmp(name, "broadcast_to") == 0) return "Expand";
+        if (std::strcmp(name, "fuse_transpose") == 0) return "Transpose";
+        if (std::strcmp(name, "reduce") == 0)
         {
             if (op->ns == ns_add) return "ReduceSum";
             if (op->ns == ns_mean) return "ReduceMean";
@@ -399,89 +552,742 @@ namespace jittor
 
     static bool acl_has_dtype(NanoString dtype)
     {
+        if (dtype == ns_float8_e4m3fn || dtype == ns_float8_e5m2)
+            return acl_soc_supports_fp8();
         return dtype == ns_bfloat16 || dtype == ns_float32 || dtype == ns_float16
             || dtype == ns_int64 || dtype == ns_int32 || dtype == ns_int8
             || dtype == ns_int16 || dtype == ns_uint8 || dtype == ns_uint16
             || dtype == ns_uint32 || dtype == ns_bool || dtype == ns_complex64;
     }
 
+    static bool acl_fp8_cast_pair_supported(NanoString src, NanoString dst)
+    {
+        auto is_e4_or_e5 = [](NanoString d) {
+            return d == ns_float8_e4m3fn || d == ns_float8_e5m2;
+        };
+        auto is_wide_float = [](NanoString d) {
+            return d == ns_float32 || d == ns_float16 || d == ns_bfloat16;
+        };
+        if (src == dst && is_e4_or_e5(src)) return true;
+        if (is_e4_or_e5(src) && is_wide_float(dst)) return true;
+        if (is_wide_float(src) && is_e4_or_e5(dst)) return true;
+        return false;
+    }
+
     static string fused_acl_unsupported(const vector<Op *> &ops)
     {
+        const auto &registry = acl_op_registry();
         for (auto *op : ops)
         {
-            if (op->name() == string("array")) continue;
-            const auto name = fused_acl_name(op);
-            if (name.empty()) return string("unregistered fused operator variant: ") + op->name() + "/" + string(op->ns.to_cstring());
-            auto found = acl_op_registry().find(name);
-            if (found == acl_op_registry().end()) return "unregistered ACL launcher: " + name;
-            INTERNAL_ASSERT(found->second.launcher()) << "Empty registered ACL launcher:" << name;
-            if (op->name() == string("unary") || op->name() == string("contiguous"))
-                INTERNAL_ASSERT(found->second.supports(name == "Cast"
-                    ? AclOpFunctions::QueryKind::Cast : AclOpFunctions::QueryKind::Unary))
-                    << "Wrong registered unary launcher signature:" << name;
-            if (op->name() == string("binary"))
-                INTERNAL_ASSERT(found->second.supports(name == "Add" || name == "Sub"
-                    ? AclOpFunctions::QueryKind::Add : AclOpFunctions::QueryKind::Binary))
-                    << "Wrong registered binary launcher signature:" << name;
+            const char *cname = op->name();
+            if (std::strcmp(cname, "array") == 0) continue;
+            const FastAclOpEntry *fast = fast_acl_entry_for_op(op, cname);
+            const char *acl_cname = nullptr;
+            if (fast)
+            {
+                acl_cname = fast->name;
+            }
+            else
+            {
+                const auto name = fused_acl_name(op);
+                if (name.empty()) return string("unregistered fused operator variant: ") + cname + "/" + string(op->ns.to_cstring());
+                auto found = registry.find(name);
+                if (found == registry.end()) return "unregistered ACL launcher: " + name;
+                INTERNAL_ASSERT(found->second.launcher()) << "Empty registered ACL launcher:" << name;
+                if (std::strcmp(cname, "unary") == 0 || std::strcmp(cname, "contiguous") == 0)
+                    INTERNAL_ASSERT(found->second.supports(name == "Cast"
+                        ? AclOpFunctions::QueryKind::Cast : AclOpFunctions::QueryKind::Unary))
+                        << "Wrong registered unary launcher signature:" << name;
+                if (std::strcmp(cname, "binary") == 0)
+                    INTERNAL_ASSERT(found->second.supports(name == "Add" || name == "Sub"
+                        ? AclOpFunctions::QueryKind::Add : AclOpFunctions::QueryKind::Binary))
+                        << "Wrong registered binary launcher signature:" << name;
+                acl_cname = found->first.c_str();
+            }
+            bool has_fp8 = false;
             for (auto *input : op->inputs())
-                if (!acl_has_dtype(input->dtype())) return name + " does not support input dtype " + string(input->dtype().to_cstring());
+            {
+                const NanoString dt = input->dtype();
+                if (PREDICT_BRANCH_NOT_TAKEN(ns_is_fp8(dt))) has_fp8 = true;
+                if (PREDICT_BRANCH_NOT_TAKEN(!acl_has_dtype(dt)))
+                    return string(acl_cname) + " does not support input dtype " + string(dt.to_cstring());
+            }
             for (auto *output : op->outputs())
-                if (!acl_has_dtype(output->dtype())) return name + " does not support output dtype " + string(output->dtype().to_cstring());
-            if ((name == "Add" || name == "Sub") && op->input(0)->dtype() == ns_complex64)
-                return name + " has no complex alpha-scalar implementation";
+            {
+                const NanoString dt = output->dtype();
+                if (PREDICT_BRANCH_NOT_TAKEN(ns_is_fp8(dt))) has_fp8 = true;
+                if (PREDICT_BRANCH_NOT_TAKEN(!acl_has_dtype(dt)))
+                    return string(acl_cname) + " does not support output dtype " + string(dt.to_cstring());
+            }
+            if (PREDICT_BRANCH_NOT_TAKEN(has_fp8))
+            {
+                if (!acl_soc_supports_fp8())
+                    return string(acl_cname) + " FP8 requires Ascend950-class hardware";
+                if (std::strcmp(acl_cname, "Cast") == 0)
+                {
+                    if (op->inputs().size() != 1 || op->outputs().size() != 1 ||
+                        !acl_fp8_cast_pair_supported(op->input(0)->dtype(), op->output(0)->dtype()))
+                        return string(acl_cname) + " does not support FP8 cast pair " +
+                               string(op->input(0)->dtype().to_cstring()) + " -> " +
+                               string(op->output(0)->dtype().to_cstring());
+                }
+                else if (std::strcmp(acl_cname, "Transpose") != 0)
+                {
+                    return string(acl_cname) + " has no native ACL FP8 kernel";
+                }
+            }
+            if (PREDICT_BRANCH_NOT_TAKEN((fast ? fast->is_add_sub : (std::strcmp(acl_cname, "Add") == 0 || std::strcmp(acl_cname, "Sub") == 0))
+                && op->input(0)->dtype() == ns_complex64))
+                return string(acl_cname) + " has no complex alpha-scalar implementation";
         }
         return {};
     }
 
-    static void exec_acl_sequence(Op *op, const vector<Op *> &ops)
+    struct SmallVarMap
     {
-        std::set<Var *> new_alloced;
-        map<Op *, int> op_indeg;
-        map<Var *, int> var_outdeg;
-        std::queue<Op *> queue;
-
-        for (Op *op : ops)
-            op_indeg[op] = 0;
-
-        map<Op *, vector<Op *>> out_map;
-        map<Var *, vector<Op *>> from;
-
-        int len = 0;
-        for (Op *v : ops)
+        vector<std::pair<Var *, Var *>> items;
+        void clear() { items.clear(); }
+        bool empty() const { return items.empty(); }
+        Var *find_or_null(Var *key) const
         {
-            for (auto in : v->inputs())
-                from[in].push_back(v);
-            ++len;
+            for (const auto &kv : items)
+                if (kv.first == key) return kv.second;
+            return nullptr;
         }
-        for (Op *u : ops)
+        bool count(Var *key) const { return find_or_null(key) != nullptr; }
+        void set(Var *key, Var *val)
         {
-            for (auto out : u->outputs())
+            for (auto &kv : items)
+                if (kv.first == key) { kv.second = val; return; }
+            items.emplace_back(key, val);
+        }
+    };
+
+    struct SmallHostScalarMap
+    {
+        vector<std::pair<Var *, ArrayOp *>> items;
+        void clear() { items.clear(); }
+        bool empty() const { return items.empty(); }
+        ArrayOp *find_or_null(Var *key) const
+        {
+            for (const auto &kv : items)
+                if (kv.first == key) return kv.second;
+            return nullptr;
+        }
+        bool count(Var *key) const { return find_or_null(key) != nullptr; }
+        void set(Var *key, ArrayOp *val)
+        {
+            for (auto &kv : items)
+                if (kv.first == key) { kv.second = val; return; }
+            items.emplace_back(key, val);
+        }
+    };
+
+    struct SmallVarConsumers
+    {
+        // Flat indexed consumer table: avoids std::unordered_map node allocs
+        // on every fused ACL launch (typical fused op has 2-16 unique Vars).
+        vector<Var *> keys;
+        vector<vector<size_t>> lists;
+
+        void reset()
+        {
+            for (size_t i = 0; i < keys.size(); ++i)
+                lists[i].clear();
+            keys.clear();
+        }
+        int find_slot(Var *key) const
+        {
+            for (size_t i = 0; i < keys.size(); ++i)
+                if (keys[i] == key) return static_cast<int>(i);
+            return -1;
+        }
+        void add(Var *key, size_t op_idx)
+        {
+            int slot = find_slot(key);
+            if (slot < 0)
             {
-                if (from.find(out) != from.end())
-                {
-                    for (auto v : from[out])
-                    {
-                        ++op_indeg[v];
-                        ++var_outdeg[out];
-                        out_map[u].push_back(v);
-                    }
-                }
+                slot = static_cast<int>(keys.size());
+                keys.push_back(key);
+                if (lists.size() <= static_cast<size_t>(slot))
+                    lists.resize(slot + 1);
+            }
+            lists[slot].push_back(op_idx);
+        }
+        const vector<size_t> *get(Var *key) const
+        {
+            int slot = find_slot(key);
+            return slot < 0 ? nullptr : &lists[slot];
+        }
+    };
+
+    struct SmallVarIntMap
+    {
+        vector<std::pair<Var *, int>> items;
+        void clear() { items.clear(); }
+        int *find_ptr(Var *key)
+        {
+            for (auto &kv : items)
+                if (kv.first == key) return &kv.second;
+            return nullptr;
+        }
+        int &get_or_zero(Var *key)
+        {
+            for (auto &kv : items)
+                if (kv.first == key) return kv.second;
+            items.emplace_back(key, 0);
+            return items.back().second;
+        }
+    };
+
+    struct AclSeqScratch
+    {
+        vector<int> op_indeg;
+        vector<vector<size_t>> adj;
+        SmallVarConsumers consumers;
+        SmallVarIntMap var_outdeg;
+        SmallVarMap scalar_alias;
+        SmallHostScalarMap host_scalar_alias;
+        vector<std::pair<Op *, size_t>> queue_items;
+        vector<Var *> new_alloced;
+        vector<Var *> temp_allocs;
+        bool in_use = false;
+    };
+
+    struct AclSeqScratchLease
+    {
+        AclSeqScratch *ptr = nullptr;
+        std::unique_ptr<AclSeqScratch> fallback;
+        AclSeqScratchLease()
+        {
+            static thread_local AclSeqScratch tl_scratch;
+            if (!tl_scratch.in_use)
+            {
+                tl_scratch.in_use = true;
+                ptr = &tl_scratch;
+            }
+            else
+            {
+                fallback.reset(new AclSeqScratch());
+                ptr = fallback.get();
             }
         }
-        for (Op *op : ops)
+        ~AclSeqScratchLease()
         {
-            if (op_indeg[op] == 0)
-                queue.push(op);
+            if (!fallback && ptr)
+                ptr->in_use = false;
         }
+        AclSeqScratch &operator*() const { return *ptr; }
+        AclSeqScratch *operator->() const { return ptr; }
+    };
 
-        int total = 0;
-        dispatch_acl_checked(fused_acl_unsupported(ops), [&]
+    // Fast path for ContiguousOp on ACL: when the input is already contiguous
+    // use a single async D2D copy; when it is a pure permutation of a dense
+    // buffer (e.g. NCHW<->NHWC or attention head transposes), run aclnnPermute
+    // directly instead of strided aclnnCast (which is 50-100x slower on 4D views).
+    static bool try_exec_acl_contiguous_permute(Var *in, Var *out)
+    {
+        if (!in || !out || in->dtype() != out->dtype() || !out->is_contiguous())
+            return false;
+        if (in->num <= 0 || in->num != out->num || in->shape != out->shape)
+            return false;
+        if (in->is_contiguous())
         {
-            while (!queue.empty())
+            if (in->mem_ptr != out->mem_ptr)
             {
-                total++;
-                auto *current_op = queue.front();
-                queue.pop();
+                auto st = aclrtMemcpyAsync(
+                    out->mem_ptr, out->size, in->mem_ptr, out->size,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                if (st != ACL_SUCCESS)
+                    LOGf << "contiguous: aclrtMemcpyAsync failed. ERROR:" << st;
+            }
+            return true;
+        }
+        if (ns_is_fp8(in->dtype()) || in->storage_span_bytes() != out->size)
+            return false;
+        const int rank = static_cast<int>(in->shape.size());
+        if (rank <= 0 || rank > 16) return false;
+        int ns_axes[16];
+        int order[16];
+        int m = 0;
+        for (int d = 0; d < rank; ++d)
+        {
+            if (in->shape[d] > 1)
+            {
+                if (in->storage_stride(d) <= 0) return false;
+                ns_axes[m] = d;
+                order[m] = d;
+                ++m;
+            }
+        }
+        if (m <= 1)
+        {
+            if (m == 1 && in->storage_stride(ns_axes[0]) != 1) return false;
+            if (in->mem_ptr != out->mem_ptr)
+            {
+                auto st = aclrtMemcpyAsync(
+                    out->mem_ptr, out->size, in->mem_ptr, out->size,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                if (st != ACL_SUCCESS)
+                    LOGf << "contiguous: aclrtMemcpyAsync failed. ERROR:" << st;
+            }
+            return true;
+        }
+        if (m > 8) return false;
+        std::sort(order, order + m, [in](int a, int b) {
+            return in->storage_stride(a) > in->storage_stride(b);
+        });
+        int64_t expected = 1;
+        for (int k = m - 1; k >= 0; --k)
+        {
+            const int axis = order[k];
+            if (in->storage_stride(axis) != expected)
+                return false;
+            expected *= in->shape[axis];
+        }
+        if (expected != in->num) return false;
+        bool is_identity = true;
+        int64_t perm[16];
+        for (int j = 0; j < m; ++j)
+        {
+            int pos = -1;
+            for (int k = 0; k < m; ++k)
+            {
+                if (order[k] == ns_axes[j]) { pos = k; break; }
+            }
+            if (pos < 0) return false;
+            perm[j] = pos;
+            if (pos != j) is_identity = false;
+        }
+        if (is_identity)
+        {
+            if (in->mem_ptr != out->mem_ptr)
+            {
+                auto st = aclrtMemcpyAsync(
+                    out->mem_ptr, out->size, in->mem_ptr, out->size,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                if (st != ACL_SUCCESS)
+                    LOGf << "contiguous: aclrtMemcpyAsync failed. ERROR:" << st;
+            }
+            return true;
+        }
+        AclExecutionRunner<ContiguousPermuteOpRunner, false> runner;
+        runner.jt_name = "contiguous";
+        runner.perm_rank = m;
+        for (int k = 0; k < m; ++k)
+        {
+            runner.base_shape[k] = in->shape[order[k]];
+            runner.out_shape[k] = in->shape[ns_axes[k]];
+            runner.perm[k] = perm[k];
+        }
+        runner.add(in, true);
+        runner.add(out, false);
+        runner.run();
+        return true;
+    }
+
+    static bool try_exec_acl_contiguous_inplace_copy(Var *in, Var *out)
+    {
+        if (!in || !out || in->dtype() != out->dtype() || !out->is_contiguous())
+            return false;
+        if (in->num <= 0 || in->num != out->num || in->shape != out->shape)
+            return false;
+        const NanoString ns = in->dtype();
+        if (ns != ns_float32 && ns != ns_float16 && ns != ns_bfloat16
+                && ns != ns_int8 && ns != ns_int16 && ns != ns_int32 && ns != ns_int64
+                && ns != ns_uint8 && ns != ns_uint16 && ns != ns_uint32 && ns != ns_bool)
+            return false;
+        const int rank = static_cast<int>(in->shape.size());
+        if (rank <= 0 || rank > 16)
+            return false;
+        const int64_t dsize = in->dsize();
+        if (dsize <= 0 || in->storage_span_bytes() <= 0 || (in->storage_span_bytes() % dsize) != 0)
+            return false;
+        for (int d = 0; d < rank; ++d)
+        {
+            if (in->storage_stride(d) < 0)
+                return false;
+        }
+        AclExecutionRunner<ContiguousCopyOpRunner, false> runner;
+        runner.jt_name = "contiguous";
+        runner.add(in, true);
+        runner.add(out, false);
+        runner.run();
+        return true;
+    }
+
+    static void exec_acl_primitive(Op *current_op,
+                                   const SmallVarMap *scalar_alias = nullptr,
+                                   const SmallHostScalarMap *host_scalar_alias = nullptr)
+    {
+        const char *cname = current_op->name();
+        if (std::strcmp(cname, "contiguous") == 0)
+        {
+            Var *in_v = current_op->inputs().front();
+            Var *out_v = current_op->outputs().front();
+            if (try_exec_acl_contiguous_permute(in_v, out_v))
+                return;
+            if (try_exec_acl_contiguous_inplace_copy(in_v, out_v))
+                return;
+            const auto &fast = fast_acl_ns_entry(ns_cast);
+            if (fast.valid)
+            {
+                AclCachedEntryRunner<UnaryOpRunner> runner;
+                runner.add(in_v, true);
+                runner.add(out_v, false);
+                runner.name = "Cast";
+                runner.jt_name = cname;
+                runner.run_cached(fast.iter);
+            }
+            else
+            {
+                AclExecutionRunner<UnaryOpRunner> runner;
+                runner.add(in_v, true);
+                runner.add(out_v, false);
+                runner.name = "Cast";
+                runner.jt_name = cname;
+                runner.run();
+            }
+        }
+        else if (std::strcmp(cname, "unary") == 0)
+        {
+            auto uop = (UnaryOp *)current_op;
+            if (PREDICT_BRANCH_NOT_TAKEN(uop->ns == ns_conj && !uop->x->dtype().is_complex()))
+            {
+                if (try_exec_acl_contiguous_permute(uop->x, uop->y))
+                    return;
+                const auto &fast_cast = fast_acl_ns_entry(ns_cast);
+                if (fast_cast.valid)
+                {
+                    AclCachedEntryRunner<UnaryOpRunner> op;
+                    op.add(uop->x, true);
+                    op.add(uop->y, false);
+                    op.name = "Cast";
+                    op.jt_name = cname;
+                    op.run_cached(fast_cast.iter);
+                }
+                else
+                {
+                    AclExecutionRunner<UnaryOpRunner> runner;
+                    runner.add(uop->x, true);
+                    runner.add(uop->y, false);
+                    runner.name = "Cast";
+                    runner.jt_name = cname;
+                    runner.run();
+                }
+                return;
+            }
+            const auto &fast = fast_acl_ns_entry(uop->ns);
+            if (fast.valid)
+            {
+                AclCachedEntryRunner<UnaryOpRunner> op;
+                op.add(uop->x, true);
+                op.add(uop->y, false);
+                op.name = fused_acl_name(current_op);
+                op.jt_name = cname;
+                op.run_cached(fast.iter);
+            }
+            else
+            {
+                AclExecutionRunner<UnaryOpRunner> runner;
+                runner.add(uop->x, true);
+                runner.add(uop->y, false);
+                runner.name = fused_acl_name(current_op);
+                runner.jt_name = cname;
+                runner.run();
+            }
+        }
+        else if (std::strcmp(cname, "binary") == 0)
+        {
+            auto bop = (BinaryOp *)current_op;
+            if (host_scalar_alias && !host_scalar_alias->empty())
+            {
+                ArrayOp *scalar_src = nullptr;
+                Var *tensor_arg = nullptr;
+                if (ArrayOp *sy = host_scalar_alias->find_or_null(bop->y))
+                {
+                    if (!host_scalar_alias->count(bop->x))
+                    {
+                        scalar_src = sy;
+                        tensor_arg = bop->x;
+                    }
+                }
+                else if (bop->ns == ns_add || bop->ns == ns_multiply)
+                {
+                    if (ArrayOp *sx = host_scalar_alias->find_or_null(bop->x))
+                    {
+                        if (!host_scalar_alias->count(bop->y))
+                        {
+                            scalar_src = sx;
+                            tensor_arg = bop->y;
+                        }
+                    }
+                }
+                if (scalar_src && tensor_arg)
+                {
+                    if (scalar_alias && !scalar_alias->empty())
+                    {
+                        if (Var *rep = scalar_alias->find_or_null(tensor_arg))
+                            tensor_arg = rep;
+                    }
+                    const auto &fast_sc = fast_acl_ns_entry(bop->ns);
+                    AclCachedEntryRunner<BinaryScalarOpRunner> runner;
+                    runner.name = fast_sc.valid ? string(fast_sc.name) : fused_acl_name(current_op);
+                    runner.jt_name = cname;
+                    runner.scalar_data = scalar_src->ptr<void>();
+                    runner.scalar_dtype = scalar_src->output->dtype();
+                    runner.add(tensor_arg, true);
+                    runner.add(bop->z, false);
+                    runner.run_cached(fast_sc.iter);
+                    return;
+                }
+            }
+            Var *lx = bop->x;
+            Var *ly = bop->y;
+            if (scalar_alias && !scalar_alias->empty())
+            {
+                if (Var *rx = scalar_alias->find_or_null(lx)) lx = rx;
+                if (Var *ry = scalar_alias->find_or_null(ly)) ly = ry;
+            }
+            const FastAclOpEntry *fast = fast_acl_entry_for_op(current_op, cname);
+            if (fast)
+            {
+                AclCachedEntryRunner<BinaryOpRunner> op;
+                op.add(lx, true);
+                op.add(ly, true);
+                op.add(bop->z, false);
+                op.name = fused_acl_name(current_op);
+                op.jt_name = cname;
+                op.run_cached(fast->iter);
+            }
+            else
+            {
+                AclExecutionRunner<BinaryOpRunner> runner;
+                runner.add(lx, true);
+                runner.add(ly, true);
+                runner.add(bop->z, false);
+                runner.name = fused_acl_name(current_op);
+                runner.jt_name = cname;
+                runner.run();
+            }
+        }
+        else if (std::strcmp(cname, "ternary") == 0)
+        {
+            auto top = (TernaryOp *)current_op;
+            AclExecutionRunner<TernaryOpRunner> op;
+            op.name = fused_acl_name(current_op);
+            op.add(top->cond, true);
+            op.add(top->x, true);
+            op.add(top->y, true);
+            op.add(top->z, false);
+            op.run();
+        }
+        else if (std::strcmp(cname, "array") == 0)
+        {
+            auto aop = (ArrayOp *)current_op;
+            // The fused allocator can reuse a consumed constant's
+            // buffer before earlier ACL kernels finish. Queue the H2D
+            // copy on aclstream so reuse stays ordered with consumers.
+            const void *source = aop->ptr<void>();
+            // ArrayOp force-fuses every one-element tensor, including
+            // rank-1 integer indices such as chunk's [i]. Their host
+            // allocation can be recycled before this queued copy runs.
+            if (aop->output->num == 1)
+                source = persistent_acl_scalar_data(
+                    source, aop->output->size);
+            auto ret = aclrtMemcpyAsync(
+                aop->output->mem_ptr, aop->output->size,
+                source, aop->output->size,
+                ACL_MEMCPY_HOST_TO_DEVICE, aclstream);
+            if (ret != ACL_SUCCESS)
+                throw std::runtime_error(
+                    "aclrtMemcpyAsync failed: " +
+                    acl_error_to_string(ret));
+        }
+        else if (std::strcmp(cname, "reduce") == 0)
+        {
+            auto rop = (ReduceOp *)current_op;
+            AclExecutionRunner<ReduceOpRunner> op;
+            op.name = fused_acl_name(current_op);
+            if (rop->ns == ns_add)
+                op.op_idx = 9;
+            else if (rop->ns == ns_multiply)
+                op.op_idx = 13;
+            else if (rop->ns == ns_maximum)
+                op.op_idx = 11;
+            else if (rop->ns == ns_minimum)
+                op.op_idx = 12;
+            else if (rop->ns == ns_mean)
+                op.op_idx = 10;
+            else
+                LOGf << "op " << rop->ns << " not supported";
+            op.add(rop->x, true);
+
+            op.use_inline_attr = true;
+            op.inline_axes_len = 0;
+            for (int i = 0; i < rop->x->shape.size(); i++)
+                if (rop->reduce_mask & (1 << i))
+                    op.inline_axes[op.inline_axes_len++] = i;
+            op.inline_keepdims = (rop->x->shape.size() == rop->y->shape.size());
+
+            op.add(rop->y, false);
+            op.run();
+        }
+        else if (std::strcmp(cname, "broadcast_to") == 0)
+        {
+            auto bop = (BroadcastToOp *)current_op;
+            AclExecutionRunner<ExpandOpRunner> op;
+            op.name = fused_acl_name(current_op);
+            op.jt_name = "expand";
+            NanoVector xshape, xshape_bk = bop->x->shape;
+            NanoVector zshape = bop->z->shape;
+            struct RestoreShape {
+                Var *value;
+                NanoVector shape;
+                ~RestoreShape() { value->shape = shape; }
+            } restore_shape{bop->x, xshape_bk};
+
+            for (int i = 0; i < zshape.size(); i++)
+            {
+                if (bop->bcast_mask & (1 << i))
+                    xshape.push_back(1);
+                else
+                    xshape.push_back(zshape[i]);
+            }
+            bop->x->shape = xshape;
+            op.add(bop->x, true);
+            op.add(bop->z, false);
+            op.run();
+            bop->x->shape = xshape_bk;
+        }
+        else if (std::strcmp(cname, "fuse_transpose") == 0)
+        {
+            auto top = (TransposeOp *)current_op;
+            AclExecutionRunner<TransposeOpRunner> op;
+            op.name = fused_acl_name(current_op);
+            op.add(top->x, true);
+            op.add(top->y, false);
+            op.jt_name = "transpose";
+
+            ReduceAttr *attr = new ReduceAttr();
+            for (int i = 0; i < top->axes.size(); i++)
+                attr->axes.push_back(top->axes[i]);
+            op.op_attr.reset(attr);
+
+            op.run();
+        }
+        else
+        {
+            LOGf << "op " << cname << " not supported";
+        }
+    }
+
+    static bool is_host_scalar_binary_consumer(BinaryOp *bin, Var *scalar_var, NanoString scalar_dt)
+    {
+        const bool right = (bin->y == scalar_var);
+        const bool left = (bin->x == scalar_var);
+        if (left == right) return false;
+        const bool ok_op = (bin->ns == ns_add || bin->ns == ns_multiply)
+            || (right && (bin->ns == ns_subtract || bin->ns == ns_divide));
+        if (!ok_op) return false;
+        Var *other = left ? bin->y : bin->x;
+        if (other->dtype() != scalar_dt || bin->z->dtype() != scalar_dt
+            || !(other->shape == bin->z->shape) || other->shape.size() == 0)
+            return false;
+        // Reject if `other` could itself be elided as a scalar array/broadcast.
+        if (Op *op = other->input())
+        {
+            const char *oname = op->name();
+            if (std::strcmp(oname, "array") == 0) return false;
+            if (std::strcmp(oname, "broadcast_to") == 0
+                && static_cast<BroadcastToOp *>(op)->x->num == 1)
+                return false;
+        }
+        return true;
+    }
+
+    static bool can_elide_scalar_array(
+        ArrayOp *aop,
+        const vector<Op *> &ops,
+        const SmallVarConsumers &consumers)
+    {
+        Var *out = aop->output;
+        if (out->mem_ptr || out->num != 1)
+            return false;
+        const NanoString dt = out->dtype();
+        if (dt != ns_float32 && dt != ns_float16 && dt != ns_bfloat16
+            && dt != ns_int32 && dt != ns_int64)
+            return false;
+        const auto *clist = consumers.get(out);
+        if (!clist || clist->empty())
+            return false;
+        for (size_t idx : *clist)
+        {
+            Op *c = ops[idx];
+            if (std::strcmp(c->name(), "binary") == 0)
+            {
+                if (!is_host_scalar_binary_consumer(static_cast<BinaryOp *>(c), out, dt))
+                    return false;
+            }
+            else if (std::strcmp(c->name(), "broadcast_to") == 0)
+            {
+                auto *bop = static_cast<BroadcastToOp *>(c);
+                if (bop->z->mem_ptr) return false;
+                const auto *blist = consumers.get(bop->z);
+                if (!blist || blist->empty()) return false;
+                for (size_t bidx : *blist)
+                {
+                    Op *bc = ops[bidx];
+                    if (std::strcmp(bc->name(), "binary") != 0
+                        || !is_host_scalar_binary_consumer(static_cast<BinaryOp *>(bc), bop->z, dt))
+                        return false;
+                }
+            }
+            else
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static bool can_elide_scalar_broadcast(
+        BroadcastToOp *bop,
+        const vector<Op *> &ops,
+        const SmallVarConsumers &consumers,
+        const SmallVarMap &scalar_alias)
+    {
+        if (bop->z->mem_ptr || bop->x->num != 1 || !bop->x->is_contiguous())
+            return false;
+        const auto *clist = consumers.get(bop->z);
+        if (!clist || clist->empty())
+            return false;
+        for (size_t idx : *clist)
+        {
+            Op *consumer = ops[idx];
+            if (std::strcmp(consumer->name(), "binary") != 0)
+                return false;
+            auto *bin = static_cast<BinaryOp *>(consumer);
+            Var *other = (bin->x == bop->z) ? bin->y : bin->x;
+            if (other == bop->z || scalar_alias.count(other)
+                || !(other->shape == bin->z->shape))
+                return false;
+        }
+        return true;
+    }
+
+    static void exec_acl_sequence(Op *op, const vector<Op *> &ops)
+    {
+        const size_t n = ops.size();
+        AclSeqScratchLease scratch_lease;
+        auto &scratch = *scratch_lease;
+        if (n == 1)
+        {
+            auto &temp_allocs = scratch.temp_allocs;
+            temp_allocs.clear();
+            dispatch_acl_checked(fused_acl_unsupported(ops), [&]
+            {
+                Op *current_op = ops[0];
                 for (auto in : current_op->inputs())
                 {
                     ASSERT(in->mem_ptr)
@@ -492,192 +1298,180 @@ namespace jittor
                 {
                     if (out->mem_ptr)
                         continue;
-                    new_alloced.insert(out);
+                    temp_allocs.push_back(out);
                     INTERNAL_ASSERT(out->alloc(runtime_executor().allocator))
                         << "ACL fused output allocation returned no storage";
                 }
-                for (auto out : out_map[current_op])
+                exec_acl_primitive(current_op);
+                for (auto *value : temp_allocs)
+                    free_var_mem(value);
+                temp_allocs.clear();
+            }, [&](const string &reason)
+            {
+                fallback_cpu(op, reason);
+            }, [&]
+            {
+                auto status = aclrtSynchronizeStream(aclstream);
+                if (status != ACL_SUCCESS)
+                    std::fprintf(stderr, "ACL failure cleanup drain returned %d\n", int(status));
+                for (auto *value : temp_allocs)
                 {
-                    --op_indeg[out];
-                    if (op_indeg[out] == 0)
-                        queue.push(out);
+                    try { if (value->allocator) free_var_mem(value); }
+                    catch (...) { std::fprintf(stderr, "ACL temporary cleanup failed\n"); }
                 }
-                if (current_op->name() == string("contiguous"))
-                {
-                    AclExecutionRunner<UnaryOpRunner> runner;
-                    runner.add(current_op->inputs().front(), true);
-                    runner.add(current_op->outputs().front(), false);
-                    runner.name = "Cast";
-                    runner.jt_name = current_op->name();
-                    runner.run();
-                }
-                else if (current_op->name() == string("unary"))
-                {
-                    auto uop = (UnaryOp *)current_op;
-                    AclExecutionRunner<UnaryOpRunner> op;
-                    op.add(uop->x, true);
-                    op.add(uop->y, false);
-                    op.name = fused_acl_name(current_op);
-                    op.jt_name = uop->name();
-                    op.run();
-                }
-                else if (current_op->name() == string("binary"))
-                {
-                    auto bop = (BinaryOp *)current_op;
-                    AclExecutionRunner<BinaryOpRunner> op;
-                    op.add(bop->x, true);
-                    op.add(bop->y, true);
-                    op.add(bop->z, false);
-                    op.name = fused_acl_name(current_op);
-                    op.jt_name = bop->name();
-                    op.run();
-                }
-                else if (current_op->name() == string("ternary"))
-                {
-                    auto top = (TernaryOp *)current_op;
-                    AclExecutionRunner<TernaryOpRunner> op;
-                    op.name = fused_acl_name(current_op);
-                    op.add(top->cond, true);
-                    op.add(top->x, true);
-                    op.add(top->y, true);
-                    op.add(top->z, false);
-                    op.run();
-                }
-                else if (current_op->name() == string("array"))
-                {
-                    auto aop = (ArrayOp *)current_op;
-                    // The fused allocator can reuse a consumed constant's
-                    // buffer before earlier ACL kernels finish. Queue the H2D
-                    // copy on aclstream so reuse stays ordered with consumers.
-                    const void *source = aop->ptr<void>();
-                    // ArrayOp force-fuses every one-element tensor, including
-                    // rank-1 integer indices such as chunk's [i]. Their host
-                    // allocation can be recycled before this queued copy runs.
-                    if (aop->output->num == 1)
-                        source = persistent_acl_scalar_data(
-                            source, aop->output->size);
-                    auto ret = aclrtMemcpyAsync(
-                        aop->output->mem_ptr, aop->output->size,
-                        source, aop->output->size,
-                        ACL_MEMCPY_HOST_TO_DEVICE, aclstream);
-                    if (ret != ACL_SUCCESS)
-                        throw std::runtime_error(
-                            "aclrtMemcpyAsync failed: " +
-                            acl_error_to_string(ret));
-                }
-                else if (current_op->name() == string("reduce"))
-                {
-                    auto rop = (ReduceOp *)current_op;
-                    AclExecutionRunner<ReduceOpRunner> op;
-                    op.name = fused_acl_name(current_op);
-                    if (rop->ns == ns_add)
-                        op.op_idx = 9;
-                    else if (rop->ns == ns_multiply)
-                        op.op_idx = 13;
-                    else if (rop->ns == ns_maximum)
-                        op.op_idx = 11;
-                    else if (rop->ns == ns_minimum)
-                        op.op_idx = 12;
-                    else if (rop->ns == ns_mean)
-                        op.op_idx = 10;
-                    else
-                        LOGf << "op " << rop->ns << " not supported";
-                    op.add(rop->x, true);
+            });
+            return;
+        }
 
-                    ReduceAttr *attr = new ReduceAttr();
-                    for (int i = 0; i < rop->x->shape.size(); i++)
-                        if (rop->reduce_mask & (1 << i))
-                            attr->axes.push_back(i);
-                    if (rop->x->shape.size() == rop->y->shape.size())
-                        attr->keepdims = true;
-                    else
-                        attr->keepdims = false;
-
-                    op.op_attr.reset(attr);
-                    op.add(rop->y, false);
-                    op.run();
-                    // sync removed: aclstream is in-order and the shared
-                    // workspace is guarded in mallocWorkSpace(). Draining here
-                    // stalled the pipeline on every reduce (LayerNorm/softmax
-                    // backward/Adam), which dominated NPU step time.
-                }
-                else if (current_op->name() == string("broadcast_to"))
+        // Reuse per-thread flat scratch buffers across fused ACL launches
+        // (zero heap allocations on steady-state fused groups).
+        auto &op_indeg = scratch.op_indeg;
+        op_indeg.assign(n, 0);
+        auto &adj = scratch.adj;
+        if (adj.size() < n) adj.resize(n);
+        for (size_t i = 0; i < n; ++i) adj[i].clear();
+        auto &consumers = scratch.consumers;
+        consumers.reset();
+        for (size_t i = 0; i < n; ++i)
+        {
+            for (auto *in : ops[i]->inputs())
+                consumers.add(in, i);
+        }
+        auto &var_outdeg = scratch.var_outdeg;
+        var_outdeg.clear();
+        for (size_t u = 0; u < n; ++u)
+        {
+            for (auto *out : ops[u]->outputs())
+            {
+                const auto *dsts = consumers.get(out);
+                if (dsts && !dsts->empty())
                 {
-                    auto bop = (BroadcastToOp *)current_op;
-                    AclExecutionRunner<ExpandOpRunner> op;
-                    op.name = fused_acl_name(current_op);
-                    op.jt_name = "expand";
-                    NanoVector xshape, xshape_bk = bop->x->shape;
-                    NanoVector zshape = bop->z->shape;
-                    struct RestoreShape {
-                        Var *value;
-                        NanoVector shape;
-                        ~RestoreShape() { value->shape = shape; }
-                    } restore_shape{bop->x, xshape_bk};
-
-                    for (int i = 0; i < zshape.size(); i++)
+                    var_outdeg.get_or_zero(out) += static_cast<int>(dsts->size());
+                    auto &edges = adj[u];
+                    for (size_t v : *dsts)
                     {
-                        if (bop->bcast_mask & (1 << i))
-                        {
-                            xshape.push_back(1);
-                        }
-                        else
-                        {
-                            xshape.push_back(zshape[i]);
-                        }
+                        ++op_indeg[v];
+                        edges.push_back(v);
                     }
-                    bop->x->shape = xshape;
-                    op.add(bop->x, true);
-                    op.add(bop->z, false);
-                    op.run();
-                    // shape is copied into the aclTensor synchronously during
-                    // op.run() (CreateAclTensor), so restoring it right after
-                    // is safe without draining the stream. sync removed for the
-                    // same reason as the reduce case above.
-                    bop->x->shape = xshape_bk;
                 }
-                else if (current_op->name() == string("fuse_transpose"))
-                {
-                    // replace fuse_transpose with transpose
-                    auto top = (TransposeOp *)current_op;
-                    AclExecutionRunner<TransposeOpRunner> op;
-                    op.name = fused_acl_name(current_op);
-                    op.add(top->x, true);
-                    op.add(top->y, false);
-                    op.jt_name = "transpose";
+            }
+        }
+        struct ReadyQueue
+        {
+            vector<std::pair<Op *, size_t>> &items;
+            size_t head = 0;
+            bool empty() const { return head == items.size(); }
+            Op *front() const { return items[head].first; }
+            size_t front_index() const { return items[head].second; }
+            void push(Op *p, size_t idx) { items.emplace_back(p, idx); }
+            void pop() { ++head; }
+        } queue{scratch.queue_items};
+        queue.items.clear();
+        for (size_t i = 0; i < n; ++i)
+            if (op_indeg[i] == 0)
+                queue.push(ops[i], i);
 
-                    ReduceAttr *attr = new ReduceAttr();
-                    for (int i = 0; i < top->axes.size(); i++)
-                        attr->axes.push_back(top->axes[i]);
-                    op.op_attr.reset(attr);
-
-                    op.run();
-                }
-                else
-                {
-                    LOGf << "op " << current_op->name() << " not supported";
-                }
-
+        auto &new_alloced = scratch.new_alloced;
+        new_alloced.clear();
+        auto &scalar_alias = scratch.scalar_alias;
+        scalar_alias.clear();
+        auto &host_scalar_alias = scratch.host_scalar_alias;
+        host_scalar_alias.clear();
+        size_t total = 0;
+        dispatch_acl_checked(fused_acl_unsupported(ops), [&]
+        {
+            while (!queue.empty())
+            {
+                const size_t u = queue.front_index();
+                auto *current_op = queue.front();
+                queue.pop();
+                ++total;
                 for (auto in : current_op->inputs())
                 {
-                    --var_outdeg[in];
-                    if (var_outdeg[in] == 0)
+                    if (!host_scalar_alias.empty() && host_scalar_alias.count(in))
+                        continue;
+                    Var *actual = in;
+                    if (!scalar_alias.empty())
                     {
-                        if (new_alloced.find(in) != new_alloced.end())
+                        if (Var *rep = scalar_alias.find_or_null(in)) actual = rep;
+                    }
+                    ASSERT(actual->mem_ptr)
+                        << "current fused operator input is not allocated:"
+                        << current_op->name() << actual;
+                }
+                bool elide = false;
+                if (std::strcmp(current_op->name(), "array") == 0
+                    && can_elide_scalar_array(
+                        static_cast<ArrayOp *>(current_op), ops, consumers))
+                {
+                    auto *aop = static_cast<ArrayOp *>(current_op);
+                    host_scalar_alias.set(aop->output, aop);
+                    elide = true;
+                }
+                else if (std::strcmp(current_op->name(), "broadcast_to") == 0)
+                {
+                    auto *bop = static_cast<BroadcastToOp *>(current_op);
+                    if (ArrayOp *hsrc = host_scalar_alias.find_or_null(bop->x))
+                    {
+                        if (!bop->z->mem_ptr)
                         {
-                            new_alloced.erase(in);
-                            free_var_mem(in);
+                            host_scalar_alias.set(bop->z, hsrc);
+                            elide = true;
+                        }
+                    }
+                    if (!elide && can_elide_scalar_broadcast(bop, ops, consumers, scalar_alias))
+                    {
+                        scalar_alias.set(bop->z, bop->x);
+                        var_outdeg.get_or_zero(bop->x) += var_outdeg.get_or_zero(bop->z);
+                        elide = true;
+                    }
+                }
+                if (!elide)
+                {
+                    for (auto out : current_op->outputs())
+                    {
+                        if (out->mem_ptr)
+                            continue;
+                        new_alloced.push_back(out);
+                        INTERNAL_ASSERT(out->alloc(runtime_executor().allocator))
+                            << "ACL fused output allocation returned no storage";
+                    }
+                }
+                for (size_t v : adj[u])
+                {
+                    if (--op_indeg[v] == 0)
+                        queue.push(ops[v], v);
+                }
+                if (!elide)
+                    exec_acl_primitive(current_op, &scalar_alias, &host_scalar_alias);
+                for (auto *in : current_op->inputs())
+                {
+                    if (!host_scalar_alias.empty() && host_scalar_alias.count(in))
+                        continue;
+                    Var *actual = in;
+                    if (!scalar_alias.empty())
+                    {
+                        if (Var *rep = scalar_alias.find_or_null(in)) actual = rep;
+                    }
+                    if (int *deg = var_outdeg.find_ptr(actual))
+                    {
+                        if (--(*deg) == 0)
+                        {
+                            auto alloc_it = std::find(new_alloced.begin(), new_alloced.end(), actual);
+                            if (alloc_it != new_alloced.end())
+                            {
+                                *alloc_it = new_alloced.back();
+                                new_alloced.pop_back();
+                                free_var_mem(actual);
+                            }
                         }
                     }
                 }
             }
-            INTERNAL_ASSERT(total == len) << "ACL fused graph has unresolved dependencies";
-            while (!new_alloced.empty())
-            {
-                auto *value = *new_alloced.begin();
-                new_alloced.erase(new_alloced.begin());
+            INTERNAL_ASSERT(total == n) << "ACL fused graph has unresolved dependencies";
+            for (auto *value : new_alloced)
                 free_var_mem(value);
-            }
+            new_alloced.clear();
         }, [&](const string &reason)
         {
             fallback_cpu(op, reason);
@@ -698,6 +1492,7 @@ namespace jittor
 
     void exec_fused_acl(Op *op)
     {
+        LOGv << "compile" << op;
         auto *fused = static_cast<FusedOp *>(op);
         // One generated AscendC kernel for the whole group when it is a
         // float32 elementwise chain this backend can reproduce exactly;
@@ -708,6 +1503,7 @@ namespace jittor
 
     static void exec_single_acl(Op *op)
     {
+        LOGv << "exec acl op " << op->name_ex() << op;
         exec_acl_sequence(op, {op});
     }
 
@@ -862,6 +1658,379 @@ namespace jittor
              runner.add(scratch, false);
              runner.run();
          }},
+        {"mapped_unary", [](Op *op)
+         {
+             auto *_op = static_cast<MappedUnaryOp *>(op);
+             if (!_op->y->num) return;
+             if (_op->kind == MappedUnaryOp::kRsqrt)
+             {
+                 AclExecutionRunner<RsqrtOpRunner, false> runner;
+                 runner.jt_name = "rsqrt";
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kSilu)
+             {
+                 if (_op->x->dtype() == ns_bfloat16)
+                 {
+                     AclExecutionRunner<SwishOpRunner, false> runner;
+                     runner.jt_name = "swish";
+                     runner.add(_op->x, true);
+                     runner.add(_op->y, false);
+                     runner.run();
+                 }
+                 else
+                 {
+                     AclExecutionRunner<SiLUOpRunner, false> runner;
+                     runner.jt_name = "silu";
+                     runner.add(_op->x, true);
+                     runner.add(_op->y, false);
+                     runner.run();
+                 }
+             }
+             else if (_op->kind == MappedUnaryOp::kSoftplus)
+             {
+                 AclExecutionRunner<SoftplusOpRunner, false> runner;
+                 runner.jt_name = "softplus";
+                 auto attr = std::unique_ptr<SoftplusAttr>(new SoftplusAttr());
+                 attr->beta = _op->param0;
+                 attr->threshold = _op->param1;
+                 runner.op_attr = std::move(attr);
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kTriu)
+             {
+                 AclExecutionRunner<TriuOpRunner, false> runner;
+                 runner.jt_name = "triu";
+                 auto attr = std::unique_ptr<TriuAttr>(new TriuAttr());
+                 attr->diagonal = static_cast<int64_t>(_op->param0);
+                 runner.op_attr = std::move(attr);
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kTril)
+             {
+                 AclExecutionRunner<TrilOpRunner, false> runner;
+                 runner.jt_name = "tril";
+                 auto attr = std::unique_ptr<TriuAttr>(new TriuAttr());
+                 attr->diagonal = static_cast<int64_t>(_op->param0);
+                 runner.op_attr = std::move(attr);
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kCumsum)
+             {
+                 AclExecutionRunner<CumsumOpRunner, false> runner;
+                 runner.jt_name = "cumsum";
+                 auto attr = std::unique_ptr<GatherAttr>(new GatherAttr());
+                 attr->dim = static_cast<int64_t>(_op->param0);
+                 runner.op_attr = std::move(attr);
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kSoftmax)
+             {
+                 AclExecutionRunner<SoftmaxOpRunner, false> runner;
+                 runner.jt_name = "softmax";
+                 auto attr = std::unique_ptr<SoftmaxAttr>(new SoftmaxAttr());
+                 attr->dim = static_cast<int64_t>(_op->param0);
+                 runner.op_attr = std::move(attr);
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kGelu)
+             {
+                 AclExecutionRunner<GeluOpRunner, false> runner;
+                 runner.jt_name = "gelu";
+                 auto attr = std::unique_ptr<GeluAttr>(new GeluAttr());
+                 attr->approximate = static_cast<int64_t>(_op->param0);
+                 runner.op_attr = std::move(attr);
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else if (_op->kind == MappedUnaryOp::kRelu)
+             {
+                 AclExecutionRunner<UnaryOpRunner> runner;
+                 runner.name = "ReLU";
+                 runner.jt_name = "relu";
+                 runner.add(_op->x, true);
+                 runner.add(_op->y, false);
+                 runner.run();
+             }
+             else
+             {
+                 LOGf << "mapped_unary: unsupported kind " << _op->kind;
+             }
+         }},
+        {"mapped_grouped_matmul", [](Op *op)
+         {
+             auto *_op = static_cast<MappedGroupedMatmulOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<GroupedMatMulOpRunner, false> runner;
+             runner.jt_name = "mapped_grouped_matmul";
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->offs, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
+        {"mapped_histc", [](Op *op)
+         {
+             auto *_op = static_cast<MappedHistcOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<HistcOpRunner, false> runner;
+             runner.jt_name = "mapped_histc";
+             runner.bins = _op->bins;
+             runner.min_val = _op->min_val;
+             runner.max_val = _op->max_val;
+             runner.add(_op->x, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
+        {"mapped_addmm", [](Op *op)
+         {
+             auto *_op = static_cast<MappedAddmmOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<AddmmOpRunner, false> runner;
+             runner.jt_name = "mapped_addmm";
+             runner.cube_math_type = _op->allow_reduced_precision ? 1 : 0;
+             runner.add(_op->bias, true);
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
+        {"mapped_flash_attention", [](Op *op)
+         {
+             auto *_op = static_cast<MappedFlashAttentionOp *>(op);
+             if (!_op->out->num) return;
+             AclExecutionRunner<DirectFlashAttentionOpRunner, false> runner;
+             runner.jt_name = "mapped_flash_attention";
+             runner.scale = _op->scale;
+             runner.head_num = _op->q->shape[1];
+             runner.sparse_mode = _op->sparse_mode;
+             runner.has_mask = _op->has_mask;
+             runner.mask_is_realshift = _op->mask_is_realshift;
+             runner.add(_op->q, true);
+             runner.add(_op->k, true);
+             runner.add(_op->v, true);
+             if (_op->has_mask)
+                 runner.add(_op->atten_mask, true);
+             auto *smax = _op->softmax_max_scratch.ptr;
+             auto *ssum = _op->softmax_sum_scratch.ptr;
+             smax->device_id = _op->out->device_id;
+             smax->placement = _op->out->placement;
+             ssum->device_id = _op->out->device_id;
+             ssum->placement = _op->out->placement;
+             INTERNAL_ASSERT(smax->alloc(runtime_executor().allocator))
+                 << "Unable to allocate FlashAttention softmax_max scratch";
+             INTERNAL_ASSERT(ssum->alloc(runtime_executor().allocator))
+                 << "Unable to allocate FlashAttention softmax_sum scratch";
+             runner.add(smax, false);
+             runner.add(ssum, false);
+             runner.add(_op->out, false);
+             runner.run();
+         }},
+        {"mapped_conv2d", [](Op *op)
+         {
+             auto *_op = static_cast<MappedConv2dOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<DirectConv2dOpRunner, false> runner;
+             runner.jt_name = "mapped_conv2d";
+             runner.stride_h = _op->stride_h;
+             runner.stride_w = _op->stride_w;
+             runner.pad_h = _op->pad_h;
+             runner.pad_w = _op->pad_w;
+             runner.dil_h = _op->dil_h;
+             runner.dil_w = _op->dil_w;
+             runner.groups = _op->groups;
+             runner.cube_math_type = _op->cube_math_type;
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             if (_op->bias)
+                 runner.add(_op->bias, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
+        {"mapped_conv2d_backward", [](Op *op)
+         {
+             auto *_op = static_cast<MappedConv2dBackwardOp *>(op);
+             if (!_op->dout->num) return;
+             AclExecutionRunner<DirectConv2dBackwardOpRunner, false> runner;
+             runner.jt_name = "mapped_conv2d_backward";
+             runner.stride_h = _op->stride_h;
+             runner.stride_w = _op->stride_w;
+             runner.pad_h = _op->pad_h;
+             runner.pad_w = _op->pad_w;
+             runner.dil_h = _op->dil_h;
+             runner.dil_w = _op->dil_w;
+             runner.groups = _op->groups;
+             runner.cube_math_type = _op->cube_math_type;
+             runner.add(_op->dout, true);
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->dx, false);
+             runner.add(_op->dw, false);
+             if (_op->db)
+                 runner.add(_op->db, false);
+             runner.run();
+         }},
+        {"mapped_batch_norm", [](Op *op)
+         {
+             auto *_op = static_cast<MappedBatchNormOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<DirectBatchNormOpRunner, false> runner;
+             runner.jt_name = "mapped_batch_norm";
+             runner.is_train = _op->is_train;
+             runner.momentum = _op->momentum;
+             runner.eps = _op->eps;
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->bias, true);
+             runner.add(_op->running_mean, true);
+             runner.add(_op->running_var, true);
+             runner.add(_op->y, false);
+             Var *sm = _op->save_mean;
+             Var *si = _op->save_invstd;
+             if (!sm)
+             {
+                 sm = _op->save_mean_scratch.ptr;
+                 si = _op->save_invstd_scratch.ptr;
+                 sm->device_id = _op->y->device_id;
+                 sm->placement = _op->y->placement;
+                 si->device_id = _op->y->device_id;
+                 si->placement = _op->y->placement;
+                 INTERNAL_ASSERT(sm->alloc(runtime_executor().allocator))
+                     << "Unable to allocate BatchNorm save_mean scratch";
+                 INTERNAL_ASSERT(si->alloc(runtime_executor().allocator))
+                     << "Unable to allocate BatchNorm save_invstd scratch";
+             }
+             runner.add(sm, false);
+             runner.add(si, false);
+             if (_op->return_running_stats)
+             {
+                 runner.add(_op->new_running_mean, false);
+                 runner.add(_op->new_running_var, false);
+             }
+             runner.run();
+         }},
+        {"mapped_batch_norm_backward", [](Op *op)
+         {
+             auto *_op = static_cast<MappedBatchNormBackwardOp *>(op);
+             if (!_op->dx->num) return;
+             AclExecutionRunner<DirectBatchNormBackwardOpRunner, false> runner;
+             runner.jt_name = "mapped_batch_norm_backward";
+             runner.is_train = _op->is_train;
+             runner.eps = _op->eps;
+             runner.add(_op->dout, true);
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->running_mean, true);
+             runner.add(_op->running_var, true);
+             runner.add(_op->save_mean, true);
+             runner.add(_op->save_invstd, true);
+             runner.add(_op->dx, false);
+             runner.add(_op->dw, false);
+             runner.add(_op->db, false);
+             runner.run();
+         }},
+        {"mapped_layer_norm", [](Op *op)
+         {
+             auto *_op = static_cast<MappedLayerNormOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<DirectLayerNormOpRunner, false> runner;
+             runner.jt_name = "mapped_layer_norm";
+             runner.normalized_ndim = _op->normalized_ndim;
+             runner.eps = _op->eps;
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->bias, true);
+             runner.add(_op->y, false);
+             Var *mn = _op->mean;
+             Var *rs = _op->rstd;
+             if (!mn)
+             {
+                 mn = _op->mean_scratch.ptr;
+                 rs = _op->rstd_scratch.ptr;
+                 mn->device_id = _op->y->device_id;
+                 mn->placement = _op->y->placement;
+                 rs->device_id = _op->y->device_id;
+                 rs->placement = _op->y->placement;
+                 INTERNAL_ASSERT(mn->alloc(runtime_executor().allocator))
+                     << "Unable to allocate LayerNorm mean scratch";
+                 INTERNAL_ASSERT(rs->alloc(runtime_executor().allocator))
+                     << "Unable to allocate LayerNorm rstd scratch";
+             }
+             runner.add(mn, false);
+             runner.add(rs, false);
+             runner.run();
+         }},
+        {"mapped_layer_norm_backward", [](Op *op)
+         {
+             auto *_op = static_cast<MappedLayerNormBackwardOp *>(op);
+             if (!_op->dx->num) return;
+             AclExecutionRunner<DirectLayerNormBackwardOpRunner, false> runner;
+             runner.jt_name = "mapped_layer_norm_backward";
+             runner.normalized_ndim = _op->normalized_ndim;
+             runner.add(_op->dout, true);
+             runner.add(_op->x, true);
+             runner.add(_op->mean, true);
+             runner.add(_op->rstd, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->bias, true);
+             runner.add(_op->dx, false);
+             runner.add(_op->dw, false);
+             runner.add(_op->db, false);
+             runner.run();
+         }},
+        {"mapped_unary_grad", [](Op *op)
+         {
+             auto *_op = static_cast<MappedUnaryGradOp *>(op);
+             if (!_op->dx->num) return;
+             AclExecutionRunner<DirectUnaryGradOpRunner, false> runner;
+             runner.jt_name = _op->kind == MappedUnaryOp::kRelu ? "mapped_relu_grad" : "mapped_gelu_grad";
+             runner.name = _op->kind == MappedUnaryOp::kRelu ? "LeakyReLUBackward" : "GeluBackward";
+             runner.kind = _op->kind;
+             runner.approximate = static_cast<int64_t>(_op->param0);
+             runner.add(_op->dout, true);
+             runner.add(_op->x, true);
+             runner.add(_op->dx, false);
+             runner.run();
+         }},
+        {"mapped_fp8_linear", [](Op *op)
+         {
+             auto *_op = static_cast<MappedFp8LinearOp *>(op);
+             if (!_op->y->num) return;
+             AclExecutionRunner<Fp8LinearOpRunner, false> runner;
+             runner.jt_name = "mapped_fp8_linear";
+             runner.mode = _op->mode;
+             runner.block_size = _op->block_size;
+             auto *qx = _op->qx_scratch.ptr;
+             auto *sx = _op->sx_scratch.ptr;
+             qx->device_id = _op->y->device_id;
+             qx->placement = _op->y->placement;
+             sx->device_id = _op->y->device_id;
+             sx->placement = _op->y->placement;
+             INTERNAL_ASSERT(qx->alloc(runtime_executor().allocator))
+                 << "Unable to allocate Fp8Linear quantized activation scratch";
+             INTERNAL_ASSERT(sx->alloc(runtime_executor().allocator))
+                 << "Unable to allocate Fp8Linear scale scratch";
+             runner.qx_scratch = qx;
+             runner.sx_scratch = sx;
+             runner.add(_op->x, true);
+             runner.add(_op->weight, true);
+             runner.add(_op->weight_scale, true);
+             runner.add(_op->y, false);
+             runner.run();
+         }},
         {"mapped_packed_matmul", [](Op *op)
          {
              auto *_op = static_cast<MappedPackedMatmulOp *>(op);
@@ -951,31 +2120,41 @@ namespace jittor
          }},
     };
 
-    static bool is_acl_random(const string &name)
+    static bool is_acl_random(const char *name)
     {
-        return name == string("random") || name == string("curand_random");
+        return std::strcmp(name, "random") == 0 || std::strcmp(name, "curand_random") == 0;
+    }
+
+    static string mapped_acl_dtype_unsupported(Op *op, bool allow_mx_scale = false)
+    {
+        for (auto *input : op->inputs())
+            if (PREDICT_BRANCH_NOT_TAKEN(!acl_has_dtype(input->dtype())
+                && !(allow_mx_scale && input->dtype() == ns_float8_e8m0fnu)))
+                return string(op->name()) + " does not support input dtype " + string(input->dtype().to_cstring());
+        for (auto *output : op->outputs())
+            if (PREDICT_BRANCH_NOT_TAKEN(!acl_has_dtype(output->dtype())))
+                return string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
+        return {};
     }
 
     static void exec_mapped_acl_ops(Op *op)
     {
-        auto iter = acl_ops.find(op->name());
+        const char *cname = op->name();
+        auto iter = acl_ops.find(cname);
         string unsupported;
         if (iter == acl_ops.end())
-            unsupported = string("no registered ACL implementation for ") + op->name();
+            unsupported = string("no registered ACL implementation for ") + cname;
         else
         {
-            INTERNAL_ASSERT(iter->second) << "Empty ACL implementation for" << op->name();
-            for (auto *input : op->inputs())
-                if (!acl_has_dtype(input->dtype()))
-                    unsupported = string(op->name()) + " does not support input dtype " + string(input->dtype().to_cstring());
-            for (auto *output : op->outputs())
-                if (!acl_has_dtype(output->dtype()))
-                    unsupported = string(op->name()) + " does not support output dtype " + string(output->dtype().to_cstring());
-            if (unsupported.empty() && op->name() == string("getitem"))
+            INTERNAL_ASSERT(iter->second) << "Empty ACL implementation for" << cname;
+            const bool allow_mx_scale =
+                (std::strcmp(cname, "mapped_fp8_linear") == 0 && acl_soc_supports_fp8());
+            unsupported = mapped_acl_dtype_unsupported(op, allow_mx_scale);
+            if (unsupported.empty() && std::strcmp(cname, "getitem") == 0)
                 unsupported = acl_getitem_unsupported_reason(op);
-            if (unsupported.empty() && op->name() == string("setitem"))
+            if (unsupported.empty() && std::strcmp(cname, "setitem") == 0)
                 unsupported = acl_setitem_unsupported_reason(op);
-            if (op->name() == string("argsort"))
+            if (std::strcmp(cname, "argsort") == 0)
             {
                 auto *sort = static_cast<ArgsortOp *>(op);
                 const auto dtype = sort->x->dtype();
@@ -986,13 +2165,13 @@ namespace jittor
                 if (sort->y->dtype() != ns_int64)
                     unsupported = "argsort ACL indices must be int64 before output cast";
             }
-            if (op->name() == string("arg_reduce"))
+            if (std::strcmp(cname, "arg_reduce") == 0)
             {
                 auto *reduce = static_cast<ArgReduceOp *>(op);
                 USER_CHECK(reduce->op == ns_maximum || reduce->op == ns_minimum)
                     << "arg_reduce requires min or max";
             }
-            if (is_acl_random(op->name()))
+            if (is_acl_random(cname))
             {
                 auto *random = static_cast<RandomOp *>(op);
                 USER_CHECK(random->type == ns_uniform || random->type == ns_normal)
@@ -1000,13 +2179,13 @@ namespace jittor
                 const auto dtype = random->output->dtype();
                 if (dtype != ns_float16 && dtype != ns_bfloat16 && dtype != ns_float32)
                     unsupported = "random requires float16, bfloat16 or float32 output";
-                const string name = random->type == ns_uniform ? "RandomUniform" : "RandomNormal";
-                if (!acl_op_registry().count(name)) unsupported = "unregistered ACL launcher: " + name;
+                const string rname = random->type == ns_uniform ? "RandomUniform" : "RandomNormal";
+                if (!acl_op_registry().count(rname)) unsupported = "unregistered ACL launcher: " + rname;
             }
         }
         dispatch_acl_checked(unsupported, [&]
         {
-            LOGv << "exec acl op " << op->name() << op;
+            LOGv << "exec acl op " << cname << op;
             iter->second(op);
         }, [&](const string &reason)
         {
@@ -1015,6 +2194,185 @@ namespace jittor
         {
             aclrtSynchronizeStream(aclstream);
         });
+    }
+
+    // Direct native entry points for hot ACL mapped operators: bypasses the
+    // unordered_map<string, std::function> lookup and JK/jit_ops cache lock
+    // on every launch while preserving identical preflight & fallback behavior.
+    template<bool AllowMxScale>
+    static void exec_acl_direct_fn(Op *op, void (*body)(Op *),
+                                   string (*extra_check)(Op *) = nullptr)
+    {
+        string unsupported = mapped_acl_dtype_unsupported(op, AllowMxScale);
+        if (unsupported.empty() && extra_check)
+            unsupported = extra_check(op);
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            body(op);
+        }, [&](const string &reason)
+        {
+            fallback_cpu(op, reason);
+        }, [&]
+        {
+            aclrtSynchronizeStream(aclstream);
+        });
+    }
+
+    static void exec_acl_direct_fp8_linear(Op *op)
+    {
+        static const auto &fn = acl_ops.at("mapped_fp8_linear");
+        string unsupported = mapped_acl_dtype_unsupported(op, acl_soc_supports_fp8());
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            fn(op);
+        },
+            [&](const string &reason) { fallback_cpu(op, reason); },
+            [&] { aclrtSynchronizeStream(aclstream); });
+    }
+
+    static void exec_acl_direct_matmul(Op *op)
+    {
+        static const auto &fn = acl_ops.at("mapped_matmul");
+        string unsupported = mapped_acl_dtype_unsupported(op, false);
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            fn(op);
+        },
+            [&](const string &reason) { fallback_cpu(op, reason); },
+            [&] { aclrtSynchronizeStream(aclstream); });
+    }
+
+    static void exec_acl_direct_unary(Op *op)
+    {
+        static const auto &fn = acl_ops.at("mapped_unary");
+        string unsupported = mapped_acl_dtype_unsupported(op, false);
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            fn(op);
+        },
+            [&](const string &reason) { fallback_cpu(op, reason); },
+            [&] { aclrtSynchronizeStream(aclstream); });
+    }
+
+    static void exec_acl_direct_concat(Op *op)
+    {
+        static const auto &fn = acl_ops.at("mapped_concat");
+        string unsupported = mapped_acl_dtype_unsupported(op, false);
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            fn(op);
+        },
+            [&](const string &reason) { fallback_cpu(op, reason); },
+            [&] { aclrtSynchronizeStream(aclstream); });
+    }
+
+    static void exec_acl_direct_transpose(Op *op)
+    {
+        static const auto &fn = acl_ops.at("transpose");
+        string unsupported = mapped_acl_dtype_unsupported(op, false);
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            fn(op);
+        },
+            [&](const string &reason) { fallback_cpu(op, reason); },
+            [&] { aclrtSynchronizeStream(aclstream); });
+    }
+
+    static void exec_acl_direct_write_back(Op *op)
+    {
+        static const auto &fn = acl_ops.at("write_back");
+        string unsupported = mapped_acl_dtype_unsupported(op, false);
+        dispatch_acl_checked(unsupported, [&]
+        {
+            LOGv << "exec acl op " << op->name() << op;
+            fn(op);
+        },
+            [&](const string &reason) { fallback_cpu(op, reason); },
+            [&] { aclrtSynchronizeStream(aclstream); });
+    }
+
+    static void exec_acl_direct_getitem(Op *op)
+    {
+        exec_acl_direct_fn<false>(op, exec_native_acl_getitem, acl_getitem_unsupported_reason);
+    }
+
+    static void exec_acl_direct_setitem(Op *op)
+    {
+        exec_acl_direct_fn<false>(op, exec_native_acl_setitem, acl_setitem_unsupported_reason);
+    }
+
+#define DEFINE_ACL_DIRECT_MAPPED(fn_name, op_key)                         \
+    static void fn_name(Op *op)                                           \
+    {                                                                     \
+        static const auto &fn = acl_ops.at(op_key);                       \
+        string unsupported = mapped_acl_dtype_unsupported(op, false);     \
+        dispatch_acl_checked(unsupported, [&]                             \
+        {                                                                 \
+            LOGv << "exec acl op " << op->name() << op;                   \
+            fn(op);                                                       \
+        },                                                                \
+            [&](const string &reason) { fallback_cpu(op, reason); },      \
+            [&] { aclrtSynchronizeStream(aclstream); });                  \
+    }
+
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_addmm, "mapped_addmm")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_flash_attention, "mapped_flash_attention")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_rms_norm, "mapped_rms_norm")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_grouped_matmul, "mapped_grouped_matmul")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_histc, "mapped_histc")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_conv2d, "mapped_conv2d")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_conv2d_backward, "mapped_conv2d_backward")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_batch_norm, "mapped_batch_norm")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_batch_norm_backward, "mapped_batch_norm_backward")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_layer_norm, "mapped_layer_norm")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_layer_norm_backward, "mapped_layer_norm_backward")
+    DEFINE_ACL_DIRECT_MAPPED(exec_acl_direct_unary_grad, "mapped_unary_grad")
+
+#undef DEFINE_ACL_DIRECT_MAPPED
+
+    DECLARE_FLAG(int, use_acl_ascendc_fusion);
+
+    static void prepare_acl_fused_direct(Op *op, JK &jk)
+    {
+        if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable || trace_py_var >= 2 || use_acl_ascendc_fusion))
+            static_cast<FusedOp *>(op)->prepare_fused_key(jk);
+    }
+
+    static void prepare_acl_mapped_direct(Op *op, JK &jk)
+    {
+        if (PREDICT_BRANCH_NOT_TAKEN(profiler_enable || trace_py_var >= 2))
+            prepare_registered_codegen(op, jk);
+    }
+
+    static void (*direct_acl_mapped_native(const string &name))(Op *)
+    {
+        if (name == "mapped_fp8_linear") return exec_acl_direct_fp8_linear;
+        if (name == "mapped_matmul") return exec_acl_direct_matmul;
+        if (name == "mapped_unary") return exec_acl_direct_unary;
+        if (name == "mapped_unary_grad") return exec_acl_direct_unary_grad;
+        if (name == "mapped_concat") return exec_acl_direct_concat;
+        if (name == "mapped_addmm") return exec_acl_direct_addmm;
+        if (name == "mapped_flash_attention") return exec_acl_direct_flash_attention;
+        if (name == "mapped_rms_norm") return exec_acl_direct_rms_norm;
+        if (name == "mapped_grouped_matmul") return exec_acl_direct_grouped_matmul;
+        if (name == "mapped_histc") return exec_acl_direct_histc;
+        if (name == "mapped_conv2d") return exec_acl_direct_conv2d;
+        if (name == "mapped_conv2d_backward") return exec_acl_direct_conv2d_backward;
+        if (name == "mapped_batch_norm") return exec_acl_direct_batch_norm;
+        if (name == "mapped_batch_norm_backward") return exec_acl_direct_batch_norm_backward;
+        if (name == "mapped_layer_norm") return exec_acl_direct_layer_norm;
+        if (name == "mapped_layer_norm_backward") return exec_acl_direct_layer_norm_backward;
+        if (name == "transpose") return exec_acl_direct_transpose;
+        if (name == "write_back") return exec_acl_direct_write_back;
+        if (name == "getitem") return exec_acl_direct_getitem;
+        if (name == "setitem") return exec_acl_direct_setitem;
+        return exec_mapped_acl_ops;
     }
 
     static jit_op_entry_t compile_acl_fused(Op *op)
@@ -1083,16 +2441,22 @@ namespace jittor
         // through configure_accelerator_kernel at registration.
         if (implementation.kernel.compile) return implementation;
         if (name == "fused")
+        {
+            implementation.codegen.prepare = prepare_acl_fused_direct;
+            implementation.kernel.native = exec_fused_acl;
             implementation.kernel.compile = compile_acl_fused;
+        }
         else if (name == "code")
             implementation.kernel.compile = compile_acl_code;
         else if (acl_ops.count(name))
         {
+            implementation.codegen.prepare = prepare_acl_mapped_direct;
             implementation.kernel.compile = compile_acl_mapped;
-            implementation.kernel.native = exec_mapped_acl_ops;
+            implementation.kernel.native = direct_acl_mapped_native(name);
         }
         else if (primitives.count(name))
         {
+            implementation.codegen.prepare = prepare_acl_mapped_direct;
             implementation.kernel.compile = compile_acl_single;
             implementation.kernel.native = exec_single_acl;
         }
@@ -1113,6 +2477,7 @@ namespace jittor
         // Keep the generated jit callback: Op::run_jit uses it to enter the
         // provider's compiler even when native execution is also available.
         auto implementation = get_op_definition("random")->implementations.at(BackendId::Cpu);
+        implementation.codegen.prepare = prepare_acl_mapped_direct;
         implementation.kernel.native = exec_mapped_acl_ops;
         implementation.kernel.compile = compile_acl_mapped;
         implementation.kernel.fallback_only = false;

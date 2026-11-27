@@ -105,10 +105,12 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     if isinstance(padding, str):
         x, padding = _resolve_string_padding(x, padding, weight.shape[-2:], stride, dilation)
     padding = _pair(padding)
-    if any(len(values) != 2 for values in (padding, stride, dilation)):
+    if len(stride) != 2 or len(padding) != 2 or len(dilation) != 2:
         raise ValueError("Conv2d stride, padding and dilation must each have two entries")
-    if (any(value <= 0 for values in (stride, dilation) for value in values)
-            or any(value < 0 for value in padding)):
+    sh, sw = stride
+    ph, pw = padding
+    dh, dw = dilation
+    if sh <= 0 or sw <= 0 or dh <= 0 or dw <= 0 or ph < 0 or pw < 0:
         raise ValueError("Conv2d stride and dilation must be positive and padding non-negative")
     out_channels = weight.shape[0]
     if groups <= 0:

@@ -127,6 +127,17 @@ class PoolACL(jt.Function):
         self._composite = False
 
         if self.op == "maximum":
+            if (
+                not self.return_indices
+                and getattr(jt.flags, "no_grad", 0)
+                and kernel_available("MaxpoolInfer")
+            ):
+                return acl_emit(
+                    _pool_program("MaxpoolInfer", 1, 1, *self._geometry()),
+                    inputs,
+                    [input.dtype],
+                    [output_shape],
+                )[0]
             result = acl_emit(
                 _pool_program("Maxpool", 1, 2, *self._geometry()),
                 inputs,

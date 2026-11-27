@@ -372,6 +372,8 @@ def split(d, split_size, dim=0):
                     d.shape[dim], sum(split_size)
                 )
             )
+        if len(split_size) == 1:
+            return (d,)
 
     ans = []
     last = 0
@@ -565,6 +567,9 @@ def tril(input: Var, diagonal:int=0) -> Var:
 
     '''
     import jittor as jt
+    result = try_dispatch("tensor.tril", input, diagonal)
+    if result is not None:
+        return result
     index = input.index()
     mask = index[-2] >= index[-1] - diagonal
     return jt.ternary(mask, input, jt.zeros_like(input))

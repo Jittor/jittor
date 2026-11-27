@@ -16,4 +16,19 @@ namespace jittor
 
         void executeOp(AclOpRegistry::const_iterator &it) override;
     };
+
+    // Binary tensor-with-host-scalar launcher (aclnnAdds/Subs/Muls/Divs), used
+    // when a fused scalar ArrayOp (+ optional BroadcastToOp) is elided to avoid
+    // device scratch allocation and an H2D DMA per scalar arithmetic op.
+    struct BinaryScalarOpRunner : public BaseOpRunner
+    {
+        BinaryScalarOpRunner();
+        const void *scalar_data = nullptr;
+        NanoString scalar_dtype;
+
+    protected:
+        bool allowsFlattenedElementwise() const override { return true; }
+
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    };
 }

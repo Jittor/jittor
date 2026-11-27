@@ -579,7 +579,8 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
             # no view or autograd history to detach.
             ds = _dtype_to_str(dtype if dtype is not None else g.get_default_dtype())
             if requires_grad and ds not in (
-                    "float16", "bfloat16", "float32", "float64", "complex64", "complex128"):
+                    "float16", "bfloat16", "float32", "float64", "complex64", "complex128",
+                    "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu"):
                 raise RuntimeError("Only Tensors of floating point and complex dtype can require gradients")
             v = jt.ops.empty((0,), ds)
             v.requires_grad_(bool(requires_grad))
@@ -591,7 +592,8 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         numpy_dtypes = {"bool", "uint8", "int8", "int16", "int32", "int64",
                         "uint16", "uint32", "uint64", "float16", "float32", "float64",
                         "complex64", "complex128"}
-        storage_dtype = ds if ds in numpy_dtypes else "float32" if ds == "bfloat16" else None
+        non_numpy_floats = ("bfloat16", "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu")
+        storage_dtype = ds if ds in numpy_dtypes else "float32" if ds in non_numpy_floats else None
         if isinstance(data, jt.Var):
             v = jt.Var.copy(data).detach()
         elif isinstance(data, (_np.ndarray, _np.generic)):
@@ -627,7 +629,7 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
                     ds = complex_dtype
                 else:
                     ds = default_dtype
-                arr = arr.astype("float32" if ds == "bfloat16" else ds)
+                arr = arr.astype("float32" if ds in non_numpy_floats else ds)
             v = _array_keep_dtype(arr)
         if ds is not None:
             v = v.cast(ds)
@@ -703,6 +705,9 @@ def frombuffer(buffer, *, dtype, count=-1, offset=0, requires_grad=False):
             raw = _np.frombuffer(buffer, dtype=_np.uint16, count=count, offset=offset)
             arr = (raw.astype(_np.uint32) << 16).view(_np.float32)
             v = from_numpy(_np.ascontiguousarray(arr))
+        elif ds in ("float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu"):
+            raw = _np.frombuffer(buffer, dtype=_np.uint8, count=count, offset=offset)
+            v = from_numpy(_np.ascontiguousarray(raw)).reinterpret_view((int(raw.size),), ds)
         else:
             if np_dtype is None:
                 raise TypeError(f"torch.frombuffer unsupported dtype: {_jittor_dtype_name(dtype)}")

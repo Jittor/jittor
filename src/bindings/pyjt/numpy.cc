@@ -39,7 +39,10 @@ NPY_TYPES ns2npy[] = {
     NPY_HALF, NPY_FLOAT, NPY_DOUBLE,
     NPY_USHORT, // fake half (bfloat16)
     NPY_CFLOAT,  // complex64
-    NPY_CDOUBLE  // complex128
+    NPY_CDOUBLE, // complex128
+    NPY_UBYTE,   // fake byte (float8_e4m3fn)
+    NPY_UBYTE,   // fake byte (float8_e5m2)
+    NPY_UBYTE    // fake byte (float8_e8m0fnu)
 };
 
 void** PyArray_API;

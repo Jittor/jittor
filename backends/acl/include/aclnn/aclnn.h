@@ -70,10 +70,14 @@
 #include "aclnnop/aclnn_mean.h"
 #include "aclnnop/aclnn_prod.h"
 #include "aclnnop/aclnn_triu.h"
+#include "aclnnop/aclnn_tril.h"
+#include "aclnnop/aclnn_copy.h"
+#include "aclnnop/aclnn_softplus.h"
 #include "aclnnop/aclnn_s_where.h"
 #include "aclnnop/aclnn_random.h"
 #include "aclnnop/aclnn_normal.h"
 #include "aclnnop/aclnn_permute.h"
+#include "aclnnop/aclnn_max_pool.h"
 #include "aclnnop/aclnn_max_pool2d_with_indices.h"
 #include "aclnnop/aclnn_max_pool2d_with_indices_backward.h"
 #include "aclnnop/aclnn_avgpool2d.h"
@@ -138,6 +142,18 @@
 #include "aclnnop/aclnn_nan_to_num.h"
 #include "aclnnop/aclnn_upsample_nearest_2d.h"
 #include "aclnnop/aclnn_upsample_nearest_2d_backward.h"
+#if !defined(__has_include) || (                              \
+    __has_include("aclnnop/aclnn_dynamic_block_quant.h") &&   \
+    __has_include("aclnnop/aclnn_dynamic_mx_quant.h") &&      \
+    __has_include("aclnnop/aclnn_quant_matmul_v5.h"))
+#define JT_ACL_HAS_FP8_OPS 1
+#include "aclnnop/aclnn_dynamic_block_quant.h"
+#include "aclnnop/aclnn_dynamic_mx_quant.h"
+#include "aclnnop/aclnn_quant_matmul_v5.h"
+#else
+#define JT_ACL_HAS_FP8_OPS 0
+#endif
+#include "aclnnop/aclnn_rsqrt.h"
 
 #define CHECK_RET(cond, return_expr) \
   do                                 \

@@ -142,7 +142,34 @@ from types import MappingProxyType
 from .loss_modules import CrossEntropyLoss, LOSS_CLASSES, PixelShuffle, PixelUnshuffle
 from .extra_api import _adapt_extra
 
+_FAST_MAPPED_UNARY = None
+_DISPATCH_MOD = None
+_ACL_SOFTMAX_GEN = -1
+_ACL_SOFTMAX_DEFAULT = False
+
+
 def _softmax(input, dim=-1, _stacklevel=3, dtype=None):
+    global _FAST_MAPPED_UNARY, _DISPATCH_MOD, _ACL_SOFTMAX_GEN, _ACL_SOFTMAX_DEFAULT
+    if dtype is None and isinstance(dim, int) and not isinstance(dim, bool):
+        dispatch = _DISPATCH_MOD
+        if dispatch is None:
+            from jittor._runtime import dispatch
+            _DISPATCH_MOD = dispatch
+            _FAST_MAPPED_UNARY = getattr(jt.core, "_fast_mapped_unary", None)
+        if _FAST_MAPPED_UNARY is not None:
+            gen = dispatch.generation
+            if gen != _ACL_SOFTMAX_GEN:
+                entries = dispatch._candidates("nn.softmax", "acl")
+                _ACL_SOFTMAX_DEFAULT = (
+                    len(entries) == 1
+                    and getattr(entries[0].implementation, "__name__", None) == "softmax_acl"
+                    and getattr(entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.neural"
+                )
+                _ACL_SOFTMAX_GEN = gen
+            if _ACL_SOFTMAX_DEFAULT and dispatch.dispatch_context is dispatch._NATIVE_DISPATCH_CONTEXT:
+                fast = _FAST_MAPPED_UNARY(input, 6, float(dim), 0.0)
+                if fast is not None:
+                    return fast
     _context = get_install_context(jt)
     _jt_softmax = _context.state["nn_functional_native"]['_jt_softmax']
     if dtype is not None:

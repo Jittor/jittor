@@ -472,7 +472,9 @@ inline void collect_placement_inputs(vector<Var*>& values, PlacementInputs& inpu
 }
 template<class Operator>
 void adapt_storage_input(Var*& value, vector<VarPtr>& owners) {
-    if (Operator::accepts_storage_strides || !value || value->is_contiguous()) return;
+    if (!value || value->is_contiguous()
+            || Operator::accepts_storage_strides
+            || Operator::accepts_strided_input(value)) return;
     USER_CHECK(!Operator::mutates_storage_inputs)
         << "Writable kernel inputs require contiguous storage";
     owners.emplace_back(contiguous_storage(value));

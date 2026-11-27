@@ -145,6 +145,11 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
                 return fast
         elif selected is not None:
             return (selected(x, weight, bias, eps),) + _batch_statistics(x, dims, sync)
+        stats_kernel = _select_kernel("nn.batch_norm.training_statistics", x, weight, bias, eps)
+        if stats_kernel is not None:
+            fast = stats_kernel(x, weight, bias, eps)
+            if fast is not None:
+                return fast
     xmean, xvar = _batch_statistics(x, dims, sync)
     xhat = _bn_normalize(x, xmean, xvar, dims, eps)
     return _affine(xhat, weight, bias, x.shape[1], x.ndim), xmean, xvar
@@ -201,6 +206,17 @@ def _unbiased(var, x, dims, world_size=1):
     return var * (count / (count - 1)) if count > 1 else var
 
 
+def _batch_norm_train_with_running_stats(x, running_mean, running_var, weight, bias, momentum, eps):
+    """Single-kernel training BatchNorm that also produces updated running buffers."""
+    kernel = _select_kernel(
+        "nn.batch_norm.training_running_stats",
+        x, running_mean, running_var, weight, bias, momentum, eps,
+    )
+    if kernel is None:
+        return None
+    return kernel(x, running_mean, running_var, weight, bias, momentum, eps)
+
+
 def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False,
                momentum=0.1, eps=1e-05):
     """Batch normalization, ``torch.nn.functional.batch_norm``'s signature.
@@ -216,6 +232,15 @@ def batch_norm(x, running_mean, running_var, weight=1, bias=0, training=False,
     dims = [0] + list(range(2, x.ndim))
     tracking = isinstance(running_mean, jt.Var) and isinstance(running_var, jt.Var)
     if training:
+        if tracking:
+            fused = _batch_norm_train_with_running_stats(
+                x, running_mean, running_var, weight, bias, momentum, eps
+            )
+            if fused is not None:
+                norm_x, new_rm, new_rv = fused
+                running_mean.update(new_rm)
+                running_var.update(new_rv)
+                return norm_x
         norm_x, xmean, xvar = _batch_norm_train(x, dims, weight, bias, eps)
         if tracking:
             running_mean.update(

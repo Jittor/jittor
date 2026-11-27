@@ -16,6 +16,7 @@
 #include "core/common.h"
 #include "utils/hash.h"
 #include "type/nano_string.h"
+#include "type/fp8_compute.h"
 #include "utils/fast_shared_ptr.h"
 #include "runtime/profiler/simple_profiler.h"
 #include "runtime/dispatch_context.h"
@@ -488,7 +489,7 @@ DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
     PyObjHolder obj(PyArray_SimpleNew(
         a.shape.size(),
         dims,
-        get_typenum(a.dtype == ns_bfloat16 ? ns_float32 : a.dtype)
+        get_typenum((a.dtype == ns_bfloat16 || ns_is_fp8(a.dtype)) ? ns_float32 : a.dtype)
     ));
     auto arr = (PyArray_Proxy*)(obj.obj);
     int64 size = PyArray_Size(arr);
@@ -508,6 +509,20 @@ DEF_IS(ArrayArgs, PyObject*) to_py_object(const T& a) {
         int64 num = size/4;
         for (int64 i=0; i<num; i++) {
             ptr2[i] = ptr[offset(i)]<<16;
+        }
+    } else if (ns_is_fp8(a.dtype)) {
+        auto ptr = (const uint8*)a.ptr;
+        auto ptr2 = (float32*)arr->data;
+        int64 num = size / 4;
+        if (a.dtype == ns_float8_e4m3fn) {
+            for (int64 i = 0; i < num; i++)
+                ptr2[i] = fp8_detail::e4m3fn_to_f32(ptr[offset(i)]);
+        } else if (a.dtype == ns_float8_e5m2) {
+            for (int64 i = 0; i < num; i++)
+                ptr2[i] = fp8_detail::e5m2_to_f32(ptr[offset(i)]);
+        } else {
+            for (int64 i = 0; i < num; i++)
+                ptr2[i] = fp8_detail::e8m0fnu_to_f32(ptr[offset(i)]);
         }
     } else {
         if (!a.storage_strides.size()) {
