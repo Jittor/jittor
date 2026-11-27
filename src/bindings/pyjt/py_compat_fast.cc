@@ -1580,18 +1580,50 @@ auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, 
 // instead of five.
 const string& gelu_source() {
     static const string source = R"(
+    __device__ __forceinline__ float jt_gelu_scalar(float v) {
+        return (0.5f * v) * (1.0f + erff(v * 0.7071067811865476f));
+    }
+    __global__ static void jt_gelu_vec16(const in0_type* __restrict__ x, out0_type* __restrict__ y,
+                                         long long n) {
+        constexpr int VEC = 16 / sizeof(in0_type);
+        long long nvec = n / VEC;
+        long long stride = (long long)gridDim.x * blockDim.x;
+        const uint4* __restrict__ xv = reinterpret_cast<const uint4*>(x);
+        uint4* __restrict__ yv = reinterpret_cast<uint4*>(y);
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x; idx < nvec; idx += stride) {
+            uint4 in_raw = xv[idx];
+            uint4 out_raw;
+            const in0_type* in_e = reinterpret_cast<const in0_type*>(&in_raw);
+            out0_type* out_e = reinterpret_cast<out0_type*>(&out_raw);
+            #pragma unroll
+            for (int k = 0; k < VEC; ++k) {
+                out_e[k] = static_cast<out0_type>(jt_gelu_scalar(static_cast<float>(in_e[k])));
+            }
+            yv[idx] = out_raw;
+        }
+        long long tail = nvec * VEC;
+        for (long long i = tail + (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
+            y[i] = static_cast<out0_type>(jt_gelu_scalar(static_cast<float>(x[i])));
+        }
+    }
     __global__ static void jt_gelu(const in0_type* __restrict__ x, out0_type* __restrict__ y,
                                    long long n) {
         long long stride = (long long)gridDim.x * blockDim.x;
         for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-            float v = static_cast<float>(x[i]);
-            y[i] = static_cast<out0_type>((0.5f * v) * (1.0f + erff(v * 0.7071067811865476f)));
+            y[i] = static_cast<out0_type>(jt_gelu_scalar(static_cast<float>(x[i])));
         }
     }
     long long n = in0->num;
-    long long blocks = (n + 255) / 256;
-    if (blocks > 65536) blocks = 65536;
-    jt_gelu<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    constexpr int VEC = 16 / sizeof(in0_type);
+    if (VEC > 1 && n >= VEC && ((((size_t)in0_p | (size_t)out0_p) & 15) == 0)) {
+        long long blocks = ((n / VEC) + 255) / 256;
+        if (blocks > 65536) blocks = 65536;
+        jt_gelu_vec16<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    } else {
+        long long blocks = (n + 255) / 256;
+        if (blocks > 65536) blocks = 65536;
+        jt_gelu<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    }
     )";
     return source;
 }
