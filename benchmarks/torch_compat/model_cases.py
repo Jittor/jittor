@@ -256,6 +256,8 @@ def transformer_model(torch, case, assets, inputs):
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = False
     text_config = model.config.get_text_config()
+    if case.scope.endswith("prefill") and hasattr(text_config, "use_cache"):
+        text_config.use_cache = False
     kwargs = {}
     forward = None
     if needs_processor(case):

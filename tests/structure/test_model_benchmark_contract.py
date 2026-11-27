@@ -69,6 +69,23 @@ class TestModelBenchmarkContract(unittest.TestCase):
         self.assertEqual(cuda_runner.execution_order(args, "qwen3_decode"),
                          [("torch", "compiled"), ("torch", "eager"), ("jittor", "eager")])
 
+    def test_cuda_prefill_disables_nested_text_cache(self):
+        with mock.patch.object(sys, "path", [str(HERE), *sys.path]):
+            from model_cases import MODEL_CASES, transformer_model
+
+        for name, use_cache in (("llava", False), ("sam2", True)):
+            with self.subTest(case=name):
+                case = MODEL_CASES[name]
+                text_config = SimpleNamespace(use_cache=True)
+                config = SimpleNamespace(get_text_config=lambda: text_config)
+                model = SimpleNamespace(config=config)
+                factory = SimpleNamespace(from_pretrained=mock.Mock(return_value=model))
+                transformers = SimpleNamespace(**{case.model: factory})
+                with mock.patch.dict(sys.modules, {"transformers": transformers}), \
+                        mock.patch("model_cases.processor_inputs", return_value={}):
+                    transformer_model(None, case, Path("assets"), None)
+                self.assertIs(text_config.use_cache, use_cache)
+
     def test_cuda_training_profiles_cover_both_gpu_counts(self):
         cases = cuda_runner.TRAINING_CASES
         for family, model, _, batch in cases.values():
