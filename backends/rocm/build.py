@@ -100,7 +100,10 @@ def library_build(rocm_home, backend_root, name):
             if str(miopen_lib) not in library_dirs:
                 library_dirs.append(str(miopen_lib))
             libraries += ("MIOpen",)
-            relative_sources += ("hipblas/miopen_conv.h", "hipblas/miopen_conv.cc")
+            relative_sources += ("hipblas/miopen_conv.h", "hipblas/miopen_conv.cc",
+                                 "hipblas/miopen_conv2d_op.h", "hipblas/miopen_conv2d_op.cc",
+                                 "hipblas/miopen_bn_forward_op.h", "hipblas/miopen_bn_forward_op.cc",
+                                 "hipblas/miopen_bn_backward_op.h", "hipblas/miopen_bn_backward_op.cc")
             defines = ("HAS_ROCM_MIOPEN",)
     sources = tuple(str(root / source) for source in relative_sources)
     for source in sources:

@@ -63,6 +63,23 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     dh, dw = dilation
     oh = (height + 2 * ph - dh * (kh - 1) - 1) // sh + 1
     ow = (width + 2 * pw - dw * (kw - 1) - 1) // sw + 1
+    if n > 0 and _output_requires_grad(x, weight, bias):
+        from jittor._runtime.backend_libraries import get_library_ops
+        native = getattr(get_library_ops("hipblas"), "miopen_conv2d", None)
+        if native is not None:
+            # MIOpen plans forward and both adjoints at construction. Only a
+            # genuine capability miss returns to the existing HIP GEMM graph.
+            with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                try:
+                    output = native(x, weight, (n,out_channels,oh,ow),
+                                    stride, padding, dilation, 0)
+                except jt.JittorError as error:
+                    if "MIOpen training convolution has no bounded solution" not in str(error):
+                        raise
+                else:
+                    if bias is not None:
+                        output = output + bias.reshape((1,out_channels,1,1))
+                    return output
     # Row-major GEMM: weights [Cout, Cin*Kh*Kw], columns [Cin*Kh*Kw, N*Oh*Ow].
     # Reindex owns both padding and its native differentiable scatter; backward
     # goes through these same operators rather than a separate convolution.

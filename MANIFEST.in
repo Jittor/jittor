@@ -339,8 +339,14 @@ include backends/rocm/libraries/hipblas/hipblas_wrapper.cc
 include backends/rocm/libraries/hipblas/hipblas_wrapper.h
 include backends/rocm/libraries/hipblas/linear_bias.cu
 include backends/rocm/libraries/hipblas/linear_bias.h
+include backends/rocm/libraries/hipblas/miopen_bn_backward_op.cc
+include backends/rocm/libraries/hipblas/miopen_bn_backward_op.h
+include backends/rocm/libraries/hipblas/miopen_bn_forward_op.cc
+include backends/rocm/libraries/hipblas/miopen_bn_forward_op.h
 include backends/rocm/libraries/hipblas/miopen_conv.cc
 include backends/rocm/libraries/hipblas/miopen_conv.h
+include backends/rocm/libraries/hipblas/miopen_conv2d_op.cc
+include backends/rocm/libraries/hipblas/miopen_conv2d_op.h
 include backends/rocm/libraries/hiprand/hiprand_random_op.cc
 include backends/rocm/libraries/hiprand/hiprand_random_op.h
 include backends/rocm/libraries/hiprand/random.cu

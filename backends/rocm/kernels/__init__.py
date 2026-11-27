@@ -53,6 +53,16 @@ def _supports_layer_norm(*args, **kwargs):
     return supports_layer_norm(*args, **kwargs)
 
 
+def _batch_norm_training(x, weight, bias, eps):
+    from .batch_norm import training
+    return training(x, weight, bias, eps)
+
+
+def _supports_batch_norm_training(x, weight, bias, eps):
+    from .batch_norm import supported
+    return supported(x, weight, bias, eps)
+
+
 def install_kernels():
     from jittor._runtime.dispatch import register_kernel, native_rule
     native_rule('rocm_conv2d')(_supports_conv2d)
@@ -68,3 +78,6 @@ def install_kernels():
                     dtypes={'float32', 'float16', 'bfloat16'}, supports=_supports_group_norm, priority=100)
     register_kernel('nn.layer_norm.inference', 'rocm', _layer_norm,
                     dtypes={'float32', 'float16', 'bfloat16'}, supports=_supports_layer_norm, priority=100)
+
+    register_kernel('nn.batch_norm.training.statistics', 'rocm', _batch_norm_training,
+                    dtypes={'float32', 'float16'}, supports=_supports_batch_norm_training, priority=100)

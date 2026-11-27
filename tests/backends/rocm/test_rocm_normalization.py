@@ -280,3 +280,58 @@ def test_low_precision_group_norm_silu_preserves_rounding(dtype):
         assert fused.location() == "device" and str(fused.dtype) == dtype
         raw = normalized_value.numpy().astype("float32")
         np.testing.assert_allclose(fused.numpy(), raw / (1 + np.exp(-raw)), rtol=0.008, atol=0.002)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float16"])
+def test_miopen_batchnorm_training_values_gradients_and_running_stats(dtype):
+    from jittor._runtime.backend_libraries import get_library_ops
+    if not hasattr(get_library_ops("hipblas"), "miopen_bn_forward"):
+        pytest.skip("MIOpen development SDK unavailable")
+    rng = np.random.RandomState(215)
+    raw = rng.normal(size=(2,8,7,9)).astype("float32")
+    affine = rng.normal(size=8).astype("float32")
+    offset = rng.normal(size=8).astype("float32")
+    seed = rng.normal(size=raw.shape).astype("float32")
+    x = jt.array(raw).cast(dtype)
+    w,b = jt.array(affine),jt.array(offset)
+    mean,var = jt.zeros(8).stop_grad(),jt.ones(8).stop_grad()
+    z = jt.array(seed).cast(dtype)
+    assert select_kernel("nn.batch_norm.training.statistics",x,w,b,1e-5) is not None
+    y = jt.nn.batch_norm(x,mean,var,w,b,training=True,momentum=1.)
+    gx,gw,gb = jt.grad((y*z).sum(),[x,w,b])
+    actual = x.numpy().astype("float32")
+    ds = z.numpy().astype("float32")
+    axes=(0,2,3);mu=actual.mean(axes,keepdims=True);variance=actual.var(axes,keepdims=True)
+    r=1/np.sqrt(variance+1e-5);xhat=(actual-mu)*r
+    expected=xhat*affine.reshape(1,-1,1,1)+offset.reshape(1,-1,1,1)
+    weighted=ds*affine.reshape(1,-1,1,1)
+    dx=r*(weighted-weighted.mean(axes,keepdims=True)-xhat*(weighted*xhat).mean(axes,keepdims=True))
+    for value,wanted in ((y,expected),(gx,dx),(gw,(ds*xhat).sum(axes)),(gb,ds.sum(axes))):
+        value.sync()
+        assert value.location()=="device"
+        np.testing.assert_allclose(value.numpy(),wanted,rtol=0.004,atol=0.003)
+    np.testing.assert_allclose(mean.numpy(),mu.reshape(-1),rtol=1e-5,atol=1e-6)
+    np.testing.assert_allclose(var.numpy(),actual.var(axes,ddof=1),rtol=1e-5,atol=1e-6)
+
+
+def test_miopen_batchnorm_higher_gradient_matches_generic():
+    from jittor._runtime.backend_libraries import get_library_ops
+    from jittor._runtime.dispatch import override_kernel
+    if not hasattr(get_library_ops("hipblas"), "miopen_bn_forward"):
+        pytest.skip("MIOpen development SDK unavailable")
+    rng=np.random.RandomState(216)
+    raw=rng.normal(size=(2,4,5,7)).astype("float32")
+    seed=rng.normal(size=raw.shape).astype("float32")
+    cotangent=rng.normal(size=raw.shape).astype("float32")
+    def run():
+        x,w,b=jt.array(raw),jt.ones(4),jt.zeros(4)
+        y=jt.nn.batch_norm(x,jt.zeros(4).stop_grad(),jt.ones(4).stop_grad(),w,b,training=True)
+        dx=jt.grad((y*jt.array(seed)).sum(),x)
+        result=jt.grad((dx*jt.array(cotangent)).sum(),w)
+        result.sync()
+        assert result.location()=="device"
+        return result.numpy().copy()
+    actual=run()
+    with override_kernel("nn.batch_norm.training.statistics","rocm",None):
+        expected=run()
+    np.testing.assert_allclose(actual,expected,rtol=3e-5,atol=3e-5)

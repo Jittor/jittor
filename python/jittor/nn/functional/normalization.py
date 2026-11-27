@@ -124,6 +124,10 @@ def _batch_norm_train(x, dims, weight, bias, eps, sync=False):
     with the statistics (the module updates its running buffers, the functional
     updates the buffers it was handed).
     """
+    if not sync:
+        statistics_provider = _select_kernel("nn.batch_norm.training.statistics", x, weight, bias, eps)
+        if statistics_provider is not None:
+            return statistics_provider(x, weight, bias, eps)
     input_dtype = _jittor_dtype_name(x.dtype)
     if (_amp_prefers_half() and _torch_autocast_active()
             and input_dtype in ("float32", "float16", "bfloat16")):

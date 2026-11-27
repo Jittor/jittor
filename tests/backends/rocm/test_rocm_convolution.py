@@ -235,3 +235,27 @@ def test_low_precision_convolution_uses_native_gemm(dtype):
         y.sync()
         assert y.location() == "device" and str(y.dtype) == dtype
         np.testing.assert_allclose(y.numpy(), expected, rtol=0.012, atol=0.003)
+
+
+def test_miopen_training_adjoint_values_and_higher_gradient():
+    from jittor._runtime.backend_libraries import get_library_ops
+    native = getattr(get_library_ops("hipblas"), "miopen_conv2d", None)
+    if native is None:
+        pytest.skip("MIOpen development SDK unavailable")
+    rng = np.random.RandomState(212)
+    raw = rng.normal(size=(2,8,9,11)).astype("float32")/8
+    weights = rng.normal(size=(16,8,3,3)).astype("float32")/8
+    seed = rng.normal(size=(2,16,9,11)).astype("float32")/8
+    x,w = jt.array(raw), jt.array(weights)
+    y = native(x,w,seed.shape,(1,1),(1,1),(1,1),0)
+    dx,dw = jt.grad((y*jt.array(seed)).sum(),[x,w])
+    expected, gx, gw = reference(raw,weights,None,(1,1),(1,1),(1,1),seed)
+    for actual, wanted in ((y,expected),(dx,gx),(dw,gw)):
+        actual.sync()
+        assert actual.location() == "device"
+        np.testing.assert_allclose(actual.numpy(),wanted,rtol=4e-5,atol=4e-6)
+    second = jt.grad(dx.sum(),w)
+    _,_,ref = reference(np.ones_like(raw),weights,None,(1,1),(1,1),(1,1),seed)
+    second.sync()
+    assert second.location() == "device"
+    np.testing.assert_allclose(second.numpy(),ref,rtol=4e-5,atol=4e-6)

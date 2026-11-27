@@ -82,6 +82,7 @@ def test_optional_miopen_requires_header_and_library(tmp_path):
     assert "-DHAS_ROCM_MIOPEN" in shlex.split(enabled.extra_flags)
     assert "-lMIOpen" in shlex.split(enabled.extra_flags)
     assert any(path.endswith("miopen_conv.cc") for path in enabled.sources)
+    assert any(path.endswith("miopen_conv2d_op.cc") for path in enabled.sources)
     header.unlink()
     missing_header = build.library_build(sdk, ROCM, "hipblas")
     assert missing_header.libraries == ("hipblas",)
@@ -304,8 +305,9 @@ def test_inference_kernels_register_without_importing_tensor_implementations(mon
     module.install_kernels()
     assert [args[0] for args, _ in calls] == [
         'nn.rms_norm.inference', 'nn.softmax', 'conv2d',
-        'nn.group_norm', 'nn.layer_norm.inference']
+        'nn.group_norm', 'nn.layer_norm.inference', 'nn.batch_norm.training.statistics']
     assert all(args[1] == 'rocm' for args, _ in calls)
     assert calls[0][1]['dtypes'] == {'float32'}
     assert all(kwargs['dtypes'] == {'float32', 'float16', 'bfloat16'}
-               for _, kwargs in calls[1:])
+               for _, kwargs in calls[1:-1])
+    assert calls[-1][1]['dtypes'] == {'float32', 'float16'}
