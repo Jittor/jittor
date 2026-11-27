@@ -573,7 +573,7 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     if bias is None or not _supported(query, key, scale, is_causal, training, bias, layout):
         return None
     if io_bias:
-        bias = bias.cast(query.dtype)
+        bias = _cast_io_bias(bias, query.dtype)
     if training:
         out = _CudnnAttention.apply(query, key, value, bias, scale, bool(is_causal), layout)
     else:
@@ -591,6 +591,20 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
 _MASK_TERMS = []
 
 
+def _cast_io_bias(bias, dtype):
+    from jittor._runtime import step_capture
+    cap = step_capture._ACTIVE
+    if cap is None:
+        return bias.cast(dtype)
+    key = ("io", bias.var_ptr, _jittor_dtype_name(dtype))
+    cached = cap.mask_terms.get(key)
+    if cached is not None and cached[0] is bias:
+        return cached[1]
+    casted = bias.cast(dtype)
+    cap.mask_terms[key] = (bias, casted)
+    return casted
+
+
 def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *,
                 check_absorbed=True, replace_infinity=True):
     """The additive bias for `attn_mask` and which query rows keep a key.
@@ -605,13 +619,20 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *,
     it looks; anything else only by being the same object.
     """
     from jittor._runtime import step_capture
+    cap = step_capture._ACTIVE
     tracing = step_capture.tracing()
     base = attn_mask._view_base_id() if attn_mask._is_view() else -1
-    key = (base, attn_mask.var_ptr if base < 0 else 0, bool(causal), bool(check_absorbed), replace_infinity,
+    storage_ver = tuple(attn_mask._saved_storage_version()[1:])
+    key = (base, attn_mask.var_ptr if base < 0 else 0, storage_ver,
+           bool(causal), bool(check_absorbed), bool(replace_infinity),
            tuple(attn_mask.shape), attn_mask._storage_offset(),
            tuple(attn_mask._storage_strides()), _jittor_dtype_name(attn_mask.dtype),
            _jittor_dtype_name(dtype), tuple(query_dims), tuple(key_dims))
-    if not tracing:
+    if cap is not None:
+        entry = cap.mask_terms.get(key)
+        if entry is not None and (base >= 0 or entry[0] is attn_mask):
+            return entry[1], entry[2]
+    elif not tracing:
         for entry in _MASK_TERMS:
             if entry[0] == key and (base >= 0 or entry[1] is attn_mask):
                 return entry[2], entry[3]
@@ -636,7 +657,9 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *,
             # rows; -inf rows are handled separately below.
             absorbed = jt.isfinite(top) & (top + math.log(key_dims[2]) == top)
             if bool(absorbed.any().item()):
-                if not tracing:
+                if cap is not None:
+                    cap.mask_terms[key] = (attn_mask if base < 0 else None, None, None)
+                elif not tracing:
                     _MASK_TERMS.append((key, attn_mask if base < 0 else None, None, None))
                 return None, None
         # Preserve the FP32-bias path's finite sentinel. The IO-typed path
@@ -645,7 +668,9 @@ def _mask_terms(attn_mask, query_dims, key_dims, dtype, causal=False, *,
             neg_inf = jt.isinf(bias) & (bias < 0)
             bias = jt.ternary(neg_inf, jt.array(-1e9).float32().broadcast(bias.shape), bias)
         bias = jt.ternary(live, bias, jt.zeros_like(bias))
-    if not tracing:
+    if cap is not None:
+        cap.mask_terms[key] = (attn_mask if base < 0 else None, bias, live)
+    elif not tracing:
         _MASK_TERMS.append((key, attn_mask if base < 0 else None, bias, live))
     return bias, live
 

@@ -195,6 +195,56 @@ class TestCudnnFusedAttention(unittest.TestCase):
         want = _reference(q, k, v, other, False, np.zeros_like(q))[0]
         np.testing.assert_allclose(third.float32().numpy(), want, atol=3e-3 * np.abs(want).max())
 
+    def test_step_capture_reuses_multiple_masks_within_trace_and_clears_after(self):
+        from jittor._runtime import step_capture
+
+        rng = np.random.RandomState(4)
+        q = rng.randn(1, 4, 48, 64).astype("float32")
+        k, v = (rng.randn(1, 4, 64, 64).astype("float32") for _ in range(2))
+        mask_a = rng.rand(1, 1, 48, 80) > 0.3
+        mask_b = rng.rand(1, 1, 48, 80) > 0.5
+        base_a = jt.array(mask_a)
+        base_b = jt.array(mask_b)
+        seen_biases = []
+
+        def step(qt, kt, vt, ma, mb):
+            first = self.kernel._mask_terms(
+                ma[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            second = self.kernel._mask_terms(
+                mb[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            first_again = self.kernel._mask_terms(
+                ma[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            second_again = self.kernel._mask_terms(
+                mb[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            if step_capture._ACTIVE is not None:
+                seen_biases.append((first[0], first_again[0], second[0], second_again[0],
+                                    len(step_capture._ACTIVE.mask_terms)))
+            out_a = scaled_dot_product_attention(qt, kt, vt, attn_mask=ma[:, :, :, :64])
+            out_b = scaled_dot_product_attention(qt, kt, vt, attn_mask=mb[:, :, :, :64])
+            return out_a + out_b
+
+        captured = step_capture.StepCapture(step)
+        with jt.no_grad():
+            qkv = [jt.array(t).float16() for t in (q, k, v)]
+            eager_out = captured(*qkv, base_a, base_b)
+            cap_out = captured(*qkv, base_a, base_b)
+            replay_out = captured(*qkv, base_a, base_b)
+            self.assertEqual(len(seen_biases), 1)
+            b1, b1_again, b2, b2_again, cache_len = seen_biases[0]
+            self.assertIs(b1, b1_again)
+            self.assertIs(b2, b2_again)
+            self.assertIsNot(b1, b2)
+            self.assertEqual(cache_len, 2)
+            self.assertEqual(len(captured._capture.mask_terms), 0)
+            want = (_reference(q, k, v, mask_a[..., :64], False, np.zeros_like(q))[0]
+                    + _reference(q, k, v, mask_b[..., :64], False, np.zeros_like(q))[0])
+            for got in (eager_out, cap_out, replay_out):
+                np.testing.assert_allclose(got.float32().numpy(), want, atol=5e-3 * np.abs(want).max())
+
     def test_a_float_mask_per_head(self):
         self._check_mask((np.random.RandomState(3).randn(2, 4, 48, 64) * 0.5).astype("float32"))
 
