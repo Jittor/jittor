@@ -72,6 +72,333 @@ _RMS_NORM_SOURCE = r"""
             value += __shfl_down_sync(0xffffffff, value, offset);
         return value;
     }
+    __global__ __launch_bounds__(128) static void rms_norm_subwarp_2b(
+            const in0_type* __restrict__ x,
+            const in1_type* __restrict__ gamma,
+            out0_type* __restrict__ y,
+            long long rows,
+            float eps) {
+        if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && %(vec2_n)d > 0) {
+            constexpr int kGroup = %(vec2_group)d;
+            constexpr int kVecN = %(vec2_n)d;
+            constexpr int kRowsPerBlock = 128 / kGroup;
+            long long row = (long long)blockIdx.x * kRowsPerBlock + (threadIdx.x / kGroup);
+            int lane = threadIdx.x & (kGroup - 1);
+            bool active = (row < rows) && (lane < kVecN);
+            float sum = 0.0f;
+            uint4 raw = make_uint4(0, 0, 0, 0);
+            if (active) {
+                const uint4* x8 = reinterpret_cast<const uint4*>(x + row * %(hidden_size)dLL);
+                raw = x8[lane];
+                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                #pragma unroll
+                for (int k = 0; k < 8; ++k) {
+                    float val = static_cast<float>(vp[k]);
+                    sum += val * val;
+                }
+            }
+            #pragma unroll
+            for (int offset = kGroup >> 1; offset > 0; offset >>= 1)
+                sum += __shfl_xor_sync(0xffffffffu, sum, offset);
+            if (active) {
+                float inv = rsqrtf(sum / %(hidden_size)d.0f + eps);
+                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                uint4 outraw;
+                out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                bool g_vec = (sizeof(in1_type) == 2) && ((((size_t)gamma) & 15u) == 0);
+                if (g_vec) {
+                    uint4 graw = reinterpret_cast<const uint4*>(gamma)[lane];
+                    const in1_type* gp = reinterpret_cast<const in1_type*>(&graw);
+                    #pragma unroll
+                    for (int k = 0; k < 8; ++k) {
+                        float normalized = static_cast<float>(vp[k]) * inv;
+                        if (%(round_before_weight)d)
+                            normalized = static_cast<float>(out0_type(normalized));
+                        op[k] = out0_type(normalized * static_cast<float>(gp[k]));
+                    }
+                } else {
+                    int d = lane * 8;
+                    #pragma unroll
+                    for (int k = 0; k < 8; ++k) {
+                        float normalized = static_cast<float>(vp[k]) * inv;
+                        if (%(round_before_weight)d)
+                            normalized = static_cast<float>(out0_type(normalized));
+                        op[k] = out0_type(normalized * static_cast<float>(gamma[d + k]));
+                    }
+                }
+                uint4* y8 = reinterpret_cast<uint4*>(y + row * %(hidden_size)dLL);
+                y8[lane] = outraw;
+            }
+        }
+    }
+    __global__ __launch_bounds__(%(vec2_threads)d) static void rms_norm_vec2b(
+            const in0_type* __restrict__ x,
+            const in1_type* __restrict__ gamma,
+            out0_type* __restrict__ y,
+            float eps) {
+        if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && %(vec2_n)d > 0) {
+            constexpr int kVecN = %(vec2_n)d;
+            constexpr int kThreads = %(vec2_threads)d;
+            constexpr int kWarps = %(vec2_warps)d;
+            constexpr int kVecPer = (kVecN + kThreads - 1) / kThreads;
+            constexpr bool kVecCache = kVecPer <= 4;
+            long long row_offset = (long long)blockIdx.x * %(hidden_size)dLL;
+            int tid = threadIdx.x;
+            int lane = tid & 31;
+            int warp = tid >> 5;
+            __shared__ float warp_buf[kWarps];
+            __shared__ float inverse_rms;
+            const uint4* x8 = reinterpret_cast<const uint4*>(x + row_offset);
+            uint4* y8 = reinterpret_cast<uint4*>(y + row_offset);
+            uint4 cache[kVecCache ? (kVecPer > 0 ? kVecPer : 1) : 1];
+            float sum = 0.0f;
+            if (kVecCache) {
+                #pragma unroll
+                for (int i = 0; i < kVecPer; ++i) {
+                    int v = tid + i * kThreads;
+                    if (v < kVecN) {
+                        uint4 raw = x8[v];
+                        cache[i] = raw;
+                        const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                        #pragma unroll
+                        for (int k = 0; k < 8; ++k) {
+                            float val = static_cast<float>(vp[k]);
+                            sum += val * val;
+                        }
+                    }
+                }
+            } else {
+                for (int v = tid; v < kVecN; v += kThreads) {
+                    uint4 raw = x8[v];
+                    const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                    #pragma unroll
+                    for (int k = 0; k < 8; ++k) {
+                        float val = static_cast<float>(vp[k]);
+                        sum += val * val;
+                    }
+                }
+            }
+            sum = warp_sum(sum);
+            if (lane == 0) warp_buf[warp] = sum;
+            __syncthreads();
+            if (warp == 0) {
+                float total = lane < kWarps ? warp_buf[lane] : 0.0f;
+                total = warp_sum(total);
+                if (lane == 0)
+                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
+            }
+            __syncthreads();
+            float inv = inverse_rms;
+            bool g_vec = (sizeof(in1_type) == 2) && ((((size_t)gamma) & 15u) == 0);
+            const uint4* g8 = g_vec ? reinterpret_cast<const uint4*>(gamma) : nullptr;
+            if (kVecCache) {
+                #pragma unroll
+                for (int i = 0; i < kVecPer; ++i) {
+                    int v = tid + i * kThreads;
+                    if (v < kVecN) {
+                        uint4 raw = cache[i];
+                        const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                        uint4 outraw;
+                        out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                        if (g_vec) {
+                            uint4 graw = g8[v];
+                            const in1_type* gp = reinterpret_cast<const in1_type*>(&graw);
+                            #pragma unroll
+                            for (int k = 0; k < 8; ++k) {
+                                float normalized = static_cast<float>(vp[k]) * inv;
+                                if (%(round_before_weight)d)
+                                    normalized = static_cast<float>(out0_type(normalized));
+                                op[k] = out0_type(normalized * static_cast<float>(gp[k]));
+                            }
+                        } else {
+                            int d = v * 8;
+                            #pragma unroll
+                            for (int k = 0; k < 8; ++k) {
+                                float normalized = static_cast<float>(vp[k]) * inv;
+                                if (%(round_before_weight)d)
+                                    normalized = static_cast<float>(out0_type(normalized));
+                                op[k] = out0_type(normalized * static_cast<float>(gamma[d + k]));
+                            }
+                        }
+                        y8[v] = outraw;
+                    }
+                }
+            } else {
+                for (int v = tid; v < kVecN; v += kThreads) {
+                    uint4 raw = x8[v];
+                    const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                    uint4 outraw;
+                    out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                    if (g_vec) {
+                        uint4 graw = g8[v];
+                        const in1_type* gp = reinterpret_cast<const in1_type*>(&graw);
+                        #pragma unroll
+                        for (int k = 0; k < 8; ++k) {
+                            float normalized = static_cast<float>(vp[k]) * inv;
+                            if (%(round_before_weight)d)
+                                normalized = static_cast<float>(out0_type(normalized));
+                            op[k] = out0_type(normalized * static_cast<float>(gp[k]));
+                        }
+                    } else {
+                        int d = v * 8;
+                        #pragma unroll
+                        for (int k = 0; k < 8; ++k) {
+                            float normalized = static_cast<float>(vp[k]) * inv;
+                            if (%(round_before_weight)d)
+                                normalized = static_cast<float>(out0_type(normalized));
+                            op[k] = out0_type(normalized * static_cast<float>(gamma[d + k]));
+                        }
+                    }
+                    y8[v] = outraw;
+                }
+            }
+        }
+    }
+    __global__ __launch_bounds__(128) static void rms_norm_subwarp_4b(
+            const in0_type* __restrict__ x,
+            const in1_type* __restrict__ gamma,
+            out0_type* __restrict__ y,
+            long long rows,
+            float eps) {
+        if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && %(vec4_n)d > 0) {
+            constexpr int kGroup = %(vec4_group)d;
+            constexpr int kVecN = %(vec4_n)d;
+            constexpr int kRowsPerBlock = 128 / kGroup;
+            long long row = (long long)blockIdx.x * kRowsPerBlock + (threadIdx.x / kGroup);
+            int lane = threadIdx.x & (kGroup - 1);
+            bool active = (row < rows) && (lane < kVecN);
+            float sum = 0.0f;
+            float4 val = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+            if (active) {
+                const float4* x4 = reinterpret_cast<const float4*>(x + row * %(hidden_size)dLL);
+                val = x4[lane];
+                sum = val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
+            }
+            #pragma unroll
+            for (int offset = kGroup >> 1; offset > 0; offset >>= 1)
+                sum += __shfl_xor_sync(0xffffffffu, sum, offset);
+            if (active) {
+                float inv = rsqrtf(sum / %(hidden_size)d.0f + eps);
+                float4 gv;
+                if (sizeof(in1_type) == 4 && ((((size_t)gamma) & 15u) == 0)) {
+                    gv = reinterpret_cast<const float4*>(gamma)[lane];
+                } else {
+                    int d = lane * 4;
+                    gv = make_float4(
+                        static_cast<float>(gamma[d]),
+                        static_cast<float>(gamma[d + 1]),
+                        static_cast<float>(gamma[d + 2]),
+                        static_cast<float>(gamma[d + 3]));
+                }
+                float4 outv;
+                outv.x = (val.x * inv) * gv.x;
+                outv.y = (val.y * inv) * gv.y;
+                outv.z = (val.z * inv) * gv.z;
+                outv.w = (val.w * inv) * gv.w;
+                float4* y4 = reinterpret_cast<float4*>(y + row * %(hidden_size)dLL);
+                y4[lane] = outv;
+            }
+        }
+    }
+    __global__ __launch_bounds__(%(vec4_threads)d) static void rms_norm_vec4b(
+            const in0_type* __restrict__ x,
+            const in1_type* __restrict__ gamma,
+            out0_type* __restrict__ y,
+            float eps) {
+        if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && %(vec4_n)d > 0) {
+            constexpr int kVecN = %(vec4_n)d;
+            constexpr int kThreads = %(vec4_threads)d;
+            constexpr int kWarps = %(vec4_warps)d;
+            constexpr int kVecPer = (kVecN + kThreads - 1) / kThreads;
+            constexpr bool kVecCache = kVecPer <= 4;
+            long long row_offset = (long long)blockIdx.x * %(hidden_size)dLL;
+            int tid = threadIdx.x;
+            int lane = tid & 31;
+            int warp = tid >> 5;
+            __shared__ float warp_buf[kWarps];
+            __shared__ float inverse_rms;
+            const float4* x4 = reinterpret_cast<const float4*>(x + row_offset);
+            float4* y4 = reinterpret_cast<float4*>(y + row_offset);
+            float4 cache[kVecCache ? (kVecPer > 0 ? kVecPer : 1) : 1];
+            float sum = 0.0f;
+            if (kVecCache) {
+                #pragma unroll
+                for (int i = 0; i < kVecPer; ++i) {
+                    int v = tid + i * kThreads;
+                    if (v < kVecN) {
+                        float4 val = x4[v];
+                        cache[i] = val;
+                        sum += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
+                    }
+                }
+            } else {
+                for (int v = tid; v < kVecN; v += kThreads) {
+                    float4 val = x4[v];
+                    sum += val.x * val.x + val.y * val.y + val.z * val.z + val.w * val.w;
+                }
+            }
+            sum = warp_sum(sum);
+            if (lane == 0) warp_buf[warp] = sum;
+            __syncthreads();
+            if (warp == 0) {
+                float total = lane < kWarps ? warp_buf[lane] : 0.0f;
+                total = warp_sum(total);
+                if (lane == 0)
+                    inverse_rms = rsqrtf(total / %(hidden_size)d.0f + eps);
+            }
+            __syncthreads();
+            float inv = inverse_rms;
+            bool g_vec = (sizeof(in1_type) == 4) && ((((size_t)gamma) & 15u) == 0);
+            const float4* g4 = g_vec ? reinterpret_cast<const float4*>(gamma) : nullptr;
+            if (kVecCache) {
+                #pragma unroll
+                for (int i = 0; i < kVecPer; ++i) {
+                    int v = tid + i * kThreads;
+                    if (v < kVecN) {
+                        float4 val = cache[i];
+                        float4 gv;
+                        if (g_vec) {
+                            gv = g4[v];
+                        } else {
+                            int d = v * 4;
+                            gv = make_float4(
+                                static_cast<float>(gamma[d]),
+                                static_cast<float>(gamma[d + 1]),
+                                static_cast<float>(gamma[d + 2]),
+                                static_cast<float>(gamma[d + 3]));
+                        }
+                        float4 outv;
+                        outv.x = (val.x * inv) * gv.x;
+                        outv.y = (val.y * inv) * gv.y;
+                        outv.z = (val.z * inv) * gv.z;
+                        outv.w = (val.w * inv) * gv.w;
+                        y4[v] = outv;
+                    }
+                }
+            } else {
+                for (int v = tid; v < kVecN; v += kThreads) {
+                    float4 val = x4[v];
+                    float4 gv;
+                    if (g_vec) {
+                        gv = g4[v];
+                    } else {
+                        int d = v * 4;
+                        gv = make_float4(
+                            static_cast<float>(gamma[d]),
+                            static_cast<float>(gamma[d + 1]),
+                            static_cast<float>(gamma[d + 2]),
+                            static_cast<float>(gamma[d + 3]));
+                    }
+                    float4 outv;
+                    outv.x = (val.x * inv) * gv.x;
+                    outv.y = (val.y * inv) * gv.y;
+                    outv.z = (val.z * inv) * gv.z;
+                    outv.w = (val.w * inv) * gv.w;
+                    y4[v] = outv;
+                }
+            }
+        }
+    }
     __global__ static void rms_norm(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ gamma,
@@ -336,9 +663,42 @@ _RMS_NORM_SOURCE = r"""
     }
     float eps = static_cast<float>(data["eps"]);
     long long rows = in0->num / %(hidden_size)d;
-    rms_norm<<<(unsigned)rows, %(launch_threads)d>>>(in0_p, in1_p, out0_p, eps);
+    if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && %(vec2_n)d > 0
+            && ((((size_t)in0_p | (size_t)out0_p) & 15u) == 0)) {
+        if (%(vec2_subwarp)d) {
+            constexpr int kRowsPerBlock = 128 / %(vec2_group)d;
+            rms_norm_subwarp_2b<<<(unsigned)((rows + kRowsPerBlock - 1) / kRowsPerBlock), 128>>>(
+                in0_p, in1_p, out0_p, rows, eps);
+        } else {
+            rms_norm_vec2b<<<(unsigned)rows, %(vec2_threads)d>>>(in0_p, in1_p, out0_p, eps);
+        }
+    } else if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && %(vec4_n)d > 0
+            && ((((size_t)in0_p | (size_t)out0_p) & 15u) == 0)) {
+        if (%(vec4_subwarp)d) {
+            constexpr int kRowsPerBlock = 128 / %(vec4_group)d;
+            rms_norm_subwarp_4b<<<(unsigned)((rows + kRowsPerBlock - 1) / kRowsPerBlock), 128>>>(
+                in0_p, in1_p, out0_p, rows, eps);
+        } else {
+            rms_norm_vec4b<<<(unsigned)rows, %(vec4_threads)d>>>(in0_p, in1_p, out0_p, eps);
+        }
+    } else {
+        rms_norm<<<(unsigned)rows, %(launch_threads)d>>>(in0_p, in1_p, out0_p, eps);
+    }
     CHECK(0 == cudaGetLastError());
     """
+
+
+def _vec_launch_params(hidden_size, elem_per_vec):
+    if hidden_size % elem_per_vec != 0:
+        return 0, 0, 8, 32, 1
+    vec_n = hidden_size // elem_per_vec
+    if vec_n <= 32:
+        group = 8 if vec_n <= 8 else (16 if vec_n <= 16 else 32)
+        return vec_n, 1, group, 32, 1
+    vec_threads = 32
+    while vec_threads < min(vec_n, 256):
+        vec_threads *= 2
+    return vec_n, 0, 32, vec_threads, vec_threads // 32
 
 
 @lru_cache(maxsize=256)
@@ -347,12 +707,24 @@ def _format_rms_norm_source(template, hidden_size, threads, warps,
     # Cap block size at 512 threads so SM89 (1536 threads/SM) runs 3 blocks/SM
     # at 100% occupancy instead of 1 block/SM (66.7%) with 1024 threads.
     launch_threads = min(threads, 512)
+    vec2_n, vec2_subwarp, vec2_group, vec2_threads, vec2_warps = _vec_launch_params(hidden_size, 8)
+    vec4_n, vec4_subwarp, vec4_group, vec4_threads, vec4_warps = _vec_launch_params(hidden_size, 4)
     return template % {
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
         "launch_threads": launch_threads,
         "launch_warps": launch_threads // 32,
+        "vec2_n": vec2_n,
+        "vec2_subwarp": vec2_subwarp,
+        "vec2_group": vec2_group,
+        "vec2_threads": vec2_threads,
+        "vec2_warps": vec2_warps,
+        "vec4_n": vec4_n,
+        "vec4_subwarp": vec4_subwarp,
+        "vec4_group": vec4_group,
+        "vec4_threads": vec4_threads,
+        "vec4_warps": vec4_warps,
         "round_before_weight": int(round_before_weight),
     }
 
@@ -506,7 +878,19 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
     if contract is None:
         return None
     hidden_size, threads, warps, epsilon_value = contract
-    launch_threads = min(threads, 256 if (fp32_residual or hidden_size <= 1024) else 512)
+    x_dtype = _jittor_dtype_name(x.dtype)
+    if not fp32_residual and x_dtype in ("float16", "bfloat16") and hidden_size % 8 == 0:
+        vec_n = hidden_size // 8
+        launch_threads = 32
+        while launch_threads < min(vec_n, 256):
+            launch_threads *= 2
+    elif x_dtype == "float32" and hidden_size % 4 == 0:
+        vec_n = hidden_size // 4
+        launch_threads = 32
+        while launch_threads < min(vec_n, 256):
+            launch_threads *= 2
+    else:
+        launch_threads = min(threads, 256 if (fp32_residual or hidden_size <= 1024) else 512)
     launch_warps = launch_threads // 32
     cuda_src = cached_source(r"""
     __device__ __forceinline__ float warp_sum(float value) {
