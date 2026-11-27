@@ -164,7 +164,20 @@ class OptimizedModule(jt.nn.Module):
         if jt.flags.no_grad:
             if self._orig_mod.training:
                 return self.__dict__["_training_replay"](*args, **kwargs)
-            return self.__dict__["_replay"](*args, **kwargs)
+            replay = self.__dict__["_replay"]
+            result = replay(*args, **kwargs)
+            refused = getattr(replay, "refused", None)
+            if refused and (
+                "requires step capture" in refused
+                or "read a value back to the host" in refused
+            ):
+                from jittor._runtime.graph_replay import GraphReplay
+                if isinstance(replay, GraphReplay):
+                    from jittor._runtime.step_capture import StepCapture
+                    replay.invalidate()
+                    self.__dict__["_replay"] = StepCapture(
+                        self._orig_mod, _guard_external_backward=True)
+            return result
         return self._orig_mod(*args, **kwargs)
 
     def forward(self, *args, **kwargs):
