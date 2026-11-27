@@ -351,11 +351,43 @@ with jt.flag_scope(use_cuda=1, reuse_dying_inputs=2):
     np.testing.assert_allclose(mo1.numpy(), ref_tmp * 2.0 + 0.25, rtol=1e-5, atol=1e-6)
     np.testing.assert_allclose(mo2.numpy(), ref_tmp * -0.5 + 1.5, rtol=1e-5, atol=1e-6)
 
-    # fp16 & bf16 & f64 & int64 & NaN max/min
+    # fp16 & bf16 & f64 & int64 & NaN max/min (exercises vec8 uint4 path + scalar tail)
     h_out = (x2.float16() + b1.float16()).float32()
     np.testing.assert_allclose(h_out.numpy(), (x2_np.astype(np.float16) + b1_np.astype(np.float16)).astype(np.float32), rtol=1e-2, atol=1e-2)
     bf_out = (x2.bfloat16() * y2.bfloat16()).float32()
     np.testing.assert_allclose(bf_out.numpy(), x2_np * y2_np, rtol=2e-2, atol=2e-2)
+    for n_vec8 in (16, 49, 13, 7):
+        a16_np = rng.standard_normal(n_vec8).astype(np.float16)
+        b16_np = rng.standard_normal(n_vec8).astype(np.float16)
+        a16, b16 = jt.array(a16_np), jt.array(b16_np)
+        jt.sync([a16, b16], True)
+        c16 = a16 + b16
+        c16.sync(True)
+        assert c16.location() == 'device'
+        np.testing.assert_array_equal(c16.numpy(), (a16_np + b16_np).astype(np.float16))
+        if n_vec8 >= 13:
+            # Unaligned slice (offset by 1 half = 2 bytes) falls back cleanly to scalar loop
+            ua, ub = a16[1:], b16[1:]
+            uc = ua + ub
+            uc.sync(True)
+            np.testing.assert_array_equal(uc.numpy(), (a16_np[1:] + b16_np[1:]).astype(np.float16))
+    # Vectorized CUDA fast_gelu (16-byte uint4 path + tail + unaligned) for fp16/bf16/fp32
+    with jt.no_grad():
+        for dt_name, np_dt in (("float16", np.float16), ("float32", np.float32)):
+            for n_g in (256, 313, 7):
+                g_in_np = rng.standard_normal((1, n_g)).astype(np_dt)
+                w_np = np.eye(n_g, dtype=np_dt)
+                g_x = jt.array(g_in_np)
+                g_w = jt.array(w_np)
+                jt.sync([g_x, g_w], True)
+                lin = jt.nn.matmul_transpose(g_x, g_w)
+                g_out = jt.nn.gelu(lin)
+                g_out.sync(True)
+                assert g_out.location() == 'device'
+                xf = g_in_np.astype(np.float32)
+                import math as _m
+                ref_g = (0.5 * xf * (1.0 + np.vectorize(_m.erf)(xf * 0.7071067811865476))).astype(np_dt)
+                np.testing.assert_allclose(g_out.numpy().astype(np.float32), ref_g.astype(np.float32), rtol=1e-2 if dt_name == "float16" else 1e-5, atol=1e-2 if dt_name == "float16" else 1e-5)
     nan_a = jt.array(np.array([1.0, np.nan, -2.0], dtype=np.float32))
     nan_b = jt.array(np.array([2.0, 3.0, np.nan], dtype=np.float32))
     jt.sync_all(True)

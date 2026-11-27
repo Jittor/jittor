@@ -54,7 +54,7 @@ struct NvrtcScalarArrayBinding {
 struct NvrtcKernelPlan {
     int rank = 0;
     bool any_strided = false;
-    bool use_vec4 = false;
+    int vec_width = 1;
     uint32_t union_stride_mask = 0;
     std::vector<NvrtcInputBinding> inputs;
     std::vector<NvrtcOutputBinding> outputs;
