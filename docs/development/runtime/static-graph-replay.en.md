@@ -57,6 +57,12 @@ the restored budget as well. Exceeding the budget only refuses device recording;
 the executor and its memory-reclamation mechanism remains available, and calls that leave
 `no_grad` keep building an ordinary differentiable forward.
 
+Replay reconstructs returned containers around fresh tensor results. In addition to standard
+containers, it accepts plain Python objects whose state is entirely in their attribute dictionary,
+and nodes registered with the active Torch pytree registry. A registration must express every
+tensor as a child and keep context independent of tensor values. Flattening and rebuilding must
+be pure structural operations. Cyclic outputs and objects with opaque state require eager execution.
+
 ## Guards: when a capture is invalidated, and when it is forbidden outright
 
 A captured graph is **a snapshot of one set of shapes, one set of parameters and one Python

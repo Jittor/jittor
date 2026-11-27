@@ -658,6 +658,8 @@ class GraphedModule(_Module):
         readbacks = _core._host_readback_count()
         records = []
         raw_out = None
+        fwd_outputs = []
+        template = None
         _step_capture._ACTIVE = cap
         _graph_replay._TRACING[0] += 1
         _enter_capture_depth()
@@ -668,6 +670,10 @@ class GraphedModule(_Module):
         try:
             with _capture_barriers() as barriers, _no_auto():
                 raw_out = self._wrapped_module(*static_args, **static_kwargs)
+                try:
+                    template = _output_template(raw_out, fwd_outputs, {}, _object_ids((args, kwargs)))
+                except _Unreplayable as exc:
+                    cap.refused = cap.refused or str(exc)
                 if barriers:
                     cap.refused = cap.refused or (
                         "the module contains an opaque operation: " + barriers[0]
@@ -704,13 +710,6 @@ class GraphedModule(_Module):
                 "the module read a value back to the host, so its path depends "
                 "on tensor values and cannot be graphed"
             )
-
-        fwd_outputs = []
-        template = None
-        try:
-            template = _output_template(raw_out, fwd_outputs, {}, _object_ids((args, kwargs)))
-        except _Unreplayable as exc:
-            cap.refused = cap.refused or str(exc)
 
         if cap.refused is None and not fwd_outputs:
             cap.refused = "the module returned no Var"

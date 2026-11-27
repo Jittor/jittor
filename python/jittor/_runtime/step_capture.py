@@ -32,7 +32,7 @@ step is captured:
 
 What cannot be seen is refused rather than replayed wrongly: a step that reads
 a value back to the host (its Python path then depends on tensor values), or
-a result that is not Vars in plain containers. Explicit CUDA captures use a
+a result that replay cannot reconstruct. Explicit CUDA captures use a
 live Philox seed/counter for supported random draws, including dropout; draws
 stay fresh but need not match the eager RNG stream. Exact automatic captures
 refuse random draws instead.
@@ -749,10 +749,16 @@ class StepCapture:
         if rank_before > 4:
             jt.flags.auto_compile_shapes_rank = 4
         records = []
+        outputs = []
+        template = None
         readbacks = _core._host_readback_count()
         try:
             with _capture_barriers() as barriers, _no_auto():
                 result = self._fn(*private_args, **private_kwargs)
+                try:
+                    template = _output_template(result, outputs, {}, _object_ids((args, kwargs)))
+                except _Unreplayable as exc:
+                    cap.refused = cap.refused or str(exc)
                 if barriers:
                     cap.refused = cap.refused or (
                         "the step contains an opaque operation: " + barriers[0])
@@ -770,12 +776,6 @@ class StepCapture:
                 "the step read a value back to the host, so its path depends on "
                 "tensor values and cannot be replayed")
 
-        outputs = []
-        try:
-            template = _output_template(result, outputs, {}, _object_ids((args, kwargs)))
-        except _Unreplayable as exc:
-            template = None
-            cap.refused = cap.refused or str(exc)
         # Dense inside the graph, since every replay copies these as raw bytes
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]

@@ -51,10 +51,10 @@ Typical use::
 
 Arguments may be positional or keyword, and plain tuples, lists and dicts of
 Vars; anything else is matched by identity and treated as a constant of the
-capture. The result may be a Var or any nesting of tuples, lists, named
-tuples, dicts and dataclasses of them -- `ModelOutput` and diffusers' output
-classes included -- and comes back as that same structure around fresh Vars
-of the module's own tensor type. Under the torch frontend,
+capture. The result may nest Vars in tuples, lists, named tuples, dicts,
+dataclasses, registered pytree nodes and plain Python state containers. It
+comes back as that same structure around fresh Vars of the module's own
+tensor type. Under the torch frontend,
 `torch.compile(model, mode="reduce-overhead")` wraps a module in this.
 
 What it is worth, on the one shape that measured reproducibly here -- a
@@ -103,8 +103,10 @@ speedup is worse than none.
 from contextlib import contextmanager, nullcontext as _nullcontext
 import copy as _copy
 import dataclasses as _dataclasses
+import sys
 import threading
 import time
+from types import GetSetDescriptorType
 import weakref
 
 import jittor as jt
@@ -228,7 +230,25 @@ def _map_inputs(value, fn):
     return value
 
 
-def _output_template(value, leaves, index, passthrough=()):
+def _plain_output_state(value):
+    """State of a Python value object with ordinary allocation and copying."""
+    cls = type(value)
+    if any(getattr(cls, name, None) is not getattr(object, name, None) for name in (
+        "__new__", "__getattribute__", "__setattr__", "__getstate__", "__setstate__",
+        "__reduce__", "__reduce_ex__", "__copy__", "__del__",
+    )):
+        return None
+    hierarchy = cls.__mro__
+    if any(base.__dict__.get("__slots__") for base in hierarchy):
+        return None
+    descriptor = next((base.__dict__["__dict__"] for base in hierarchy
+                       if "__dict__" in base.__dict__), None)
+    if isinstance(descriptor, GetSetDescriptorType):
+        return descriptor.__get__(value, cls) or None
+    return None
+
+
+def _output_template(value, leaves, index, passthrough=(), active=None):
     """Describe `value` as a tree over `leaves`, the distinct Vars it holds.
 
     What a module returns is rarely a lone Var: `nn.LSTM` returns a tuple, a
@@ -249,20 +269,43 @@ def _output_template(value, leaves, index, passthrough=()):
         return ("var", i)
     if value is None or isinstance(value, (bool, int, float, str)):
         return ("const", value)
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        raise _Unreplayable("the module returned a cyclic result, which replay cannot rebuild")
+    active.add(identity)
+    try:
+        return _output_container(value, leaves, index, passthrough, active)
+    finally:
+        active.remove(identity)
+
+
+def _output_container(value, leaves, index, passthrough, active):
+    def visit(child):
+        return _output_template(child, leaves, index, passthrough, active)
+
     if type(value) in (tuple, list):
-        return ("seq", type(value), [_output_template(v, leaves, index, passthrough) for v in value])
+        return ("seq", type(value), [visit(child) for child in value])
     if isinstance(value, tuple) and hasattr(type(value), "_fields"):
-        return ("namedtuple", type(value),
-                [_output_template(v, leaves, index, passthrough) for v in value])
+        return ("namedtuple", type(value), [visit(child) for child in value])
     if isinstance(value, dict):
-        return ("dict", value,
-                [(k, _output_template(v, leaves, index, passthrough)) for k, v in value.items()])
+        return ("dict", value, [(key, visit(child)) for key, child in value.items()])
     if _dataclasses.is_dataclass(value) and not isinstance(value, type):
         return ("dataclass", value,
-                [(f.name, _output_template(getattr(value, f.name), leaves, index, passthrough))
-                 for f in _dataclasses.fields(value)])
+                [(field.name, visit(getattr(value, field.name))) for field in _dataclasses.fields(value)])
     if id(value) in passthrough:
         return ("const", value)
+    pytree = sys.modules.get("torch.utils._pytree")
+    node = getattr(pytree, "SUPPORTED_NODES", {}).get(type(value))
+    if node is not None:
+        children, context = node.flatten_fn(value)
+        return ("pytree", node.unflatten_fn, context, [visit(child) for child in children])
+    torch = sys.modules.get("torch")
+    if isinstance(value, type) or type(value) is getattr(torch, "dtype", None):
+        return ("const", value)
+    state = _plain_output_state(value)
+    if state is not None:
+        return ("state", type(value), [(name, visit(child)) for name, child in state.items()])
     raise _Unreplayable(f"the module returned a {type(value).__name__}, which "
                         "replay cannot rebuild")
 
@@ -290,6 +333,12 @@ def _rebuild(template, values):
         return template[1](_rebuild(t, values) for t in template[2])
     if kind == "namedtuple":
         return template[1](*[_rebuild(t, values) for t in template[2]])
+    if kind == "pytree":
+        return template[1]([_rebuild(child, values) for child in template[3]], template[2])
+    if kind == "state":
+        result = object.__new__(template[1])
+        vars(result).update((name, _rebuild(child, values)) for name, child in template[2])
+        return result
     if kind == "dict":
         if type(template[1]) is dict:
             return {k: _rebuild(t, values) for k, t in template[2]}
@@ -599,6 +648,9 @@ class GraphReplay:
                                                 _object_ids((args, kwargs)))
                 except _Unreplayable as exc:
                     self._refused = str(exc)
+                    return None
+                if _core._host_readback_count() != readbacks or barriers:
+                    self._refused = "output flattening must not read tensors or execute opaque operations"
                     return None
                 if not outputs:
                     self._refused = "the module returned no Var"
