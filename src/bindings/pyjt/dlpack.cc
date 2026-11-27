@@ -349,6 +349,8 @@ static ResolvedExport resolve_export(VarHolder* v, bool force_copy, ExportStream
     if (stream.mode == ExportStream::Wait)
         order_consumer_stream(var_to_backend_device(var), stream.handle);
 
+    if (!force_copy)
+        var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
     auto* ctx = new JittorDLManagerCtx(var);
     ctx->shape.reserve(var->shape.size());
     for (int i = 0; i < var->shape.size(); i++)

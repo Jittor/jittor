@@ -23,6 +23,7 @@
 #include "core/graph.h"
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
+#include "mem/allocator/foreign_allocator.h"
 #include "ops/op_register.h"
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
@@ -80,6 +81,7 @@ PyObject* new_var_data_owner(VarHolder* vh) {
         Py_DECREF(owner->holder);
         return nullptr;
     }
+    var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
     owner.release();
     return capsule;
 }
@@ -272,6 +274,7 @@ VarHolder* VarHolder::migrate_to_cpu_() {
 // first time.
 static int64 host_readbacks = 0;
 int64 host_readback_count() { return host_readbacks; }
+int64 step_scalar_epoch() { return total_node.load(std::memory_order_relaxed); }
 
 int first_finished(const vector<VarHolder*>& vars) {
     for (int i = 0; i < (int)vars.size(); i++)
@@ -2407,6 +2410,69 @@ inline static void cast_item_data(ItemData& data) {
 
 ItemData VarHolder::item() {
     note_readback();
+    return read_item(true);
+}
+
+vector<uint64> VarHolder::step_guarded_storage_version() {
+    if (!var->is_finished() || !var->mem_ptr || !var->allocator
+            || dynamic_cast<ForeignAllocator*>(var->allocator)) return {};
+    auto token = var->storage_version_token();
+    if (token->externally_visible.load(std::memory_order_relaxed)) return {};
+    return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
+}
+
+PyObject* VarHolder::step_guarded_scalar(int64 epoch) {
+    if (!no_grad || !state_capture || capture_saw_readback || keep_graph != 2
+            || var->num != 1 || !(var->dtype().is_int() || var->dtype().is_bool())) Py_RETURN_NONE;
+
+    ExecutorEntryScope entry;
+    std::unordered_set<Var*> seen;
+    vector<Var*> stack{var};
+    PyObjHolder guards(PyList_New(0));
+    if (!guards.obj) return nullptr;
+    while (!stack.empty()) {
+        auto* value = stack.back();
+        stack.pop_back();
+        if (!seen.insert(value).second) continue;
+        if (seen.size() > 64 || value->num < 0 || value->num > 4096) Py_RETURN_NONE;
+        if (value->id <= epoch) {
+            if (!value->is_finished() || !value->mem_ptr) Py_RETURN_NONE;
+            auto* owner = value->holder;
+            if (!owner || owner->var != value || !owner->python_owner) {
+                owner = nullptr;
+                for (auto* candidate : runtime_holder_state().holders())
+                    if (candidate->var == value && candidate->python_owner) {
+                        owner = candidate;
+                        break;
+                    }
+                if (!owner) Py_RETURN_NONE;
+            }
+            auto version = owner->step_guarded_storage_version();
+            if (version.empty()) Py_RETURN_NONE;
+            PyObjHolder version_obj(to_py_object(std::move(version)));
+            if (!version_obj.obj) return nullptr;
+            PyObjHolder guard(PyTuple_Pack(2, owner->python_owner, version_obj.obj));
+            if (!guard.obj || PyList_Append(guards.obj, guard.obj) < 0) return nullptr;
+            continue;
+        }
+        auto* op = value->input();
+        if (!op || value->is_finished() || op->flag(OpFlags::_manual_device)) Py_RETURN_NONE;
+        static const std::unordered_set<string> pure_scalar_ops{
+            "unary", "binary", "ternary", "broadcast_to", "reshape",
+        };
+        const bool scalar_literal = value->flag(VarFlags::_python_number)
+            && op->is_op(op_ids::array());
+        if (!scalar_literal && !op->is_storage_view() && !pure_scalar_ops.count(op->name()))
+            Py_RETURN_NONE;
+        for (auto* input : op->inputs()) stack.push_back(input);
+    }
+    if (!PyList_GET_SIZE(guards.obj)) Py_RETURN_NONE;
+    PyObjHolder scalar(to_py_object(read_item(false)));
+    if (!scalar.obj) return nullptr;
+    return PyTuple_Pack(2, scalar.obj, guards.obj);
+}
+
+ItemData VarHolder::read_item(bool migrate) {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
@@ -2437,7 +2503,7 @@ ItemData VarHolder::item() {
             // A var of its own still moves: that is the element alone, and every
             // later read of it is then a host copy rather than a readback.
             bool in_place = var->share_next && var->mem_ptr && var->allocator->is_cuda();
-            if (save_mem || (_HAS_ACCELERATOR && !in_place))
+            if (migrate && (save_mem || (_HAS_ACCELERATOR && !in_place)))
                 migrate_to_cpu(var, runtime_executor().allocator);
         }
         #ifdef HAS_ACCELERATOR

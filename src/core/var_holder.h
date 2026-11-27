@@ -649,6 +649,9 @@ public:
         return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
     }
 
+    // @pyjt(_step_guarded_storage_version)
+    vector<uint64> step_guarded_storage_version();
+
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 
@@ -732,6 +735,10 @@ public:
      */
     // @pyjt(item)
     ItemData item();
+    ItemData read_item(bool migrate);
+
+    // @pyjt(_step_guarded_scalar)
+    PyObject* step_guarded_scalar(int64 epoch);
 
     /**
      * return the number of dimensions.
@@ -1081,6 +1088,8 @@ public:
  */
 // @pyjt(_host_readback_count)
 int64 host_readback_count();
+// @pyjt(_step_scalar_epoch)
+int64 step_scalar_epoch();
 // An implicit dynamic-shape read can make a trace ineligible before the
 // optimizer runs, just as an explicit value read does.
 // @pyjt(_state_capture_active)

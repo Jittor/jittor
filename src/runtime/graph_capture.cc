@@ -169,8 +169,9 @@ bool collect_dynamic_prefix(Var* root, HostPrefix& prefix,
         }
         Op* op = value->input();
         if (value->is_finished() || !op) continue;
+        const bool storage_view = op->is_storage_view();
         if (!op->executes_on_accelerator() || op->flag(OpFlags::_manual_device)
-                || op->flag(OpFlags::_has_gopt) || !host_prefix_builtin(op)
+                || (op->flag(OpFlags::_has_gopt) && !storage_view) || !host_prefix_builtin(op)
                 || string(op->name()) == "setitem") {
             LOGvv << "Dynamic-prefix operator declined" << op->name()
                   << "accelerator" << op->executes_on_accelerator()

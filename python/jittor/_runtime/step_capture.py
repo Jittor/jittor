@@ -133,6 +133,21 @@ def active():
     return _ACTIVE is not None
 
 
+def guarded_scalar(value):
+    """Read a shape scalar from small pure expressions over pre-trace leaves."""
+    cap = _ACTIVE
+    if cap is None or cap.scalar_epoch is None:
+        return None
+    result = value._step_guarded_scalar(cap.scalar_epoch)
+    if result is None:
+        return None
+    scalar, guards = result
+    for source, version in guards:
+        cap.scalar_guards.setdefault(id(source), (source, version))
+    cap.used_guarded_scalar = True
+    return scalar
+
+
 def tracing():
     """Whether the code running now is being traced for a replay.
 
@@ -516,7 +531,8 @@ class _Capture:
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
                  "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
-                 "shape_dependencies", "folded_leaves")
+                 "shape_dependencies", "folded_leaves", "scalar_epoch", "scalar_guards",
+                 "used_guarded_scalar")
 
     def __init__(self):
         self.prologue = []
@@ -531,6 +547,9 @@ class _Capture:
         self.dynamic_prefix = None
         self.shape_dependencies = []
         self.folded_leaves = None
+        self.scalar_epoch = None
+        self.scalar_guards = {}
+        self.used_guarded_scalar = False
 
 
 def _finish_normally(roots):
@@ -722,6 +741,7 @@ class StepCapture:
         # Everything that exists now becomes a leaf of the graph: a replay
         # re-runs whatever is still pending, including a leaf's own producer.
         jt.sync_all()
+        scalar_epoch = _core._step_scalar_epoch() if jt.flags.no_grad else None
 
         def private_copy(value):
             copy = _empty_like(value)
@@ -731,6 +751,7 @@ class StepCapture:
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
         cap = _Capture()
+        cap.scalar_epoch = scalar_epoch
         cap.exact = self._exact_random
         working = _WorkingSet()
         before = jt.flags.keep_graph
@@ -806,6 +827,11 @@ class StepCapture:
         if cap.frozen_random and cap.exact and cap.refused is None:
             cap.refused = ("the call draws random numbers, which a replay would draw "
                            "again on every run")
+        if cap.used_guarded_scalar and cap.refused is None:
+            if (records or gradient_sources or cap.prologue or cap.frozen_random
+                    or any(source._step_guarded_storage_version() != version
+                           for source, version in cap.scalar_guards.values())):
+                cap.refused = "the step baked a scalar while updating captured state"
         if cap.refused is None:
             prefix = _core._step_shape_prefix_create(roots)
             if prefix < 0:
@@ -953,6 +979,9 @@ class StepCapture:
             for holder, ptr, ver in cap.folded_leaves:
                 if holder.var_ptr != ptr or holder._saved_storage_version() != ver:
                     return "a folded constant leaf was replaced or mutated"
+        if any(source._step_guarded_storage_version() != version
+               for source, version in cap.scalar_guards.values()):
+            return "a scalar dependency was replaced or mutated"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0

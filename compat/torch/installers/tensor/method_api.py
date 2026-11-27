@@ -1313,6 +1313,12 @@ def _var_item(self):
     item = native["_native_item"]
     if self.numel() != 1:
         return item(self)
+    if _owner.jt.flags.keep_graph == 2:
+        from jittor._runtime.step_capture import guarded_scalar
+
+        scalar = guarded_scalar(self)
+        if scalar is not None:
+            return scalar
     return item(native["_native_cpu_copy"](self))
 
 
