@@ -122,6 +122,30 @@ def test_read_of_foreign_storage_remains_dynamic():
         assert "read a value back to the host" in compiled.refused
 
 
+def test_eval_module_with_inplace_op_promotes_to_step_capture():
+    class InplaceEvalModule(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.register_buffer("scale", torch.tensor(2.0))
+
+        def forward(self, x):
+            y = x.clone()
+            y.sync()
+            y.add_(self.scale)
+            return y
+
+    module = InplaceEvalModule().eval()
+    compiled = torch.compile(module, mode="reduce-overhead")
+    with torch.no_grad():
+        for number in range(6):
+            out = compiled(torch.full((4,), float(number), device="cpu"))
+            np.testing.assert_allclose(out.numpy(), np.full((4,), float(number) + 2.0))
+    replay = compiled.__dict__["_replay"]
+    assert type(replay).__name__ == "StepCapture"
+    assert replay.refused is None
+    assert replay.stats["replayed"] >= 1
+
+
 @pytest.mark.cuda
 @pytest.mark.parametrize("record", [False, True])
 def test_unique_count_and_masked_pooling_guard_optimizer_replay(record):
