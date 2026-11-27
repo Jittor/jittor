@@ -30,8 +30,39 @@ def _silu_and_mul_cuda(x):
     gated_size = shape[-1] // 2
     output_shape = shape[:-1] + (gated_size,)
     cuda_src = cached_source(r"""
+    __global__ static void silu_and_mul_vec16(
+            const in0_type* __restrict__ x, out0_type* __restrict__ y,
+            int64_t total_vecs) {
+        constexpr int VEC = 16 / sizeof(in0_type);
+        constexpr int GATED_VECS = %(gated_size)d / VEC;
+        constexpr int INPUT_VECS = %(input_size)d / VEC;
+        const uint4* __restrict__ xv = reinterpret_cast<const uint4*>(x);
+        uint4* __restrict__ yv = reinterpret_cast<uint4*>(y);
+        int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+        int64_t stride = (int64_t)blockDim.x * gridDim.x;
+        for (; index < total_vecs; index += stride) {
+            int64_t row = index / GATED_VECS;
+            int col = (int)(index - row * GATED_VECS);
+            int64_t base = row * INPUT_VECS + col;
+            uint4 g_raw = xv[base];
+            uint4 v_raw = xv[base + GATED_VECS];
+            uint4 out_raw;
+            const in0_type* ge = reinterpret_cast<const in0_type*>(&g_raw);
+            const in0_type* ve = reinterpret_cast<const in0_type*>(&v_raw);
+            out0_type* oe = reinterpret_cast<out0_type*>(&out_raw);
+            #pragma unroll
+            for (int k = 0; k < VEC; ++k) {
+                float gate = static_cast<float>(ge[k]);
+                float value = static_cast<float>(ve[k]);
+                float activated = static_cast<float>(
+                    in0_type(gate / (1.0f + expf(-gate))));
+                oe[k] = out0_type(activated * value);
+            }
+            yv[index] = out_raw;
+        }
+    }
     __global__ static void silu_and_mul(
-            const in0_type* x, out0_type* y, int64_t total) {
+            const in0_type* __restrict__ x, out0_type* __restrict__ y, int64_t total) {
         int64_t index = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
         int64_t stride = (int64_t)blockDim.x * gridDim.x;
         for (; index < total; index += stride) {
@@ -50,9 +81,18 @@ def _silu_and_mul_cuda(x):
     }
     int64_t total = out0->num;
     int threads = 256;
-    int blocks = (int)((total + threads - 1) / threads);
-    if (blocks > 4096) blocks = 4096;
-    if (total) silu_and_mul<<<blocks, threads>>>(in0_p, out0_p, total);
+    constexpr int VEC = 16 / sizeof(in0_type);
+    if (total && VEC > 1 && (%(gated_size)d %% VEC == 0)
+            && ((((size_t)in0_p | (size_t)out0_p) & 15) == 0)) {
+        int64_t total_vecs = total / VEC;
+        int blocks = (int)((total_vecs + threads - 1) / threads);
+        if (blocks > 4096) blocks = 4096;
+        silu_and_mul_vec16<<<blocks, threads>>>(in0_p, out0_p, total_vecs);
+    } else if (total) {
+        int blocks = (int)((total + threads - 1) / threads);
+        if (blocks > 4096) blocks = 4096;
+        silu_and_mul<<<blocks, threads>>>(in0_p, out0_p, total);
+    }
     CHECK(0 == cudaGetLastError());
     """, {
         "gated_size": gated_size,

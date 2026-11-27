@@ -65,6 +65,57 @@ def test_silu_frozen_forward_and_differentiable_fallback():
 
 
 @pytest.mark.cuda
+@pytest.mark.parametrize("dtype", ["float32", "float16", "bfloat16"])
+@pytest.mark.parametrize("size", [256, 313, 7])
+def test_silu_vectorized_frozen_dtypes_and_tails(dtype, size):
+    require_accelerator("cuda")
+    raw = np.linspace(-6.0, 6.0, size, dtype="float32")
+    with jt.flag_scope(use_cuda=1, backend_fallback="error", amp_reg=0):
+        x = jt.array(raw).cast(dtype).stop_grad()
+        x.sync()
+        xf = x.float32().numpy().astype("float64")
+        expected = xf / (1.0 + np.exp(-xf))
+        out = jt.nn.silu(x)
+        out.sync()
+        assert out.location() == "device" and str(out.dtype) == dtype
+        tol = 1e-6 if dtype == "float32" else (5e-3 if dtype == "float16" else 2e-2)
+        np.testing.assert_allclose(out.float32().numpy(), expected, atol=tol, rtol=tol)
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("dtype", ["float32", "float16", "bfloat16"])
+@pytest.mark.parametrize("approximate", ["none", "tanh"])
+def test_gelu_training_vectorized_forward_and_backward(dtype, approximate):
+    require_accelerator("cuda")
+    import math as _m
+    raw = np.linspace(-3.5, 3.5, 313, dtype="float32")
+    dy_raw = np.linspace(-1.2, 1.4, 313, dtype="float32")
+    with jt.flag_scope(use_cuda=1, backend_fallback="error", amp_reg=0):
+        x = jt.array(raw).cast(dtype).start_grad()
+        dy = jt.array(dy_raw).cast(dtype)
+        jt.sync([x, dy])
+        xf = x.float32().numpy().astype("float64")
+        dyf = dy.float32().numpy().astype("float64")
+        y = jt.nn.gelu(x, approximate=approximate)
+        gx = jt.grad((y * dy).sum(), x)
+        jt.sync([y, gx])
+        assert y.location() == "device" and str(y.dtype) == dtype
+        assert gx.location() == "device" and str(gx.dtype) == dtype
+        if approximate == "none":
+            erf_v = np.vectorize(_m.erf)(xf * 0.7071067811865476)
+            ref_y = 0.5 * xf * (1.0 + erf_v)
+            ref_gx = dyf * (0.5 * (1.0 + erf_v) + xf * 0.3989422804014327 * np.exp(-0.5 * xf * xf))
+        else:
+            c = 0.7978845608028654
+            t = np.tanh(c * (xf + 0.044715 * xf**3))
+            ref_y = 0.5 * xf * (1.0 + t)
+            ref_gx = dyf * (0.5 * (1.0 + t) + 0.5 * xf * (1.0 - t * t) * c * (1.0 + 0.134145 * xf * xf))
+        tol = 2e-5 if dtype == "float32" else (1e-2 if dtype == "float16" else 4e-2)
+        np.testing.assert_allclose(y.float32().numpy(), ref_y, atol=tol, rtol=tol)
+        np.testing.assert_allclose(gx.float32().numpy(), ref_gx, atol=tol, rtol=tol)
+
+
+@pytest.mark.cuda
 def test_frozen_depthwise_selection_keeps_full_precision():
     require_accelerator("cuda")
     from jittor._runtime.dispatch import select_kernel
