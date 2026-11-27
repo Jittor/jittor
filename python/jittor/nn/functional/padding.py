@@ -3,8 +3,10 @@
 import operator
 
 from jittor._core.dtypes import dtype_name
+from jittor._runtime.dispatch import dispatch_context
 
 from ..backends import hooks as _backend_hooks
+from ._layout import channels_last_source, channels_last_view
 
 
 
@@ -103,11 +105,20 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
             if result is not None:
                 return result
 
-    from jittor._runtime.dispatch import dispatch_context
-    if mode in ("constant", "replicate") and dispatch_context(x).backend == "acl":
+    backend = dispatch_context(x).backend if mode in ("constant", "replicate") else None
+    if backend == "acl":
         result = _concat_pad(x, left, right, mode, value)
         if result is not None:
             return result
+
+    # Spatial padding can run in storage order, keeping the channel axis
+    # contiguous for the next convolution.
+    source = (channels_last_source(x)
+              if backend == "cuda" and mode == "constant" and len(padding) <= 4 else None)
+    if source is not None:
+        x = source
+        left = [left[i] for i in (0, 2, 3, 1)]
+        right = [right[i] for i in (0, 2, 3, 1)]
 
     out_dims = []
     out_shape = []
@@ -143,7 +154,8 @@ def pad(x, padding=None, mode="constant", value=0, pad=None):
                 )
             )
 
-    return x.reindex(out_shape, out_dims, overflow_value=float(value))
+    result = x.reindex(out_shape, out_dims, overflow_value=float(value))
+    return channels_last_view(result) if source is not None else result
 
 
 __all__ = ["pad"]

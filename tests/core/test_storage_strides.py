@@ -101,6 +101,17 @@ def test_positive_step_slice_has_storage_offset_and_strides():
     np.testing.assert_array_equal((v*2).numpy(), [2, 6, 10, 14])
 
 
+def test_materialized_channels_last_layout_with_singleton_batch():
+    values = np.arange(1 * 5 * 7 * 8, dtype=np.float32).reshape(1, 5, 7, 8)
+    with jt.no_grad(), jt.flag_scope(propagate_storage_layout=1):
+        x = jt.array(values)._storage_permute((0, 3, 1, 2))
+        x.sync()
+        assert x.is_finished
+        y = (x + 1).float16()
+        assert tuple(y._storage_strides()) == (280, 1, 56, 8)
+        np.testing.assert_array_equal(y.numpy(), (values + 1).transpose(0, 3, 1, 2))
+
+
 @pytest.mark.parametrize("extent, first, last", (
     (16, 0, 16), (12, 0, 12), (6, 0, 6), (7, 0, 6), (16, 2, 6), (16, 1, 9),
 ))

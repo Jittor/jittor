@@ -102,11 +102,11 @@ static bool permuted_source(Var* v, NanoVector& axes, VarPtr& source) {
     }
     if (v->is_contiguous()) return false;
     // Order the axes outermost-first by stride; the storage is dense in that
-    // order when each stride is the product of the extents inside it. A
-    // unit extent has no meaningful stride, so its position is ambiguous.
+    // order when each stride is the product of the extents inside it.
+    // Singleton axes can have any stride without changing that check.
     vector<int> order(n);
     for (uint i=0; i<n; i++) {
-        if (v->shape[i] <= 1) return false;
+        if (v->shape[i] <= 0) return false;
         order[i] = i;
     }
     std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
@@ -114,7 +114,8 @@ static bool permuted_source(Var* v, NanoVector& axes, VarPtr& source) {
     });
     int64 expect = 1;
     for (int k=(int)n-1; k>=0; k--) {
-        if (v->storage_stride(order[k]) != expect) return false;
+        if (v->shape[order[k]] > 1 && v->storage_stride(order[k]) != expect)
+            return false;
         expect *= v->shape[order[k]];
     }
     NanoVector to_source;

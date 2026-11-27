@@ -399,6 +399,16 @@ def prelu(x, weight):
     return jt.maximum(0, x) + w * jt.minimum(0, x)
 
 
+def _hard_activation_low_precision(x, swish):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+        wide = x.float32()
+        # Scalar min/max keep the storage order and can fuse with neighbors.
+        # The right operand receives the gradient on ties, as in clamp.
+        clipped = jt.minimum(6, jt.maximum(0, wide + 3))
+        result = (wide * clipped if swish else clipped) * (1.0 / 6.0)
+        return result.cast(x.dtype)
+
+
 def hardswish(x):
     ''' Applies the element-wise Hardswish function:
 
@@ -409,6 +419,8 @@ def hardswish(x):
         x \\cdot (x + 3) / 6, & \\text{otherwise}
         \\end{cases}
     '''
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return _hard_activation_low_precision(x, swish=True)
     return x * jt.clamp(x + 3, min_v=0, max_v=6) / 6
 
 
@@ -422,6 +434,8 @@ def hardsigmoid(x):
         x / 6 + 1/2, & \\text{otherwise}
         \\end{cases}
     '''
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return _hard_activation_low_precision(x, swish=False)
     return jt.clamp(x / 6 + 0.5, min_v=0.0, max_v=1.0)
 
 

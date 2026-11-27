@@ -1,13 +1,21 @@
 """Single-rounding vectorized CUDA SiLU forward for gradient-free dense inputs."""
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name
 from jittor._runtime.core_api import _output_requires_grad
 from jittor._runtime.dispatch import optional_kernel
 
 
 def _supports_silu_no_grad(x, inplace=False):
-    return (not _output_requires_grad(x) and int(x.numel()) > 0
-            and x._storage_is_contiguous())
+    if _output_requires_grad(x) or not x._storage_is_contiguous():
+        return False
+    size = int(x.numel())
+    if dtype_name(x.dtype) == "float32":
+        return size > 0
+    # The elementwise implementation can vectorize low-precision I/O and
+    # fuse with adjacent ops. Use a separate launch for a materialized input
+    # with at least one full block of eight-element vectors.
+    return x.is_finished and size >= 256 * 8
 
 
 _SILU_CUDA_SRC = r'''

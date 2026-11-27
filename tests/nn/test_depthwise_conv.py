@@ -18,6 +18,32 @@ import numpy as np
 import jittor.models as jtmodels
 
 
+@pytest.mark.cuda
+@pytest.mark.parametrize("channels,kernel,stride,dilation,dtype", [
+    (16, 3, (2, 2), (1, 1), "float16"),
+    (17, 5, (1, 2), (2, 1), "bfloat16"),
+])
+def test_asymmetric_padding_preserves_channels_last_depthwise(
+        channels, kernel, stride, dilation, dtype):
+    _test_capability.require_accelerator("cuda")
+    rng = np.random.default_rng(197)
+    features = rng.integers(-8, 9, (2, 13, 11, channels)).astype(np.float32) / 8
+    filters = rng.integers(-8, 9, (channels, 1, kernel, kernel)).astype(np.float32) / 8
+    padded = np.pad(features.transpose(0, 3, 1, 2), ((0, 0), (0, 0), (0, 2), (1, 0)))
+    expected = TestDepthwiseConvCPU._reference(padded, filters, stride, (1, 0), dilation)
+    with jt.flag_scope(use_cuda=1, backend_fallback="error", amp_reg=0), jt.no_grad():
+        x = jt.array(features).cast(dtype)._storage_permute((0, 3, 1, 2))
+        weight = jt.array(filters).cast(dtype)
+        x = jt.nn.pad(x, (1, 0, 0, 2))
+        y = jt.nn.conv2d(x, weight, stride=stride, padding=(1, 0),
+                         dilation=dilation, groups=channels)
+        assert x._storage_strides()[1] == y._storage_strides()[1] == 1
+        y.sync()
+        assert y.location() == "device" and str(y.dtype) == dtype
+        rounded = jt.array(expected).cast(dtype).float32().numpy()
+        np.testing.assert_array_equal(y.float32().numpy(), rounded)
+
+
 class TestDepthwiseConvCPU(unittest.TestCase):
     @staticmethod
     def _reference(x, weight, stride, padding, dilation):
