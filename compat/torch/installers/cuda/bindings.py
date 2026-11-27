@@ -164,10 +164,8 @@ def _install_cuda(g, registry=None):
     cuda.device_of = _CudaDeviceOf
     cuda.is_initialized = _api_cuda_is_initialized
     cuda._is_in_bad_fork = _api_cuda__is_in_bad_fork
-    # Match PyTorch's empty_cache() as a memory hint instead of a forced
-    # synchronization point. TRELLIS calls it inside the inference path before
-    # decode; running jt.gc() there costs several seconds. Users that need
-    # explicit release can opt in with JITTOR_TORCH_CUDA_EMPTY_CACHE=gc or sync.
+    # Release unused allocator blocks by default; explicit no-op/sync modes
+    # remain available without hiding collection or synchronization failures.
 
     cuda.empty_cache = _empty_cache
     cuda.synchronize = _api_cuda_synchronize

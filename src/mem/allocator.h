@@ -126,6 +126,11 @@ Allocator* get_regular_allocator(Device device, bool temp_allocator);
 // @pyjt(gc)
 void gc_all();
 
+// Release only unused accelerator pool blocks on the specified real device.
+// Live allocations and graph-capture-held storage remain owned by their pools.
+// @pyjt(gc_device_cache)
+void gc_device_cache(int device);
+
 void migrate_to_cpu(Var* var, Allocator* allocator);
 void migrate_to_gpu(Var* var, Allocator* allocator);
 
