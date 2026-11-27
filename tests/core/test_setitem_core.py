@@ -385,6 +385,28 @@ class TestScatterAddReduce(_SetitemCore):
     """reduce='add' has a real kernel backward (linear): gx=ones, gsrc=ones, and it is
     correct even with DUPLICATE indices (every contribution is independent)."""
 
+    def test_getitem_backward_repeated_rows_and_second_derivative(self):
+        values = np.arange(30, dtype=np.float32).reshape(10, 3) / 4
+        indices = np.array([0, 4, 4, -1], dtype=np.int64)
+        expected = np.zeros_like(values)
+        counts = np.zeros_like(values)
+        np.add.at(expected, indices, 2 * values[indices])
+        np.add.at(counts, indices, 2)
+
+        def body(device):
+            base = self._f32(values)
+            gathered = base[self._i64(indices)]
+            gradient = jt.grad((gathered * gathered).sum(), base, retain_graph=True)
+            second = jt.grad(gradient.sum(), base)
+            if device == 'cuda':
+                jt.sync([gradient, second])
+                self.assertEqual(gradient.location(), 'device')
+                self.assertEqual(second.location(), 'device')
+            self.assertEqual(gradient, expected)
+            self.assertEqual(second, counts)
+
+        self._for_devices(body)
+
     def test_scatter_add_dim1_backward(self):
         # x.scatter_add(1, idx, src) -- distinct columns, dim 1.
         base = np.zeros((2, 3), dtype="float32")

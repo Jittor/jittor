@@ -603,9 +603,17 @@ static std::string emit_binary_expr(
                 "_jt_signed_pow_f32(" + emit_as_float(x, tx) + ", " + emit_as_float(y, ty) + ")", tz);
         }
         // Match common_op_type_cuda_map: jittor::_signed_pow(double, double) cast to tz
-        std::string d = "_jt_signed_pow_f64(" + emit_as_double(x, tx) + ", " + emit_as_double(y, ty) + ")";
-        if (tz == NvrtcDType::F64) return d;
-        return "((" + std::string(storage_ctype(tz)) + ")(" + d + "))";
+        const std::string base = emit_as_double(x, tx);
+        const std::string exponent = emit_as_double(y, ty);
+        const std::string power = "_jt_signed_pow_f64(" + base + ", " + exponent + ")";
+        if (tz == NvrtcDType::F32 && tx == NvrtcDType::F32) {
+            const std::string f32 = emit_as_float(x, tx);
+            return "((" + exponent + " == 2.0) ? __fmul_rn(" + f32 + ", " + f32
+                + ") : (float)((" + exponent + " == 3.0) ? " + base + " * " + base
+                + " * " + base + " : " + power + "))";
+        }
+        if (tz == NvrtcDType::F64) return power;
+        return "((" + std::string(storage_ctype(tz)) + ")(" + power + "))";
     }
 
     if (op == ns_floor_divide) {

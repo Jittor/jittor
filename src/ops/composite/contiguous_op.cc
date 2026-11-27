@@ -87,6 +87,7 @@ namespace {
 struct ContiguousCopy {
     index_t shape[DIM];
     index_t stride[DIM];
+    uint32 reciprocal[DIM];
     index_t vectors;
 };
 
@@ -99,8 +100,21 @@ __global__ void packed_contiguous(const Tx* __restrict__ input,
         index_t index = vector, offset = 0;
         #pragma unroll
         for (int axis = DIM-1; axis > 0; --axis) {
-            offset += (index % copy.shape[axis]) * copy.stride[axis];
-            index /= copy.shape[axis];
+            if constexpr (sizeof(index_t) == sizeof(uint32)) {
+                const uint32 extent = copy.shape[axis];
+                const uint32 position = index;
+                uint32 quotient = extent == 1 ? position : __umulhi(position, copy.reciprocal[axis]);
+                uint32 remainder = position - quotient * extent;
+                if (remainder >= extent) {
+                    ++quotient;
+                    remainder -= extent;
+                }
+                offset += index_t(remainder) * copy.stride[axis];
+                index = index_t(quotient);
+            } else {
+                offset += (index % copy.shape[axis]) * copy.stride[axis];
+                index /= copy.shape[axis];
+            }
         }
         offset += index * copy.stride[0];
         const Tx* src = input + offset;
@@ -117,7 +131,7 @@ __global__ void packed_contiguous(const Tx* __restrict__ input,
 void launch_packed_contiguous(Var* x, Var* y) {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
-    ContiguousCopy copy;
+    ContiguousCopy copy{};
     copy.vectors = y->num / COPY_WIDTH;
     if (!copy.vectors) return;
     for (int axis = 0; axis < DIM; ++axis) {
@@ -126,6 +140,11 @@ void launch_packed_contiguous(Var* x, Var* y) {
     }
     copy.shape[DIM-1] /= COPY_WIDTH;
     copy.stride[DIM-1] = COPY_WIDTH;
+    if constexpr (sizeof(index_t) == sizeof(uint32)) {
+        for (int axis = 1; axis < DIM; ++axis)
+            copy.reciprocal[axis] = copy.shape[axis] == 1 ? 0
+                : (uint64(1) << 32) / copy.shape[axis];
+    }
     constexpr int threads = 256;
     const int blocks = std::min<index_t>((copy.vectors - 1) / threads + 1, 4096);
     // Foreign storage may publish a base pointer that is already offset.

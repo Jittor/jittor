@@ -1159,11 +1159,10 @@ class StepCapture:
                 self.stats["preserved"] = self.stats.get("preserved", 0) + 1
             if not dynamic_prefix:
                 # Dynamic replay has already staged the inputs for preflight.
-                staged = (jt.flags.no_grad and self._cuda_graph
-                          and not self._graph_has_host_prefix and not cap.prologue
-                          and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))
-                if not staged:
-                    with jt.no_grad():
+                with jt.no_grad():
+                    staged = (self._cuda_graph and not self._graph_has_host_prefix
+                              and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))
+                    if not staged:
                         for target, source in zip(cap.inputs, given):
                             target._copy_into(source)
             if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):

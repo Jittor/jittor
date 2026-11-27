@@ -4,6 +4,7 @@ import pytest
 import torch
 import torch.distributed as dist
 import jittor as jt
+from jittor.compat import collectives
 
 
 pytestmark = [pytest.mark.cuda, pytest.mark.skipif(
@@ -82,3 +83,19 @@ def test_shared_parameter_bucket_order_and_captured_updates():
         assert jt.core.backend_fallback_count() == before
     finally:
         runner.invalidate()
+
+
+@jt.flag_scope(backend_fallback='error')
+def test_bucket_reduction_keeps_aligned_gradient_views():
+    rank = dist.get_rank()
+    with torch.no_grad():
+        gradients = [torch.arange(size, dtype=torch.float32, device='cuda') + rank
+                     for size in (3, 4, 12, 5)]
+        before = jt.core.backend_fallback_count()
+        reduced = collectives._all_reduce_mean_bucketed(gradients, 48)
+        jt.sync(reduced, True, False)
+        assert reduced[1]._storage_offset() % 4 == 0
+        for original, value in zip(gradients, reduced, strict=True):
+            assert value.device.type == 'cuda'
+            np.testing.assert_array_equal(value.cpu().numpy(), np.arange(original.numel()) + .5)
+        assert jt.core.backend_fallback_count() == before

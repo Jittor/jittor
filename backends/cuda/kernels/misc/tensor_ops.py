@@ -15,6 +15,71 @@ register_kernel("tensor.topk", "cuda", wide_topk_cuda, supports=supports_wide_to
 _CUDA_CODE_BACKENDS = ("cuda", "rocm_legacy", "corex_legacy")
 
 
+_COLLECTIVE_PACK_HEADER = r'''
+struct PackSegment {
+    const float* source;
+    float* target;
+    int64_t length;
+    int64_t first_block;
+};
+
+struct PackLaunch {
+    PackSegment segments[pack_segment_count];
+};
+
+__global__ static void pack_flat_kernel(PackLaunch launch, int64_t block_count) {
+    constexpr int threads = 256;
+    constexpr int per_block = threads * 4;
+    int segment = 0;
+    for (int64_t block = blockIdx.x; block < block_count; block += gridDim.x) {
+        while (segment + 1 < pack_segment_count && launch.segments[segment + 1].first_block <= block)
+            ++segment;
+        const auto& item = launch.segments[segment];
+        const auto start = (block - item.first_block) * per_block;
+        const auto index = start + threadIdx.x * 4;
+        if ((reinterpret_cast<uintptr_t>(item.source) | reinterpret_cast<uintptr_t>(item.target)) % 16 == 0) {
+            if (index + 4 <= item.length)
+                reinterpret_cast<float4*>(item.target)[index / 4] =
+                    reinterpret_cast<const float4*>(item.source)[index / 4];
+            else
+                for (int lane = 0; lane < 4 && index + lane < item.length; ++lane)
+                    item.target[index + lane] = item.source[index + lane];
+        } else {
+            for (int lane = 0; lane < 4; ++lane) {
+                const auto element = start + threadIdx.x + lane * threads;
+                if (element < item.length) item.target[element] = item.source[element];
+            }
+        }
+    }
+}
+'''
+
+_COLLECTIVE_PACK_SOURCE = r'''
+PackLaunch launch;
+int64_t offset = 0, blocks = 0;
+@for(part, 0, IN_SIZE,
+    const int64_t count@part = in@part@@_shape0;
+    launch.segments[@part].source = in@part@@_p;
+    launch.segments[@part].target = out0_p + offset;
+    launch.segments[@part].length = count@part;
+    launch.segments[@part].first_block = blocks;
+    offset += count@part;
+    blocks += (count@part + 1023) / 1024;
+)
+if (blocks) pack_flat_kernel<<<std::min<int64_t>(blocks, 65535), 256>>>(launch, blocks);
+'''
+
+
+@optional_kernel("collective.pack_flat", "cuda", dtypes=("float32",),
+                 supports=lambda parts: 2 <= len(parts) <= 64 and
+                 not _output_requires_grad(parts) and
+                 all(part.ndim == 1 and part._storage_is_contiguous() for part in parts))
+def _pack_flat_collective_cuda(parts):
+    header = f"constexpr int pack_segment_count = {len(parts)};\n" + _COLLECTIVE_PACK_HEADER
+    return jt.code([sum(part.numel() for part in parts)], jt.float32, parts,
+                   cuda_header=header, cuda_src=_COLLECTIVE_PACK_SOURCE)
+
+
 @optional_kernel("misc.repeat_interleave_dim0", _CUDA_CODE_BACKENDS,
                  supports=lambda x, repeats, dim, output_size, cpu_source=None: (
                      isinstance(repeats, jt.Var) and dim == 0 and output_size is not None))

@@ -318,6 +318,21 @@ with jt.flag_scope(use_cuda=1, reuse_dying_inputs=2):
     ref_s = np.where(m_np, x2_np * 2.0 + b1_np, y2_np - b2_np) + np.power(x2_np, 3.0)
     np.testing.assert_allclose(s_out.numpy(), ref_s, rtol=1e-4, atol=1e-5)
 
+    base_np = np.array([-3.125, -0.0, 0.0, 0.25, 9.75], dtype=np.float32)
+    base = jt.array(base_np)
+    base.sync(True)
+    cubic = jt.pow(base, 3.0)
+    squared = jt.pow(base, 2.0)
+    gradient = jt.grad(cubic.sum(), base)
+    oracle = base_np.astype(np.float64)
+    for actual, expected in ((squared, oracle**2), (cubic, oracle**3),
+                             (gradient, 3 * oracle**2)):
+        actual.sync(True)
+        assert actual.location() == 'device'
+        values = actual.numpy()
+        np.testing.assert_array_equal(values, expected.astype(np.float32))
+        np.testing.assert_array_equal(np.signbit(values), np.signbit(expected))
+
     # Bool arithmetic must store strictly 0/1 bytes (never 2 for True + True)
     ba = (m + m2).numpy()
     bm = (m * m2).numpy()

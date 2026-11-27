@@ -489,6 +489,7 @@ _GEMMS_IO = {
 def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=False,
                  transposed_weight=False, forward_bias=False):
     candidates = 32 if capture_tuning else _CANDIDATES
+    unsplit_candidates = 8 if capture_tuning else 0
     workspace = (32 << 20) if capture_tuning else _WORKSPACE
     passes, repeats = (3, 10) if capture_tuning else (1, 3)
     ct, kt = _LT_TYPES[dtype]
@@ -552,10 +553,20 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
             pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
-        cublasLtMatmulHeuristicResult_t cand[{candidates}];
+        cublasLtMatmulHeuristicResult_t cand[{candidates + unsplit_candidates}];
         int found = 0;
         cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
                                        {candidates}, cand, &found);
+        if ({unsplit_candidates}) {{
+            const uint32_t scheme = CUBLASLT_REDUCTION_SCHEME_NONE;
+            int unsplit = 0;
+            if (cublasLtMatmulPreferenceSetAttribute(pref,
+                    CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &scheme, sizeof(scheme))
+                    == CUBLAS_STATUS_SUCCESS && cublasLtMatmulAlgoGetHeuristic(
+                    lt, op, la, lb, lc, lc, pref, {unsplit_candidates}, cand + found, &unsplit)
+                    == CUBLAS_STATUS_SUCCESS)
+                found += unsplit;
+        }}
         cudaEvent_t beg, end;
         cudaEventCreate(&beg); cudaEventCreate(&end);
         // Repeat the candidate sweep after the device and libraries warm up.
