@@ -562,10 +562,13 @@ def cuda_residency(torch, jt, tensor):
         tensor.sync()
         if tensor.location() != "device" or jt.core.dispatch_context([tensor])[0] != "cuda":
             raise RuntimeError("Jittor tensor failed the CUDA residency check")
+        address = tensor._mem_ptr_now
+    else:
+        address = tensor.data_ptr()
     driver = ctypes.CDLL("libcuda.so.1")
     ordinal = ctypes.c_int(-1)
     status = driver.cuPointerGetAttribute(
-        ctypes.byref(ordinal), CUDA_DEVICE_ORDINAL, ctypes.c_void_p(tensor.data_ptr()),
+        ctypes.byref(ordinal), CUDA_DEVICE_ORDINAL, ctypes.c_void_p(address),
     )
     if tensor.device.type != "cuda" or status != 0 or ordinal.value != torch.cuda.current_device():
         raise RuntimeError(f"Tensor has no allocation on the measured CUDA device ({status})")
