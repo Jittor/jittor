@@ -232,20 +232,24 @@ Verdict evaluate(const NativeRule& rule, PyObject* args, PyObject* kwargs) {
         PyObject* bias = PyTuple_GET_ITEM(args, 3);
         if (!PyTuple_Check(shape)) return unknown;
         Var* x = GET_RAW_PTR(VarHolder, PyTuple_GET_ITEM(args, 0))->var;
-        bool affine = is_var(weight) && is_var(bias);
-        if (!affine) return is_var(weight) || is_var(bias) ? declines : unknown;
+        bool has_weight = is_var(weight);
+        bool has_bias = is_var(bias);
+        if (!has_weight && !has_bias) return unknown;
+        if (!has_weight && has_bias) return declines;
         Var* w = GET_RAW_PTR(VarHolder, weight)->var;
-        Var* b = GET_RAW_PTR(VarHolder, bias)->var;
+        Var* b = has_bias ? GET_RAW_PTR(VarHolder, bias)->var : nullptr;
         // Grad mode is the Python side's to judge.
-        if (!no_grad && (requires_grad(x) || requires_grad(w) || requires_grad(b))) return unknown;
-        if (x->dtype() != ns_float16 && x->dtype() != ns_float32) return declines;
+        if (!no_grad && (requires_grad(x) || requires_grad(w) || (b && requires_grad(b))))
+            return unknown;
+        if (x->dtype() != ns_float16 && x->dtype() != ns_bfloat16 && x->dtype() != ns_float32)
+            return declines;
         if (PyTuple_GET_SIZE(shape) != 1) return declines;
         PyObject* size = PyTuple_GET_ITEM(shape, 0);
         if (!PyLong_CheckExact(size) || !x->shape.size()) return unknown;
         int64 hidden = PyLong_AsLongLong(size);
         if (PyErr_Occurred()) { PyErr_Clear(); return unknown; }
         if (x->shape[x->shape.size() - 1] != hidden) return declines;
-        if (w->num != hidden || b->num != hidden) return declines;
+        if (w->num != hidden || (b && b->num != hidden)) return declines;
         return accepts;
     }
     if (rule.kind != NativeRule::rms_inference) return unknown;

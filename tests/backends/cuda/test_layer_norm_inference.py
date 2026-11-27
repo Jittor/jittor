@@ -80,6 +80,29 @@ class TestLayerNormInference(unittest.TestCase):
             for tensor_affine in (True, False):
                 self._check(rows, hidden, "float32", tensor_affine, huge_row=True)
 
+    def test_bfloat16_and_weight_only_affine(self):
+        for rows, hidden in ((2048, 768), (128, 1536)):
+            for dtype in ("float32", "float16", "bfloat16"):
+                x = (self.rs.randn(rows, hidden) * 2 + 0.5).astype("float32")
+                w = self.rs.randn(hidden).astype("float32")
+                jx = jt.array(x).cast(dtype)
+                jw = jt.array(w).cast(dtype)
+                xr, wr = jx.float64().numpy(), jw.float64().numpy()
+                with jt.no_grad():
+                    got_w = _ln._layer_norm_no_grad_cuda(jx, (hidden,), jw, 0.0, 1e-5)
+                    got_s = _ln._layer_norm_no_grad_cuda(jx, (hidden,), 1.0, 0.0, 1e-5)
+                self.assertIsNotNone(got_w)
+                self.assertIsNotNone(got_s)
+                got_w.sync()
+                got_s.sync()
+                tol = 1e-5 if dtype == "float32" else 3e-2
+                want_w = _reference(xr, wr, 0.0, 1e-5)
+                want_s = _reference(xr, 1.0, 0.0, 1e-5)
+                np.testing.assert_allclose(got_w.float64().numpy(), want_w, rtol=tol,
+                                           atol=tol * max(1.0, np.abs(want_w).max()))
+                np.testing.assert_allclose(got_s.float64().numpy(), want_s, rtol=tol,
+                                           atol=tol * max(1.0, np.abs(want_s).max()))
+
 
 if __name__ == "__main__":
     unittest.main()

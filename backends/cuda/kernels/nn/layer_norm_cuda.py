@@ -11,7 +11,7 @@ from jittor._runtime.dispatch import native_rule, optional_kernel
 
 @native_rule("layer_norm_inference")
 def _supports_layer_norm_inference(
-        x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
+        x, normalized_shape, weight, bias, eps, *, allow_bfloat16=True):
     if _output_requires_grad(x, weight, bias):
         return False
     input_dtype = _jittor_dtype_name(x.dtype)
@@ -21,14 +21,20 @@ def _supports_layer_norm_inference(
     if len(normalized_shape) != 1 or _jittor_dtype_name(input_dtype) not in supported_dtypes:
         return False
     hidden = int(normalized_shape[0])
-    var_affine = isinstance(weight, jt.Var) and isinstance(bias, jt.Var)
-    scalar_affine = not isinstance(weight, jt.Var) and not isinstance(bias, jt.Var)
-    if not var_affine:
-        if not scalar_affine or os.environ.get("JITTOR_LAYERNORM_SCALAR_FAST", "1") == "0":
+    has_weight = isinstance(weight, jt.Var)
+    has_bias = isinstance(bias, jt.Var)
+    if has_weight and has_bias:
+        if int(weight.numel()) != hidden or int(bias.numel()) != hidden:
             return False
-    if int(x.shape[-1]) != hidden:
+    elif has_weight and not has_bias:
+        if int(weight.numel()) != hidden:
+            return False
+    elif not has_weight and not has_bias:
+        if os.environ.get("JITTOR_LAYERNORM_SCALAR_FAST", "1") == "0":
+            return False
+    else:
         return False
-    if var_affine and (int(weight.numel()) != hidden or int(bias.numel()) != hidden):
+    if int(x.shape[-1]) != hidden:
         return False
     return True
 
@@ -275,9 +281,13 @@ def _block_rows_source_scalar(hidden, offset_literal, scale_literal):
 
 
 @functools.lru_cache(maxsize=256)
-def _block_rows_source(hidden):
+def _block_rows_source(hidden, has_bias=True, offset_literal="0.0f", offset_value=0.0):
     # Formatted once per configuration: the source is a pure function
     # of these, and a BERT-base forward built it 25 times.
+    bias_param = ", in2_type* bias" if has_bias else ""
+    bias_arg = "in2_p, " if has_bias else ""
+    offset_d = "static_cast<double>(bias[j])" if has_bias else repr(offset_value)
+    offset_f = "static_cast<float>(bias[j])" if has_bias else offset_literal
     reductions = "".join(f"""
         __device__ __forceinline__ {dtype} block_sum(
                 {dtype} value, {dtype}* scratch, int lane, int warp) {{
@@ -291,10 +301,10 @@ def _block_rows_source(hidden):
     return f"""
         {reductions}
         __global__ static void kernel(
-                in0_type* x, in1_type* weight, in2_type* bias,
+                in0_type* x, in1_type* weight{bias_param},
                 out0_type* y, double eps) {{
             constexpr int hidden = {hidden};
-            int row = blockIdx.x;
+            long long row = blockIdx.x;
             int tid = threadIdx.x;
             int lane = tid & 31;
             int warp = tid >> 5;
@@ -364,7 +374,7 @@ def _block_rows_source(hidden):
                 double double_inv_std = 1.0 / sqrt(double_var / hidden + eps);
                 for (int j = tid; j < hidden; j += 128) {{
                     double scale = static_cast<double>(weight[j]);
-                    double offset = static_cast<double>(bias[j]);
+                    double offset = {offset_d};
                     y[row * hidden + j] = out0_type(
                         (static_cast<double>(x[row * hidden + j])
                          - double_mean)
@@ -377,7 +387,7 @@ def _block_rows_source(hidden):
                     int j = tid + part * 128;
                     if (j >= hidden) break;
                     float scale = static_cast<float>(weight[j]);
-                    float offset = static_cast<float>(bias[j]);
+                    float offset = {offset_f};
                     float xv = kCache ? cache[part]
                                       : static_cast<float>(x[row * hidden + j]);
                     y[row * hidden + j] = out0_type(
@@ -386,9 +396,9 @@ def _block_rows_source(hidden):
             }}
         }}
         double eps = data["eps"];
-        int rows = in0->num / {hidden};
-        kernel<<<rows, 128>>>(
-            in0_p, in1_p, in2_p, out0_p, eps);
+        long long rows = in0->num / {hidden};
+        kernel<<<(unsigned)rows, 128>>>(
+            in0_p, in1_p, {bias_arg}out0_p, eps);
         """
 
 
@@ -557,11 +567,12 @@ def _nchw_block_rows_source(hidden):
                  dtypes=("float16", "bfloat16", "float32"),
                  supports=_supports_layer_norm_inference)
 def _layer_norm_no_grad_cuda(
-        x, normalized_shape, weight, bias, eps, *, allow_bfloat16=False):
+        x, normalized_shape, weight, bias, eps, *, allow_bfloat16=True):
     hidden = int(normalized_shape[0])
-    scalar_affine = not isinstance(weight, jt.Var) and not isinstance(bias, jt.Var)
+    has_weight = isinstance(weight, jt.Var)
+    has_bias = isinstance(bias, jt.Var)
     eps_value = float(eps)
-    if scalar_affine:
+    if not has_weight and not has_bias:
         scale_value = float(weight)
         offset_value = float(bias)
         scale_literal = f"{scale_value:.9e}f"
@@ -582,6 +593,26 @@ def _layer_norm_no_grad_cuda(
             data={"eps": eps_value},
         )
         return y
+    if has_weight and not has_bias:
+        offset_value = float(bias)
+        offset_literal = f"{offset_value:.9e}f"
+        if _warp_rows(x, hidden):
+            affine = ("in1_type* weight, ",
+                      f"* static_cast<float>(weight[j]) + {offset_literal}",
+                      f"* static_cast<double>(weight[j]) + {offset_value!r}")
+            y = jt.code(
+                x.shape, x.dtype, [x, weight],
+                cuda_src=_warp_rows_source(hidden, affine)
+                + _warp_rows_launch(hidden, "in0_p, in1_p, out0_p"),
+                data={"eps": eps_value})
+            return _stop_grad_outputs(y)
+        y = jt.code(
+            x.shape, x.dtype, [x, weight],
+            cuda_src=_block_rows_source(
+                hidden, has_bias=False,
+                offset_literal=offset_literal, offset_value=offset_value),
+            data={"eps": eps_value})
+        return _stop_grad_outputs(y)
     nchw_src = _nchw_physical(x)
     if nchw_src is not None:
         spatial = int(nchw_src.shape[2]) * int(nchw_src.shape[3])
