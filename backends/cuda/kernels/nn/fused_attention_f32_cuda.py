@@ -237,18 +237,55 @@ __device__ __forceinline__ float lanes16_sum(float v) {
 template <int MASK, bool CAUSAL, int ROWS, int COLS>
 __device__ __forceinline__ int tile_visibility(const mea::Mask& mask, long long base, int r0,
                                                int c0, int lq, int lk) {
-    bool any = false, all = true;
-    for (int i = threadIdx.x; i < ROWS * COLS; i += THREADS) {
-        const int row = r0 + i / COLS, col = c0 + i % COLS;
-        if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
-        const long long at = base + row * mask.row_stride + col * mask.col_stride;
-        const bool shown = MASK == 1 ? static_cast<const bool*>(mask.data)[at]
-                                     : static_cast<const float*>(mask.data)[at] != -INFINITY;
-        any |= shown;
-        all &= shown;
+    bool any_non_neginf = false, any_non_sentinel = false, all_zero = true;
+    if (MASK == 2 && mask.row_stride == 0 && mask.col_stride == 1) {
+        if (threadIdx.x < COLS) {
+            const int col = c0 + threadIdx.x;
+            if (col < lk && (!CAUSAL || col <= min(lq - 1, r0 + ROWS - 1))) {
+                const float v = static_cast<const float*>(mask.data)[base + col];
+                any_non_neginf = (v != -INFINITY);
+                any_non_sentinel = !(v <= -1e38f);
+                all_zero = (v == 0.f);
+            }
+        }
+    } else if (MASK == 2 && !CAUSAL && mask.col_stride == 1 && (COLS % 4 == 0)
+               && (c0 + COLS <= lk) && (r0 + ROWS <= lq)
+               && ((reinterpret_cast<size_t>(static_cast<const float*>(mask.data) + base + c0) & 15u) == 0)
+               && ((mask.row_stride & 3) == 0)) {
+        constexpr int kVecCols = COLS / 4;
+        constexpr int kVecs = ROWS * kVecCols;
+        const float* ptr = static_cast<const float*>(mask.data) + base;
+        for (int i = threadIdx.x; i < kVecs; i += THREADS) {
+            const int row = r0 + i / kVecCols;
+            const int col4 = c0 + (i % kVecCols) * 4;
+            const float4 v = *reinterpret_cast<const float4*>(ptr + row * mask.row_stride + col4);
+            any_non_neginf |= (v.x != -INFINITY) || (v.y != -INFINITY)
+                              || (v.z != -INFINITY) || (v.w != -INFINITY);
+            any_non_sentinel |= !(v.x <= -1e38f) || !(v.y <= -1e38f)
+                                || !(v.z <= -1e38f) || !(v.w <= -1e38f);
+            all_zero &= (v.x == 0.f) && (v.y == 0.f) && (v.z == 0.f) && (v.w == 0.f);
+        }
+    } else {
+        for (int i = threadIdx.x; i < ROWS * COLS; i += THREADS) {
+            const int row = r0 + i / COLS, col = c0 + i % COLS;
+            if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
+            const long long at = base + row * mask.row_stride + col * mask.col_stride;
+            if (MASK == 1) {
+                const bool shown = static_cast<const bool*>(mask.data)[at];
+                any_non_neginf |= shown;
+                any_non_sentinel |= shown;
+                all_zero &= shown;
+            } else {
+                const float v = static_cast<const float*>(mask.data)[at];
+                any_non_neginf |= (v != -INFINITY);
+                any_non_sentinel |= !(v <= -1e38f);
+                all_zero &= (v == 0.f);
+            }
+        }
     }
-    if (!__syncthreads_or(any)) return 0;
-    return MASK == 1 && __syncthreads_and(all) ? 2 : 1;
+    if (!__syncthreads_or(any_non_neginf)) return 0;
+    if (MASK == 2 && !__syncthreads_or(any_non_sentinel)) return -1;
+    return __syncthreads_and(all_zero) ? 2 : 1;
 }
 
 template <int RPT>
@@ -293,97 +330,113 @@ __global__ void __launch_bounds__(THREADS) forward(
         for (int c = 0; c < DPT; c++) acc[r][c] = 0.f;
     }
     const int kend = CAUSAL ? min(lk, q0 + BQ) : lk;
-    for (int k0 = 0; k0 < kend; k0 += BK) {
-        const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL, BQ, BK>(
-            mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
-        if (!shown) continue;
-        __syncthreads();
-        for (int i = threadIdx.x; i < BK * D; i += THREADS) {
-            const int r = i / D, c = i - r * D;
-            skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
-        }
-        __syncthreads();
-        float s[RPT][4], bias[RPT][4];
-        #pragma unroll
-        for (int r = 0; r < RPT; r++) {
-            #pragma unroll
-            for (int c = 0; c < 4; c++) s[r][c] = 0.f;
-            if (MASK == 2 && q0 + ty * RPT + r < lq)
-                mea::bias4(mask, mask_base + (q0 + ty * RPT + r) * mask.row_stride,
-                           k0 + tx * 4, lk, bias[r]);
-        }
-        #pragma unroll 4
-        for (int d = 0; d < D; d++) {
-            float qv[RPT];
-            load_rows<RPT>(sq + d * QP + ty * RPT, qv);
-            const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
+    bool skipped_sentinel = false;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int k0 = 0; k0 < kend; k0 += BK) {
+            const int shown = MASK ? tile_visibility<MASK, CAUSAL, BQ, BK>(
+                mask, mask_base, q0, k0, lq, lk) : 2;
+            if (pass == 0) {
+                if (shown == 0) continue;
+                if (shown < 0) { skipped_sentinel = true; continue; }
+            } else {
+                if (shown >= 0) continue;
+            }
+            __syncthreads();
+            for (int i = threadIdx.x; i < BK * D; i += THREADS) {
+                const int r = i / D, c = i - r * D;
+                skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
+            }
+            __syncthreads();
+            float s[RPT][4], bias[RPT][4];
             #pragma unroll
             for (int r = 0; r < RPT; r++) {
-                s[r][0] += qv[r] * kv.x;
-                s[r][1] += qv[r] * kv.y;
-                s[r][2] += qv[r] * kv.z;
-                s[r][3] += qv[r] * kv.w;
+                #pragma unroll
+                for (int c = 0; c < 4; c++) s[r][c] = 0.f;
+                if (MASK == 2 && shown != 2 && q0 + ty * RPT + r < lq)
+                    mea::bias4(mask, mask_base + (q0 + ty * RPT + r) * mask.row_stride,
+                               k0 + tx * 4, lk, bias[r]);
             }
-        }
-        #pragma unroll
-        for (int r = 0; r < RPT; r++) {
-            const int row = q0 + ty * RPT + r;
-            float top = -INFINITY;
-            #pragma unroll
-            for (int c = 0; c < 4; c++) {
-                const int col = k0 + tx * 4 + c;
-                if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
-                else if (MASK == 2 && row < lq) s[r][c] += bias[r][c];
-                else if (MASK == 1 && shown == 1 && row < lq)
-                    s[r][c] = mea::masked<MASK>(s[r][c], mask, mask_base
-                        + row * mask.row_stride + col * mask.col_stride);
-                top = fmaxf(top, s[r][c]);
+            #pragma unroll 4
+            for (int d = 0; d < D; d++) {
+                float qv[RPT];
+                load_rows<RPT>(sq + d * QP + ty * RPT, qv);
+                const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    s[r][0] += qv[r] * kv.x;
+                    s[r][1] += qv[r] * kv.y;
+                    s[r][2] += qv[r] * kv.z;
+                    s[r][3] += qv[r] * kv.w;
+                }
             }
-            const float next = fmaxf(m[r], lanes16_max(top));
-            const float keep = next == -INFINITY ? 1.f : __expf(m[r] - next);
-            float sum = 0.f;
-            #pragma unroll
-            for (int c = 0; c < 4; c++) {
-                s[r][c] = next == -INFINITY ? 0.f : __expf(s[r][c] - next);
-                sum += s[r][c];
-            }
-            l[r] = l[r] * keep + lanes16_sum(sum);
-            m[r] = next;
-            #pragma unroll
-            for (int c = 0; c < DPT; c++) acc[r][c] *= keep;
-        }
-        if (DROPOUT) {
-            // The softmax's statistics stay those of the undropped row; only
-            // what multiplies V is dropped.
             #pragma unroll
             for (int r = 0; r < RPT; r++) {
-                float z[4];
-                dropout.mask(bh, q0 + ty * RPT + r, (k0 >> 2) + tx, z);
+                const int row = q0 + ty * RPT + r;
+                float top = -INFINITY;
                 #pragma unroll
-                for (int c = 0; c < 4; c++) s[r][c] *= z[c];
+                for (int c = 0; c < 4; c++) {
+                    const int col = k0 + tx * 4 + c;
+                    if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
+                    else if (MASK == 2 && shown != 2 && row < lq) s[r][c] += bias[r][c];
+                    else if (MASK == 1 && shown == 1 && row < lq)
+                        s[r][c] = mea::masked<MASK>(s[r][c], mask, mask_base
+                            + row * mask.row_stride + col * mask.col_stride);
+                    top = fmaxf(top, s[r][c]);
+                }
+                const float next = fmaxf(m[r], lanes16_max(top));
+                const float keep = next == -INFINITY ? 1.f : __expf(m[r] - next);
+                float sum = 0.f;
+                #pragma unroll
+                for (int c = 0; c < 4; c++) {
+                    s[r][c] = next == -INFINITY ? 0.f : __expf(s[r][c] - next);
+                    sum += s[r][c];
+                }
+                l[r] = l[r] * keep + lanes16_sum(sum);
+                m[r] = next;
+                #pragma unroll
+                for (int c = 0; c < DPT; c++) acc[r][c] *= keep;
+            }
+            if (DROPOUT) {
+                // The softmax's statistics stay those of the undropped row; only
+                // what multiplies V is dropped.
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    float z[4];
+                    dropout.mask(bh, q0 + ty * RPT + r, (k0 >> 2) + tx, z);
+                    #pragma unroll
+                    for (int c = 0; c < 4; c++) s[r][c] *= z[c];
+                }
+            }
+            #pragma unroll
+            for (int c = 0; c < 4; c++)
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) sp[(tx * 4 + c) * QP + ty * RPT + r] = s[r][c];
+            __syncthreads();
+            for (int i = threadIdx.x; i < BK * D; i += THREADS) {
+                const int r = i / D, c = i - r * D;
+                skv[r * D + c] = k0 + r < lk ? vb[k0 + r][c] : 0.f;
+            }
+            __syncthreads();
+            #pragma unroll 2
+            for (int j = 0; j < BK; j++) {
+                float p[RPT];
+                load_rows<RPT>(sp + j * QP + ty * RPT, p);
+                #pragma unroll
+                for (int c = 0; c < DPT; c++) {
+                    const int col = tx + c * 16;
+                    const float vv = col < D ? skv[j * D + col] : 0.f;
+                    #pragma unroll
+                    for (int r = 0; r < RPT; r++) acc[r][c] += p[r] * vv;
+                }
             }
         }
-        #pragma unroll
-        for (int c = 0; c < 4; c++)
+        if (pass == 0) {
+            if (!skipped_sentinel) break;
+            bool any_empty = false;
             #pragma unroll
-            for (int r = 0; r < RPT; r++) sp[(tx * 4 + c) * QP + ty * RPT + r] = s[r][c];
-        __syncthreads();
-        for (int i = threadIdx.x; i < BK * D; i += THREADS) {
-            const int r = i / D, c = i - r * D;
-            skv[r * D + c] = k0 + r < lk ? vb[k0 + r][c] : 0.f;
-        }
-        __syncthreads();
-        #pragma unroll 2
-        for (int j = 0; j < BK; j++) {
-            float p[RPT];
-            load_rows<RPT>(sp + j * QP + ty * RPT, p);
-            #pragma unroll
-            for (int c = 0; c < DPT; c++) {
-                const int col = tx + c * 16;
-                const float vv = col < D ? skv[j * D + col] : 0.f;
-                #pragma unroll
-                for (int r = 0; r < RPT; r++) acc[r][c] += p[r] * vv;
-            }
+            for (int r = 0; r < RPT; r++)
+                if (q0 + ty * RPT + r < lq && !(m[r] > -1e30f)) any_empty = true;
+            if (!__syncthreads_or(any_empty)) break;
         }
     }
     #pragma unroll
@@ -428,18 +481,55 @@ constexpr int BQ = 32, BK = 32, QP = BQ + 2, KP = BK + 4, PP = BK + 4;
 template <int MASK, bool CAUSAL>
 __device__ __forceinline__ int tile_visibility(const mea::Mask& mask, long long base, int r0,
                                                int c0, int lq, int lk) {
-    bool any = false, all = true;
-    for (int i = threadIdx.x; i < BQ * BK; i += THREADS) {
-        const int row = r0 + i / BK, col = c0 + i % BK;
-        if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
-        const long long at = base + row * mask.row_stride + col * mask.col_stride;
-        const bool shown = MASK == 1 ? static_cast<const bool*>(mask.data)[at]
-                                     : static_cast<const float*>(mask.data)[at] != -INFINITY;
-        any |= shown;
-        all &= shown;
+    bool any_non_neginf = false, any_non_sentinel = false, all_zero = true;
+    if (MASK == 2 && mask.row_stride == 0 && mask.col_stride == 1) {
+        if (threadIdx.x < BK) {
+            const int col = c0 + threadIdx.x;
+            if (col < lk && (!CAUSAL || col <= min(lq - 1, r0 + BQ - 1))) {
+                const float v = static_cast<const float*>(mask.data)[base + col];
+                any_non_neginf = (v != -INFINITY);
+                any_non_sentinel = !(v <= -1e38f);
+                all_zero = (v == 0.f);
+            }
+        }
+    } else if (MASK == 2 && !CAUSAL && mask.col_stride == 1 && (BK % 4 == 0)
+               && (c0 + BK <= lk) && (r0 + BQ <= lq)
+               && ((reinterpret_cast<size_t>(static_cast<const float*>(mask.data) + base + c0) & 15u) == 0)
+               && ((mask.row_stride & 3) == 0)) {
+        constexpr int kVecCols = BK / 4;
+        constexpr int kVecs = BQ * kVecCols;
+        const float* ptr = static_cast<const float*>(mask.data) + base;
+        for (int i = threadIdx.x; i < kVecs; i += THREADS) {
+            const int row = r0 + i / kVecCols;
+            const int col4 = c0 + (i % kVecCols) * 4;
+            const float4 v = *reinterpret_cast<const float4*>(ptr + row * mask.row_stride + col4);
+            any_non_neginf |= (v.x != -INFINITY) || (v.y != -INFINITY)
+                              || (v.z != -INFINITY) || (v.w != -INFINITY);
+            any_non_sentinel |= !(v.x <= -1e38f) || !(v.y <= -1e38f)
+                                || !(v.z <= -1e38f) || !(v.w <= -1e38f);
+            all_zero &= (v.x == 0.f) && (v.y == 0.f) && (v.z == 0.f) && (v.w == 0.f);
+        }
+    } else {
+        for (int i = threadIdx.x; i < BQ * BK; i += THREADS) {
+            const int row = r0 + i / BK, col = c0 + i % BK;
+            if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
+            const long long at = base + row * mask.row_stride + col * mask.col_stride;
+            if (MASK == 1) {
+                const bool shown = static_cast<const bool*>(mask.data)[at];
+                any_non_neginf |= shown;
+                any_non_sentinel |= shown;
+                all_zero &= shown;
+            } else {
+                const float v = static_cast<const float*>(mask.data)[at];
+                any_non_neginf |= (v != -INFINITY);
+                any_non_sentinel |= !(v <= -1e38f);
+                all_zero &= (v == 0.f);
+            }
+        }
     }
-    if (!__syncthreads_or(any)) return 0;
-    return MASK == 1 && __syncthreads_and(all) ? 2 : 1;
+    if (!__syncthreads_or(any_non_neginf)) return 0;
+    if (MASK == 2 && !__syncthreads_or(any_non_sentinel)) return -1;
+    return __syncthreads_and(all_zero) ? 2 : 1;
 }
 
 template <int D, bool CAUSAL, int MASK, bool DROPOUT>
@@ -487,11 +577,17 @@ __global__ void __launch_bounds__(THREADS) backward(
     // Query tiles wholly above the diagonal see none of these keys.
     const int qstart = CAUSAL ? (k0 / BQ) * BQ : 0;
     for (int q0 = qstart; q0 < lq; q0 += BQ) {
-        // A boolean mask may hide a tile whole; an additive one, as the
-        // forward reads it, is added element by element.
-        const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL>(
-            mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
-        if (!shown) continue;
+        const int shown = MASK ? tile_visibility<MASK, CAUSAL>(
+            mask, mask_base, q0, k0, lq, lk) : 2;
+        if (shown == 0) continue;
+        if (MASK == 2 && shown < 0) {
+            bool any_sentinel_row = false;
+            if (tid < BQ && q0 + tid < lq) {
+                const size_t idx = ((size_t)bh * lq + (q0 + tid)) * 2;
+                if (!(normalizer[idx] > -1e30f)) any_sentinel_row = true;
+            }
+            if (!__syncthreads_or(any_sentinel_row)) continue;
+        }
         __syncthreads();
         for (int i = tid; i < BQ * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
@@ -505,7 +601,7 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int r = 0; r < 2; r++) {
             #pragma unroll
             for (int c = 0; c < 4; c++) s[r][c] = dp[r][c] = 0.f;
-            if (MASK == 2 && q0 + ay * 2 + r < lq)
+            if (MASK == 2 && shown != 2 && q0 + ay * 2 + r < lq)
                 mea::bias4(mask, mask_base + (q0 + ay * 2 + r) * mask.row_stride,
                            k0 + ax * 4, lk, bias[r]);
         }
@@ -542,7 +638,7 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
                                   || row_inv_sum == 0.f;
                 float score = s[r][c];
-                if (MASK == 2 && !dead) score += bias[r][c];
+                if (MASK == 2 && shown != 2 && !dead) score += bias[r][c];
                 if (MASK == 1 && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);

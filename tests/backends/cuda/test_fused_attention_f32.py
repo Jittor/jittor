@@ -309,6 +309,20 @@ class TestFusedAttentionF32(unittest.TestCase):
         mask[1, :, 7, :] = np.finfo(np.float32).min
         self._check(2, 3, 64, 64, 64, False, mask)
 
+    def test_a_sliding_window_additive_mask(self):
+        # Sliding-window additive masks (as ModernBERT builds with finfo.min or
+        # -inf) leave most 64x64 key tiles completely masked out. Include an
+        # all-finfo.min query row spanning skipped tiles to verify fallback.
+        idx = np.arange(192)
+        window = np.abs(idx[:, None] - idx[None, :]) <= 32
+        for sentinel in (np.finfo(np.float32).min, -np.inf):
+            with self.subTest(sentinel=sentinel):
+                mask = np.where(window, 0.0, sentinel).astype("float32")
+                mask = np.broadcast_to(mask, (2, 1, 192, 192)).copy()
+                if np.isfinite(sentinel):
+                    mask[1, :, 5, :] = sentinel
+                self._check(2, 2, 192, 192, 64, False, mask)
+
     def test_an_additive_mask_per_head(self):
         rng = np.random.RandomState(7)
         self._check(2, 2, 70, 45, 64, False,
