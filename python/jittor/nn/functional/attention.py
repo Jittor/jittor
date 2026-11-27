@@ -8,6 +8,7 @@ import math
 import jittor as jt
 from jittor._core.flags import _output_requires_grad
 from jittor._runtime.dispatch import dispatch_context, select_kernel, try_dispatch
+from .matrix import _cublas_batched_matmul
 
 
 def _attention_bias(scores, attn_mask, is_causal):
@@ -604,8 +605,9 @@ def _query_block(query, key, is_causal):
 
 
 def _composite(query, key, value, attn_mask, probability, is_causal, scale_factor, query_dtype):
-    """Attention built from matmuls and a softmax, for calls without a backward."""
-    if _jittor_dtype_name(query.dtype) in ("float16", "bfloat16"):
+    """Attention built from matmuls and a softmax."""
+    compute_dtype = _jittor_dtype_name(query.dtype)
+    if compute_dtype in ("float16", "bfloat16"):
         with _opmath_scope(query):
             return _composite(
                 _softmax_precision(query),
@@ -619,12 +621,18 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
             )
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
-    query_scale, key_scale = _attention_scale_factors(query, scale_factor)
-    if query_scale != 1.0:
-        query = query * query_scale
-    if key_scale != 1.0:
-        key = key * key_scale
-    scores = _product(query, key, trans_b=True)
+    scores = None
+    if (compute_dtype == "float32" and query.ndim == key.ndim == 4
+            and query.shape[:2] == key.shape[:2]):
+        kernel = select_kernel("batched_matmul", query, key, False, True)
+        if kernel is _cublas_batched_matmul and dispatch_context(query, key).backend == "cuda":
+            # The op's storage adapter keeps the logical inputs in the gradient
+            # graph, including inputs backed by strided transpose views.
+            scores = kernel(query, key, trans_b=True, alpha=float(scale_factor))
+    if scores is None:
+        scores = jt.matmul(query, key.transpose(-2, -1))
+        if scale_factor != 1.0:
+            scores = scores * scale_factor
     softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)
     fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)
     zero_fully_masked = fast_softmax is not None and attn_mask is not None

@@ -20,7 +20,10 @@ namespace jittor {
 struct CublasBatchedMatmulOp : Op {
     Var* a, * b, * c;
     bool trans_a, trans_b;
+    float alpha;
+    // Preserve the four-argument typed registration with unit scaling.
     CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b);
+    CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, float alpha);
 
     const char* name() const override { return "cublas_batched_matmul"; }
     void infer_shape() override;

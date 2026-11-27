@@ -16,6 +16,7 @@
 import numpy as np
 import pytest
 import jittor as jt
+from jittor.nn.functional import matrix
 
 from _helpers import capability
 
@@ -110,6 +111,30 @@ def test_second_derivative_through_the_transposed_operand(device, dtype):
     expected = 2 * np.conj(v_np) @ b_np @ np.conj(b_np.T)
     np.testing.assert_allclose(ha.numpy(), expected, rtol=1e-10, atol=1e-10)
     np.testing.assert_allclose(hbase.numpy(), expected.T, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("dtype", ["float32", "complex64"])
+def test_adjoint_reuses_transpose_base_and_keeps_mixed_derivative(device, dtype):
+    a_np, b_np = _operands(dtype, batch=(3,))
+    a, _ = _operand(a_np, False, dtype)
+    b, base = _operand(b_np, True, dtype)
+    if dtype == "float32":
+        assert matrix._conj_last2(a)._is_last2_transpose_view()
+    out = jt.matmul(a, b)
+    loss = out.real.sum() if dtype == "complex64" else out.sum()
+    da = jt.grad(loss, a)
+    with jt.profile_scope(warmup=0, rerun=0) as report:
+        da.sync(weak_sync=False)
+    names = [str(row[0]) for row in report[1:]]
+    assert not any("transpose" in name for name in names), names
+    expected = np.ones(out.shape, dtype=dtype) @ np.swapaxes(b_np.conj(), -1, -2)
+    np.testing.assert_allclose(da.numpy(), expected, rtol=_TOL[dtype], atol=_TOL[dtype])
+
+    inner = da.real.sum() if dtype == "complex64" else da.sum()
+    with jt.flag_scope(missing_grad_error=1):
+        db, dbase = jt.grad(inner, [b, base])
+    np.testing.assert_array_equal(db.numpy(), np.full(b.shape, a.shape[-2]))
+    np.testing.assert_array_equal(dbase.numpy(), np.full(base.shape, a.shape[-2]))
 
 
 def test_forward_still_skips_the_transpose_copy(device):

@@ -177,6 +177,59 @@ class TestCublasMatmulGrad(unittest.TestCase):
         np.testing.assert_allclose(got_db, flat_go.sum(axis=0),
                                    atol=2e-5, rtol=2e-5)
 
+    def test_batched_alpha_forward_and_backward(self):
+        rng = np.random.default_rng(20261128)
+        dtypes = {"float32": 2e-5, "float16": 1e-3, "bfloat16": 8e-3,
+                  "float64": 1e-12, "complex64": 2e-5, "complex128": 1e-12}
+        with jt.flag_scope(use_cuda=1, amp_reg=0):
+            op = jt.compile_extern.cublas_ops.cublas_batched_matmul
+            for dtype, tol in dtypes.items():
+                complex_input = dtype.startswith("complex")
+                wide_dtype = "complex128" if complex_input else "float64"
+                for trans_a, trans_b in ((False, True), (True, False)):
+                    with self.subTest(dtype=dtype, trans_a=trans_a, trans_b=trans_b):
+                        a_np, b_np, g_np = (rng.normal(size=shape) for shape in
+                                             ((2, 3, 4), (2, 4, 5), (2, 3, 5)))
+                        if complex_input:
+                            a_np, b_np, g_np = (x + 1j * rng.normal(size=x.shape)
+                                                 for x in (a_np, b_np, g_np))
+                        a = jt.array(np.swapaxes(a_np, -2, -1) if trans_a else a_np,
+                                     dtype=wide_dtype).cast(dtype)
+                        b = jt.array(np.swapaxes(b_np, -2, -1) if trans_b else b_np,
+                                     dtype=wide_dtype).cast(dtype)
+                        g = jt.array(g_np, dtype=wide_dtype).cast(dtype)
+                        a_ref, b_ref, g_ref = (x.numpy().astype(wide_dtype) for x in (a, b, g))
+                        op_a = np.swapaxes(a_ref, -2, -1) if trans_a else a_ref
+                        op_b = np.swapaxes(b_ref, -2, -1) if trans_b else b_ref
+                        da_ref = g_ref @ np.swapaxes(op_b.conj(), -2, -1)
+                        db_ref = np.swapaxes(op_a.conj(), -2, -1) @ g_ref
+                        if trans_a:
+                            da_ref = np.swapaxes(da_ref, -2, -1)
+                        if trans_b:
+                            db_ref = np.swapaxes(db_ref, -2, -1)
+                        for alpha in (-0.625, 0.3125):
+                            out = op(a, b, trans_a, trans_b, alpha=alpha)
+                            loss = out * g.conj()
+                            if complex_input:
+                                loss = loss.real
+                            da, db = jt.grad(loss.sum(), [a, b])
+                            for got, ref in zip((out, da, db), (op_a @ op_b, da_ref, db_ref)):
+                                self.assertEqual(str(got.dtype), dtype)
+                                got.sync()
+                                self.assertEqual(got.location(), "device")
+                                np.testing.assert_allclose(got.numpy(), alpha * ref, atol=tol, rtol=tol)
+
+    def test_batched_alpha_survives_amp_operand_casts(self):
+        with jt.flag_scope(use_cuda=1, amp_reg=jt.amp_flags.prefer16):
+            a = jt.array([[[2.0, 4.0]]], dtype="float32")
+            b = jt.array([[[3.0], [5.0]]], dtype="float32")
+            out = jt.compile_extern.cublas_ops.cublas_batched_matmul(a, b, False, False, 0.5)
+            da, db = jt.grad(out.sum(), [a, b])
+        self.assertEqual(str(out.dtype), "float16")
+        np.testing.assert_array_equal(out.numpy(), [[[13.0]]])
+        np.testing.assert_array_equal(da.numpy(), [[[1.5, 2.5]]])
+        np.testing.assert_array_equal(db.numpy(), [[[1.0], [2.0]]])
+
     def test_half_gradients_from_a_float32_consumer(self):
         """A float32 cotangent for a half/bf16 product gives half/bf16 gradients.
 

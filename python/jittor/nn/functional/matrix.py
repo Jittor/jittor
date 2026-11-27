@@ -168,9 +168,12 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("cublas").cublas_matmul(a, b, trans_a, trans_b)
 
 
-def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
+def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False, alpha=1.0):
     a, b = _broadcast_batch_dims(a, b)
-    return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
+    op = get_library_ops("cublas").cublas_batched_matmul
+    if alpha == 1.0:
+        return op(a, b, trans_a, trans_b)
+    return op(a, b, trans_a, trans_b, alpha)
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
@@ -586,10 +589,33 @@ def _transpose_base_last2(x):
     return None
 
 
+class _AdjointOfTransposeView(jt.Function):
+    """Use the base's data and differentiate with respect to the view."""
+
+    def __init__(self, adjoint):
+        self.adjoint = adjoint
+
+    def execute(self, view):
+        return self.adjoint
+
+    def grad(self, g):
+        return _conj_last2(g)
+
+
 def _conj_last2(x):
+    base = _transpose_base_last2(x)
+    if base is not None:
+        adjoint = base.conj() if x.dtype.is_complex() else base
+        if jt.flags.no_grad:
+            return adjoint
+        if x.is_stop_grad():
+            return adjoint if adjoint.is_stop_grad() else adjoint.detach()
+        # Reconnect the view for higher-order gradients without evaluating it.
+        return _AdjointOfTransposeView(adjoint)(x)
     axes = list(range(x.ndim))
     axes[-1], axes[-2] = axes[-2], axes[-1]
-    return x.transpose(axes).conj()
+    transposed = x.transpose(axes)
+    return transposed.conj() if x.dtype.is_complex() else transposed
 
 
 def _sum_to_shape(x, shape):

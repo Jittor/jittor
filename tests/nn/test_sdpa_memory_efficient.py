@@ -26,11 +26,14 @@ from _helpers import capability as _test_capability
 from _helpers.sdpa_reference import reference as _reference
 
 import unittest
+from unittest import mock
+
 import pytest
 
 import numpy as np
 
 import jittor as jt
+from jittor._runtime.fallback import forbid_backend_fallbacks
 from jittor.nn.functional import attention
 from jittor.nn.functional.attention import scaled_dot_product_attention
 
@@ -108,6 +111,46 @@ class TestTrainingAttentionMatchesTheClosedForm(unittest.TestCase):
 
     def test_causal(self):
         self._check(9, 9, causal=True)
+
+
+class TestCompositeAttentionMatchesTheClosedForm(unittest.TestCase):
+    def test_scaled_scores_and_gradients_with_transpose_views(self):
+        rng = np.random.default_rng(20261128)
+        q, k, v, dout = (rng.normal(size=shape).astype("float32") for shape in
+                         ((2, 3, 5, 8), (2, 3, 7, 8), (2, 3, 7, 6), (2, 3, 5, 6)))
+        select = attention.select_kernel
+        for device, use_cuda in _devices():
+            with jt.flag_scope(use_cuda=use_cuda, transpose_storage_view=1,
+                               amp_reg=0, missing_grad_error=1), forbid_backend_fallbacks():
+                for dtype, tol in (("float32", 2e-5), ("float16", 2e-3), ("bfloat16", 1e-2)):
+                    for broadcast in (False, True):
+                        with self.subTest(device=device, dtype=dtype, broadcast=broadcast):
+                            keys = k[:1] if broadcast else k
+                            jq, jk = (jt.array(np.ascontiguousarray(np.swapaxes(x, -1, -2)))
+                                      .cast(dtype).transpose(-2, -1) for x in (q, keys))
+                            jv, jg = (jt.array(x).cast(dtype) for x in (v, dout))
+                            q_ref, k_ref, v_ref, g_ref = (x.float32().numpy() for x in (jq, jk, jv, jg))
+                            expected = list(_reference(q_ref, k_ref, v_ref, None, False, g_ref))
+                            if broadcast:
+                                expected[2] = expected[2].sum(axis=0, keepdims=True)
+
+                            producers = []
+
+                            def record_scores(op, *args, **kwargs):
+                                if op == "nn.softmax":
+                                    producers.append(args[0]._producer_name())
+                                return select(op, *args, **kwargs)
+
+                            with mock.patch.object(attention, "select_kernel", side_effect=record_scores):
+                                out = attention._composite(jq, jk, jv, None, 0., False, 8 ** -.5, dtype)
+                            self.assertEqual(producers, ["cublas_batched_matmul"
+                                                         if use_cuda and not broadcast else "binary"])
+                            gradients = jt.grad((out * jg).sum(), [jq, jk, jv])
+                            for got, ref in zip((out, *gradients), expected):
+                                self.assertEqual(str(got.dtype), dtype)
+                                got.sync()
+                                self.assertEqual(got.location(), "device" if use_cuda else "cpu")
+                                np.testing.assert_allclose(got.float32().numpy(), ref, atol=tol, rtol=tol)
 
 
 class TestOnlyTrainingTakesTheFunction(unittest.TestCase):
