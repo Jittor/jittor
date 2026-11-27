@@ -135,10 +135,22 @@ def _warp_rows_launch(hidden, pointers):
     """
 
 
+def _ln_vec_threads(hidden, elem_per_vec):
+    if hidden % elem_per_vec != 0:
+        return 0, 128, 4
+    vec_n = hidden // elem_per_vec
+    threads = 32
+    while threads < min(vec_n, 256):
+        threads *= 2
+    return vec_n, threads, threads // 32
+
+
 @functools.lru_cache(maxsize=256)
 def _block_rows_source_scalar(hidden, offset_literal, scale_literal):
     # Formatted once per configuration: the source is a pure function
     # of these, and a BERT-base forward built it 25 times.
+    vec2_n, vec2_t, vec2_w = _ln_vec_threads(hidden, 8)
+    vec4_n, vec4_t, vec4_w = _ln_vec_threads(hidden, 4)
     return f"""
             __device__ __forceinline__ float warp_sum(float value) {{
                 for (int offset = 16; offset > 0; offset >>= 1)
@@ -149,6 +161,310 @@ def _block_rows_source_scalar(hidden, offset_literal, scale_literal):
                 for (int offset = 16; offset > 0; offset >>= 1)
                     value += __shfl_down_sync(0xffffffff, value, offset);
                 return value;
+            }}
+            __global__ __launch_bounds__({vec2_t}) static void kernel_vec2b(
+                    const in0_type* __restrict__ x, out0_type* __restrict__ y, double eps) {{
+                if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0) {{
+                    constexpr int kVecN = {vec2_n};
+                    constexpr int kThreads = {vec2_t};
+                    constexpr int kWarps = {vec2_w};
+                    constexpr int kVecPer = (kVecN + kThreads - 1) / kThreads;
+                    constexpr bool kVecCache = kVecPer <= 4;
+                    long long row = blockIdx.x;
+                    int tid = threadIdx.x;
+                    int lane = tid & 31;
+                    int warp = tid >> 5;
+                    __shared__ float warp_buf[kWarps];
+                    __shared__ float mean_shared, inv_std_shared;
+                    __shared__ double warp_double_buf[kWarps];
+                    __shared__ double mean_double_shared, inv_std_double_shared;
+                    __shared__ int use_double;
+                    const uint4* x8 = reinterpret_cast<const uint4*>(x + row * {hidden}LL);
+                    uint4* y8 = reinterpret_cast<uint4*>(y + row * {hidden}LL);
+                    uint4 cache[kVecCache ? (kVecPer > 0 ? kVecPer : 1) : 1];
+                    float sum = 0.0f;
+                    if (kVecCache) {{
+                        #pragma unroll
+                        for (int i = 0; i < kVecPer; ++i) {{
+                            int v = tid + i * kThreads;
+                            if (v < kVecN) {{
+                                uint4 raw = x8[v];
+                                cache[i] = raw;
+                                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                #pragma unroll
+                                for (int k = 0; k < 8; ++k) sum += static_cast<float>(vp[k]);
+                            }}
+                        }}
+                    }} else {{
+                        for (int v = tid; v < kVecN; v += kThreads) {{
+                            uint4 raw = x8[v];
+                            const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                            #pragma unroll
+                            for (int k = 0; k < 8; ++k) sum += static_cast<float>(vp[k]);
+                        }}
+                    }}
+                    sum = warp_sum(sum);
+                    if (lane == 0) warp_buf[warp] = sum;
+                    __syncthreads();
+                    if (warp == 0) {{
+                        float total = lane < kWarps ? warp_buf[lane] : 0.0f;
+                        total = warp_sum(total);
+                        if (lane == 0) {{
+                            use_double = !isfinite(total);
+                            if (!use_double) mean_shared = total / {hidden}.0f;
+                        }}
+                    }}
+                    __syncthreads();
+                    if (!use_double) {{
+                        float mean = mean_shared;
+                        float var = 0.0f;
+                        if (kVecCache) {{
+                            #pragma unroll
+                            for (int i = 0; i < kVecPer; ++i) {{
+                                int v = tid + i * kThreads;
+                                if (v < kVecN) {{
+                                    uint4 raw = cache[i];
+                                    const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                    #pragma unroll
+                                    for (int k = 0; k < 8; ++k) {{
+                                        float d = static_cast<float>(vp[k]) - mean;
+                                        var += d * d;
+                                    }}
+                                }}
+                            }}
+                        }} else {{
+                            for (int v = tid; v < kVecN; v += kThreads) {{
+                                uint4 raw = x8[v];
+                                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                #pragma unroll
+                                for (int k = 0; k < 8; ++k) {{
+                                    float d = static_cast<float>(vp[k]) - mean;
+                                    var += d * d;
+                                }}
+                            }}
+                        }}
+                        var = warp_sum(var);
+                        if (lane == 0) warp_buf[warp] = var;
+                        __syncthreads();
+                        if (warp == 0) {{
+                            float total = lane < kWarps ? warp_buf[lane] : 0.0f;
+                            total = warp_sum(total);
+                            if (lane == 0) {{
+                                use_double = !isfinite(total);
+                                if (!use_double)
+                                    inv_std_shared = rsqrtf(total / {hidden}.0f + static_cast<float>(eps));
+                            }}
+                        }}
+                        __syncthreads();
+                    }}
+                    if (use_double) {{
+                        double double_sum = 0.0;
+                        for (int j = tid; j < {hidden}; j += kThreads)
+                            double_sum += static_cast<double>(x[row * {hidden}LL + j]);
+                        double_sum = warp_sum_double(double_sum);
+                        if (lane == 0) warp_double_buf[warp] = double_sum;
+                        __syncthreads();
+                        if (warp == 0) {{
+                            double total = lane < kWarps ? warp_double_buf[lane] : 0.0;
+                            total = warp_sum_double(total);
+                            if (lane == 0) mean_double_shared = total / {hidden}.0;
+                        }}
+                        __syncthreads();
+                        double dm = mean_double_shared, dvar = 0.0;
+                        for (int j = tid; j < {hidden}; j += kThreads) {{
+                            double d = static_cast<double>(x[row * {hidden}LL + j]) - dm;
+                            dvar += d * d;
+                        }}
+                        dvar = warp_sum_double(dvar);
+                        if (lane == 0) warp_double_buf[warp] = dvar;
+                        __syncthreads();
+                        if (warp == 0) {{
+                            double total = lane < kWarps ? warp_double_buf[lane] : 0.0;
+                            total = warp_sum_double(total);
+                            if (lane == 0) inv_std_double_shared = 1.0 / sqrt(total / {hidden}.0 + eps);
+                        }}
+                        __syncthreads();
+                        double dinv = inv_std_double_shared;
+                        for (int j = tid; j < {hidden}; j += kThreads)
+                            y[row * {hidden}LL + j] = out0_type(
+                                (static_cast<double>(x[row * {hidden}LL + j]) - dm)
+                                * dinv * {scale_literal} + {offset_literal});
+                    }} else {{
+                        float mean = mean_shared, inv_std = inv_std_shared;
+                        if (kVecCache) {{
+                            #pragma unroll
+                            for (int i = 0; i < kVecPer; ++i) {{
+                                int v = tid + i * kThreads;
+                                if (v < kVecN) {{
+                                    uint4 raw = cache[i];
+                                    const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                    uint4 outraw;
+                                    out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                                    #pragma unroll
+                                    for (int k = 0; k < 8; ++k)
+                                        op[k] = out0_type((static_cast<float>(vp[k]) - mean) * inv_std * {scale_literal} + {offset_literal});
+                                    y8[v] = outraw;
+                                }}
+                            }}
+                        }} else {{
+                            for (int v = tid; v < kVecN; v += kThreads) {{
+                                uint4 raw = x8[v];
+                                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                uint4 outraw;
+                                out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                                #pragma unroll
+                                for (int k = 0; k < 8; ++k)
+                                    op[k] = out0_type((static_cast<float>(vp[k]) - mean) * inv_std * {scale_literal} + {offset_literal});
+                                y8[v] = outraw;
+                            }}
+                        }}
+                    }}
+                }}
+            }}
+            __global__ __launch_bounds__({vec4_t}) static void kernel_vec4b(
+                    const in0_type* __restrict__ x, out0_type* __restrict__ y, double eps) {{
+                if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0) {{
+                    constexpr int kVecN = {vec4_n};
+                    constexpr int kThreads = {vec4_t};
+                    constexpr int kWarps = {vec4_w};
+                    constexpr int kVecPer = (kVecN + kThreads - 1) / kThreads;
+                    constexpr bool kVecCache = kVecPer <= 4;
+                    long long row = blockIdx.x;
+                    int tid = threadIdx.x;
+                    int lane = tid & 31;
+                    int warp = tid >> 5;
+                    __shared__ float warp_buf[kWarps];
+                    __shared__ float mean_shared, inv_std_shared;
+                    __shared__ double warp_double_buf[kWarps];
+                    __shared__ double mean_double_shared, inv_std_double_shared;
+                    __shared__ int use_double;
+                    const float4* x4 = reinterpret_cast<const float4*>(x + row * {hidden}LL);
+                    float4* y4 = reinterpret_cast<float4*>(y + row * {hidden}LL);
+                    float4 cache[kVecCache ? (kVecPer > 0 ? kVecPer : 1) : 1];
+                    float sum = 0.0f;
+                    if (kVecCache) {{
+                        #pragma unroll
+                        for (int i = 0; i < kVecPer; ++i) {{
+                            int v = tid + i * kThreads;
+                            if (v < kVecN) {{
+                                float4 val = x4[v];
+                                cache[i] = val;
+                                sum += val.x + val.y + val.z + val.w;
+                            }}
+                        }}
+                    }} else {{
+                        for (int v = tid; v < kVecN; v += kThreads) {{
+                            float4 val = x4[v];
+                            sum += val.x + val.y + val.z + val.w;
+                        }}
+                    }}
+                    sum = warp_sum(sum);
+                    if (lane == 0) warp_buf[warp] = sum;
+                    __syncthreads();
+                    if (warp == 0) {{
+                        float total = lane < kWarps ? warp_buf[lane] : 0.0f;
+                        total = warp_sum(total);
+                        if (lane == 0) {{
+                            use_double = !isfinite(total);
+                            if (!use_double) mean_shared = total / {hidden}.0f;
+                        }}
+                    }}
+                    __syncthreads();
+                    if (!use_double) {{
+                        float mean = mean_shared;
+                        float var = 0.0f;
+                        if (kVecCache) {{
+                            #pragma unroll
+                            for (int i = 0; i < kVecPer; ++i) {{
+                                int v = tid + i * kThreads;
+                                if (v < kVecN) {{
+                                    float4 val = cache[i];
+                                    float dx = val.x - mean, dy = val.y - mean, dz = val.z - mean, dw = val.w - mean;
+                                    var += dx * dx + dy * dy + dz * dz + dw * dw;
+                                }}
+                            }}
+                        }} else {{
+                            for (int v = tid; v < kVecN; v += kThreads) {{
+                                float4 val = x4[v];
+                                float dx = val.x - mean, dy = val.y - mean, dz = val.z - mean, dw = val.w - mean;
+                                var += dx * dx + dy * dy + dz * dz + dw * dw;
+                            }}
+                        }}
+                        var = warp_sum(var);
+                        if (lane == 0) warp_buf[warp] = var;
+                        __syncthreads();
+                        if (warp == 0) {{
+                            float total = lane < kWarps ? warp_buf[lane] : 0.0f;
+                            total = warp_sum(total);
+                            if (lane == 0) {{
+                                use_double = !isfinite(total);
+                                if (!use_double)
+                                    inv_std_shared = rsqrtf(total / {hidden}.0f + static_cast<float>(eps));
+                            }}
+                        }}
+                        __syncthreads();
+                    }}
+                    if (use_double) {{
+                        double double_sum = 0.0;
+                        for (int j = tid; j < {hidden}; j += kThreads)
+                            double_sum += static_cast<double>(x[row * {hidden}LL + j]);
+                        double_sum = warp_sum_double(double_sum);
+                        if (lane == 0) warp_double_buf[warp] = double_sum;
+                        __syncthreads();
+                        if (warp == 0) {{
+                            double total = lane < kWarps ? warp_double_buf[lane] : 0.0;
+                            total = warp_sum_double(total);
+                            if (lane == 0) mean_double_shared = total / {hidden}.0;
+                        }}
+                        __syncthreads();
+                        double dm = mean_double_shared, dvar = 0.0;
+                        for (int j = tid; j < {hidden}; j += kThreads) {{
+                            double d = static_cast<double>(x[row * {hidden}LL + j]) - dm;
+                            dvar += d * d;
+                        }}
+                        dvar = warp_sum_double(dvar);
+                        if (lane == 0) warp_double_buf[warp] = dvar;
+                        __syncthreads();
+                        if (warp == 0) {{
+                            double total = lane < kWarps ? warp_double_buf[lane] : 0.0;
+                            total = warp_sum_double(total);
+                            if (lane == 0) inv_std_double_shared = 1.0 / sqrt(total / {hidden}.0 + eps);
+                        }}
+                        __syncthreads();
+                        double dinv = inv_std_double_shared;
+                        for (int j = tid; j < {hidden}; j += kThreads)
+                            y[row * {hidden}LL + j] = out0_type(
+                                (static_cast<double>(x[row * {hidden}LL + j]) - dm)
+                                * dinv * {scale_literal} + {offset_literal});
+                    }} else {{
+                        float mean = mean_shared, inv_std = inv_std_shared;
+                        if (kVecCache) {{
+                            #pragma unroll
+                            for (int i = 0; i < kVecPer; ++i) {{
+                                int v = tid + i * kThreads;
+                                if (v < kVecN) {{
+                                    float4 val = cache[i];
+                                    float4 outv;
+                                    outv.x = (val.x - mean) * inv_std * {scale_literal} + {offset_literal};
+                                    outv.y = (val.y - mean) * inv_std * {scale_literal} + {offset_literal};
+                                    outv.z = (val.z - mean) * inv_std * {scale_literal} + {offset_literal};
+                                    outv.w = (val.w - mean) * inv_std * {scale_literal} + {offset_literal};
+                                    y4[v] = outv;
+                                }}
+                            }}
+                        }} else {{
+                            for (int v = tid; v < kVecN; v += kThreads) {{
+                                float4 val = x4[v];
+                                float4 outv;
+                                outv.x = (val.x - mean) * inv_std * {scale_literal} + {offset_literal};
+                                outv.y = (val.y - mean) * inv_std * {scale_literal} + {offset_literal};
+                                outv.z = (val.z - mean) * inv_std * {scale_literal} + {offset_literal};
+                                outv.w = (val.w - mean) * inv_std * {scale_literal} + {offset_literal};
+                                y4[v] = outv;
+                            }}
+                        }}
+                    }}
+                }}
             }}
             __global__ static void kernel(
                     in0_type* x, out0_type* y, int hidden, double eps) {{
@@ -275,8 +591,16 @@ def _block_rows_source_scalar(hidden, offset_literal, scale_literal):
                 }}
             }}
             double eps = data["eps"];
-            int rows = in0->num / {hidden};
-            kernel<<<rows, 128>>>(in0_p, out0_p, {hidden}, eps);
+            long long rows = in0->num / {hidden};
+            if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0
+                    && ((((size_t)in0_p | (size_t)out0_p) & 15u) == 0)) {{
+                kernel_vec2b<<<(unsigned)rows, {vec2_t}>>>(in0_p, out0_p, eps);
+            }} else if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0
+                    && ((((size_t)in0_p | (size_t)out0_p) & 15u) == 0)) {{
+                kernel_vec4b<<<(unsigned)rows, {vec4_t}>>>(in0_p, out0_p, eps);
+            }} else {{
+                kernel<<<(unsigned)rows, 128>>>(in0_p, out0_p, {hidden}, eps);
+            }}
             """
 
 
@@ -288,18 +612,323 @@ def _block_rows_source(hidden, has_bias=True, offset_literal="0.0f", offset_valu
     bias_arg = "in2_p, " if has_bias else ""
     offset_d = "static_cast<double>(bias[j])" if has_bias else repr(offset_value)
     offset_f = "static_cast<float>(bias[j])" if has_bias else offset_literal
+    vec2_n, vec2_t, vec2_w = _ln_vec_threads(hidden, 8)
+    vec4_n, vec4_t, vec4_w = _ln_vec_threads(hidden, 4)
+    bias_vec2_load = (
+        "bool b_vec = (sizeof(in2_type) == 2) && ((((size_t)bias) & 15u) == 0);"
+        " const uint4* b8 = b_vec ? reinterpret_cast<const uint4*>(bias) : nullptr;"
+        if has_bias else ""
+    )
+    bias_vec2_val = (
+        "uint4 braw = b_vec ? b8[v] : make_uint4(0,0,0,0);"
+        " const in2_type* bp = reinterpret_cast<const in2_type*>(&braw);"
+        if has_bias else ""
+    )
+    bias_vec2_k = (
+        "(b_vec ? static_cast<float>(bp[k]) : static_cast<float>(bias[v * 8 + k]))"
+        if has_bias else offset_literal
+    )
+    bias_vec4_load = (
+        "bool b_vec = (sizeof(in2_type) == 4) && ((((size_t)bias) & 15u) == 0);"
+        " const float4* b4 = b_vec ? reinterpret_cast<const float4*>(bias) : nullptr;"
+        if has_bias else ""
+    )
+    bias_vec4_val = (
+        "float4 bv = b_vec ? b4[v] : make_float4("
+        "static_cast<float>(bias[v*4]), static_cast<float>(bias[v*4+1]),"
+        " static_cast<float>(bias[v*4+2]), static_cast<float>(bias[v*4+3]));"
+        if has_bias else f"float4 bv = make_float4({offset_literal}, {offset_literal}, {offset_literal}, {offset_literal});"
+    )
     reductions = "".join(f"""
-        __device__ __forceinline__ {dtype} block_sum(
-                {dtype} value, {dtype}* scratch, int lane, int warp) {{
+        __device__ __forceinline__ {dtype} warp_sum_{dtype}({dtype} value) {{
             for (int offset = 16; offset > 0; offset >>= 1)
                 value += __shfl_down_sync(0xffffffff, value, offset);
+            return value;
+        }}
+        __device__ __forceinline__ {dtype} block_sum(
+                {dtype} value, {dtype}* scratch, int lane, int warp) {{
+            value = warp_sum_{dtype}(value);
             if (lane == 0) scratch[warp] = value;
             __syncthreads();
             return (scratch[0] + scratch[2]) + (scratch[1] + scratch[3]);
         }}
+        __device__ __forceinline__ {dtype} block_sum_n(
+                {dtype} value, {dtype}* scratch, int lane, int warp, int kWarps) {{
+            value = warp_sum_{dtype}(value);
+            if (kWarps == 1) {{
+                return __shfl_sync(0xffffffff, value, 0);
+            }}
+            if (lane == 0) scratch[warp] = value;
+            __syncthreads();
+            if (warp == 0) {{
+                {dtype} total = lane < kWarps ? scratch[lane] : ({dtype})0;
+                total = warp_sum_{dtype}(total);
+                if (lane == 0) scratch[0] = total;
+            }}
+            __syncthreads();
+            return scratch[0];
+        }}
     """ for dtype in ("float", "double"))
     return f"""
         {reductions}
+        __global__ __launch_bounds__({vec2_t}) static void kernel_vec2b(
+                const in0_type* __restrict__ x, const in1_type* __restrict__ weight{bias_param},
+                out0_type* __restrict__ y, double eps) {{
+            if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0) {{
+                constexpr int kVecN = {vec2_n};
+                constexpr int kThreads = {vec2_t};
+                constexpr int kWarps = {vec2_w};
+                constexpr int kVecPer = (kVecN + kThreads - 1) / kThreads;
+                constexpr bool kVecCache = kVecPer <= 4;
+                long long row = blockIdx.x;
+                int tid = threadIdx.x;
+                int lane = tid & 31;
+                int warp = tid >> 5;
+                __shared__ float sum_scratch[kWarps], variance_scratch[kWarps];
+                __shared__ double double_sum_scratch[kWarps], double_variance_scratch[kWarps];
+                const uint4* x8 = reinterpret_cast<const uint4*>(x + row * {hidden}LL);
+                uint4* y8 = reinterpret_cast<uint4*>(y + row * {hidden}LL);
+                uint4 cache[kVecCache ? (kVecPer > 0 ? kVecPer : 1) : 1];
+                float sum = 0.0f;
+                if (kVecCache) {{
+                    #pragma unroll
+                    for (int i = 0; i < kVecPer; ++i) {{
+                        int v = tid + i * kThreads;
+                        if (v < kVecN) {{
+                            uint4 raw = x8[v];
+                            cache[i] = raw;
+                            const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                            #pragma unroll
+                            for (int k = 0; k < 8; ++k) sum += static_cast<float>(vp[k]);
+                        }}
+                    }}
+                }} else {{
+                    for (int v = tid; v < kVecN; v += kThreads) {{
+                        uint4 raw = x8[v];
+                        const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                        #pragma unroll
+                        for (int k = 0; k < 8; ++k) sum += static_cast<float>(vp[k]);
+                    }}
+                }}
+                sum = block_sum_n(sum, sum_scratch, lane, warp, kWarps);
+                float mean = sum / {hidden}.0f;
+                float inv_std = 0.0f;
+                bool use_double = !isfinite(sum);
+                if (!use_double) {{
+                    float var = 0.0f;
+                    if (kVecCache) {{
+                        #pragma unroll
+                        for (int i = 0; i < kVecPer; ++i) {{
+                            int v = tid + i * kThreads;
+                            if (v < kVecN) {{
+                                uint4 raw = cache[i];
+                                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                #pragma unroll
+                                for (int k = 0; k < 8; ++k) {{
+                                    float d = static_cast<float>(vp[k]) - mean;
+                                    var += d * d;
+                                }}
+                            }}
+                        }}
+                    }} else {{
+                        for (int v = tid; v < kVecN; v += kThreads) {{
+                            uint4 raw = x8[v];
+                            const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                            #pragma unroll
+                            for (int k = 0; k < 8; ++k) {{
+                                float d = static_cast<float>(vp[k]) - mean;
+                                var += d * d;
+                            }}
+                        }}
+                    }}
+                    var = block_sum_n(var, variance_scratch, lane, warp, kWarps);
+                    use_double = !isfinite(var);
+                    inv_std = rsqrtf(var / {hidden}.0f + static_cast<float>(eps));
+                }}
+                if (use_double) {{
+                    double dsum = 0.0;
+                    for (int j = tid; j < {hidden}; j += kThreads)
+                        dsum += static_cast<double>(x[row * {hidden}LL + j]);
+                    double dmean = block_sum_n(dsum, double_sum_scratch, lane, warp, kWarps) / {hidden}.0;
+                    double dvar = 0.0;
+                    for (int j = tid; j < {hidden}; j += kThreads) {{
+                        double d = static_cast<double>(x[row * {hidden}LL + j]) - dmean;
+                        dvar += d * d;
+                    }}
+                    dvar = block_sum_n(dvar, double_variance_scratch, lane, warp, kWarps);
+                    double dinv = 1.0 / sqrt(dvar / {hidden}.0 + eps);
+                    for (int j = tid; j < {hidden}; j += kThreads) {{
+                        double scale = static_cast<double>(weight[j]);
+                        double offset = {offset_d};
+                        y[row * {hidden}LL + j] = out0_type(
+                            (static_cast<double>(x[row * {hidden}LL + j]) - dmean) * dinv * scale + offset);
+                    }}
+                }} else {{
+                    bool w_vec = (sizeof(in1_type) == 2) && ((((size_t)weight) & 15u) == 0);
+                    const uint4* w8 = w_vec ? reinterpret_cast<const uint4*>(weight) : nullptr;
+                    {bias_vec2_load}
+                    if (kVecCache) {{
+                        #pragma unroll
+                        for (int i = 0; i < kVecPer; ++i) {{
+                            int v = tid + i * kThreads;
+                            if (v < kVecN) {{
+                                uint4 raw = cache[i];
+                                const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                                uint4 wraw = w_vec ? w8[v] : make_uint4(0,0,0,0);
+                                const in1_type* wp = reinterpret_cast<const in1_type*>(&wraw);
+                                {bias_vec2_val}
+                                uint4 outraw;
+                                out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                                #pragma unroll
+                                for (int k = 0; k < 8; ++k) {{
+                                    float sc = w_vec ? static_cast<float>(wp[k]) : static_cast<float>(weight[v * 8 + k]);
+                                    float of = {bias_vec2_k};
+                                    op[k] = out0_type((static_cast<float>(vp[k]) - mean) * inv_std * sc + of);
+                                }}
+                                y8[v] = outraw;
+                            }}
+                        }}
+                    }} else {{
+                        for (int v = tid; v < kVecN; v += kThreads) {{
+                            uint4 raw = x8[v];
+                            const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
+                            uint4 wraw = w_vec ? w8[v] : make_uint4(0,0,0,0);
+                            const in1_type* wp = reinterpret_cast<const in1_type*>(&wraw);
+                            {bias_vec2_val}
+                            uint4 outraw;
+                            out0_type* op = reinterpret_cast<out0_type*>(&outraw);
+                            #pragma unroll
+                            for (int k = 0; k < 8; ++k) {{
+                                float sc = w_vec ? static_cast<float>(wp[k]) : static_cast<float>(weight[v * 8 + k]);
+                                float of = {bias_vec2_k};
+                                op[k] = out0_type((static_cast<float>(vp[k]) - mean) * inv_std * sc + of);
+                            }}
+                            y8[v] = outraw;
+                        }}
+                    }}
+                }}
+            }}
+        }}
+        __global__ __launch_bounds__({vec4_t}) static void kernel_vec4b(
+                const in0_type* __restrict__ x, const in1_type* __restrict__ weight{bias_param},
+                out0_type* __restrict__ y, double eps) {{
+            if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0) {{
+                constexpr int kVecN = {vec4_n};
+                constexpr int kThreads = {vec4_t};
+                constexpr int kWarps = {vec4_w};
+                constexpr int kVecPer = (kVecN + kThreads - 1) / kThreads;
+                constexpr bool kVecCache = kVecPer <= 4;
+                long long row = blockIdx.x;
+                int tid = threadIdx.x;
+                int lane = tid & 31;
+                int warp = tid >> 5;
+                __shared__ float sum_scratch[kWarps], variance_scratch[kWarps];
+                __shared__ double double_sum_scratch[kWarps], double_variance_scratch[kWarps];
+                const float4* x4 = reinterpret_cast<const float4*>(x + row * {hidden}LL);
+                float4* y4 = reinterpret_cast<float4*>(y + row * {hidden}LL);
+                float4 cache[kVecCache ? (kVecPer > 0 ? kVecPer : 1) : 1];
+                float sum = 0.0f;
+                if (kVecCache) {{
+                    #pragma unroll
+                    for (int i = 0; i < kVecPer; ++i) {{
+                        int v = tid + i * kThreads;
+                        if (v < kVecN) {{
+                            float4 val = x4[v];
+                            cache[i] = val;
+                            sum += val.x + val.y + val.z + val.w;
+                        }}
+                    }}
+                }} else {{
+                    for (int v = tid; v < kVecN; v += kThreads) {{
+                        float4 val = x4[v];
+                        sum += val.x + val.y + val.z + val.w;
+                    }}
+                }}
+                sum = block_sum_n(sum, sum_scratch, lane, warp, kWarps);
+                float mean = sum / {hidden}.0f;
+                float inv_std = 0.0f;
+                bool use_double = !isfinite(sum);
+                if (!use_double) {{
+                    float var = 0.0f;
+                    if (kVecCache) {{
+                        #pragma unroll
+                        for (int i = 0; i < kVecPer; ++i) {{
+                            int v = tid + i * kThreads;
+                            if (v < kVecN) {{
+                                float4 val = cache[i];
+                                float dx = val.x - mean, dy = val.y - mean, dz = val.z - mean, dw = val.w - mean;
+                                var += dx * dx + dy * dy + dz * dz + dw * dw;
+                            }}
+                        }}
+                    }} else {{
+                        for (int v = tid; v < kVecN; v += kThreads) {{
+                            float4 val = x4[v];
+                            float dx = val.x - mean, dy = val.y - mean, dz = val.z - mean, dw = val.w - mean;
+                            var += dx * dx + dy * dy + dz * dz + dw * dw;
+                        }}
+                    }}
+                    var = block_sum_n(var, variance_scratch, lane, warp, kWarps);
+                    use_double = !isfinite(var);
+                    inv_std = rsqrtf(var / {hidden}.0f + static_cast<float>(eps));
+                }}
+                if (use_double) {{
+                    double dsum = 0.0;
+                    for (int j = tid; j < {hidden}; j += kThreads)
+                        dsum += static_cast<double>(x[row * {hidden}LL + j]);
+                    double dmean = block_sum_n(dsum, double_sum_scratch, lane, warp, kWarps) / {hidden}.0;
+                    double dvar = 0.0;
+                    for (int j = tid; j < {hidden}; j += kThreads) {{
+                        double d = static_cast<double>(x[row * {hidden}LL + j]) - dmean;
+                        dvar += d * d;
+                    }}
+                    dvar = block_sum_n(dvar, double_variance_scratch, lane, warp, kWarps);
+                    double dinv = 1.0 / sqrt(dvar / {hidden}.0 + eps);
+                    for (int j = tid; j < {hidden}; j += kThreads) {{
+                        double scale = static_cast<double>(weight[j]);
+                        double offset = {offset_d};
+                        y[row * {hidden}LL + j] = out0_type(
+                            (static_cast<double>(x[row * {hidden}LL + j]) - dmean) * dinv * scale + offset);
+                    }}
+                }} else {{
+                    bool w_vec = (sizeof(in1_type) == 4) && ((((size_t)weight) & 15u) == 0);
+                    const float4* w4 = w_vec ? reinterpret_cast<const float4*>(weight) : nullptr;
+                    {bias_vec4_load}
+                    if (kVecCache) {{
+                        #pragma unroll
+                        for (int i = 0; i < kVecPer; ++i) {{
+                            int v = tid + i * kThreads;
+                            if (v < kVecN) {{
+                                float4 val = cache[i];
+                                float4 wv = w_vec ? w4[v] : make_float4(
+                                    static_cast<float>(weight[v*4]), static_cast<float>(weight[v*4+1]),
+                                    static_cast<float>(weight[v*4+2]), static_cast<float>(weight[v*4+3]));
+                                {bias_vec4_val}
+                                float4 outv;
+                                outv.x = (val.x - mean) * inv_std * wv.x + bv.x;
+                                outv.y = (val.y - mean) * inv_std * wv.y + bv.y;
+                                outv.z = (val.z - mean) * inv_std * wv.z + bv.z;
+                                outv.w = (val.w - mean) * inv_std * wv.w + bv.w;
+                                y4[v] = outv;
+                            }}
+                        }}
+                    }} else {{
+                        for (int v = tid; v < kVecN; v += kThreads) {{
+                            float4 val = x4[v];
+                            float4 wv = w_vec ? w4[v] : make_float4(
+                                static_cast<float>(weight[v*4]), static_cast<float>(weight[v*4+1]),
+                                static_cast<float>(weight[v*4+2]), static_cast<float>(weight[v*4+3]));
+                            {bias_vec4_val}
+                            float4 outv;
+                            outv.x = (val.x - mean) * inv_std * wv.x + bv.x;
+                            outv.y = (val.y - mean) * inv_std * wv.y + bv.y;
+                            outv.z = (val.z - mean) * inv_std * wv.z + bv.z;
+                            outv.w = (val.w - mean) * inv_std * wv.w + bv.w;
+                            y4[v] = outv;
+                        }}
+                    }}
+                }}
+            }}
+        }}
         __global__ static void kernel(
                 in0_type* x, in1_type* weight{bias_param},
                 out0_type* y, double eps) {{
@@ -397,8 +1026,18 @@ def _block_rows_source(hidden, has_bias=True, offset_literal="0.0f", offset_valu
         }}
         double eps = data["eps"];
         long long rows = in0->num / {hidden};
-        kernel<<<(unsigned)rows, 128>>>(
-            in0_p, in1_p, {bias_arg}out0_p, eps);
+        if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0
+                && ((((size_t)in0_p | (size_t)out0_p) & 15u) == 0)) {{
+            kernel_vec2b<<<(unsigned)rows, {vec2_t}>>>(
+                in0_p, in1_p, {bias_arg}out0_p, eps);
+        }} else if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0
+                && ((((size_t)in0_p | (size_t)out0_p) & 15u) == 0)) {{
+            kernel_vec4b<<<(unsigned)rows, {vec4_t}>>>(
+                in0_p, in1_p, {bias_arg}out0_p, eps);
+        }} else {{
+            kernel<<<(unsigned)rows, 128>>>(
+                in0_p, in1_p, {bias_arg}out0_p, eps);
+        }}
         """
 
 
