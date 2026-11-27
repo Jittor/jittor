@@ -215,6 +215,33 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
                     self.assertLessEqual(float(np.abs(grad_got - grad_ref).max()),
                                          grad_tol)
 
+    def test_many_short_half_rows_match_cpu(self):
+        rng = np.random.RandomState(176)
+        values = rng.uniform(-4, 4, (1025, 53)).astype("float16").astype("float32")
+        weights = rng.uniform(0.1, 1.5, values.shape).astype("float32")
+        for log in (False, True):
+            with self.subTest(log=log):
+                expected, _ = self._cpu(values, weights, log)
+                with jt.flag_scope(use_cuda=1):
+                    source = jt.array(values).float16()
+                    out = softmax_v1(source, log=log)
+                    grad = jt.grad((out.float32() * jt.array(weights)).sum(), source)
+                    got, got_grad = jt.fetch_sync([out.float32(), grad.float32()])
+                    self.assertEqual(out.location(), "device")
+                    self.assertEqual(grad.location(), "device")
+                np.testing.assert_allclose(got, expected, rtol=2e-3, atol=1e-6)
+                cot = weights.astype(np.float16).astype(np.float64)
+                prob = np.exp(got.astype(np.float64)) if log else got.astype(np.float64)
+                if log:
+                    product = prob * cot.sum(axis=-1, keepdims=True)
+                    expected_grad = cot - product
+                    budget = np.finfo(np.float16).eps * (np.abs(product) + np.abs(expected_grad))
+                else:
+                    dot = (prob * cot).sum(axis=-1, keepdims=True)
+                    expected_grad = prob * (cot - dot)
+                    budget = np.finfo(np.float16).eps * (2 * prob * dot + 2 * np.abs(expected_grad))
+                self.assertTrue(np.all(np.abs(got_grad - expected_grad) <= budget + 3e-8))
+
     def test_short_rows_preserve_nan_and_masked_row_semantics(self):
         x_np = np.zeros((4097, 33), dtype="float32")
         x_np[0] = -np.inf

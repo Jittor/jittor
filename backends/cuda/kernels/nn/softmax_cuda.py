@@ -95,8 +95,8 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
         for_loop += f"if ((i*{tnum}+threadIdx.x)*{ILP} < len)\n"
 
     # Short rows need no communication between warps. Pack eight independent
-    # warp reductions into one block when there are enough
-    # FP32 rows to fill the GPU. Wider rows keep the block kernel: its extra
+    # warp reductions into one block when there are enough rows to fill
+    # the GPU. Wider rows keep the block kernel: its extra
     # memory parallelism is faster once a warp holds too many columns.
     warp_source = f"""
 __global__ void softmax_warp_rows(in0_type* x, out0_type* y, int len, int rows) {{
@@ -147,7 +147,9 @@ __global__ void softmax_warp_rows(in0_type* x, out0_type* y, int len, int rows) 
     launch = f"kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);"
     if warp_source:
         launch = f"""
-if (std::is_same<in0_type, float>::value && bnum >= 4096) {{
+constexpr bool narrow_half_rows = sizeof(in0_type) == 2 && {length} <= 128;
+if (bnum >= (narrow_half_rows ? 1024 : 4096)
+        && (narrow_half_rows || std::is_same<in0_type, float>::value)) {{
     softmax_warp_rows<<<(static_cast<unsigned>(bnum) + 7) / 8, 256>>>(in0_p, out0_p, len, bnum);
 }} else {{
     {launch}
@@ -558,7 +560,13 @@ def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
     cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
            if kind == "register" else
            _softmax_streaming_cls(threads, bool(log), bool(zero_all_neg_inf)))
-    return cls()(a)
+    result = cls()(a)
+    if (not log and not zero_all_neg_inf and a.ndim == 4 and jt.flags.no_grad
+            and 16 <= length <= 64 and a.numel() // length >= 1024):
+        from .short_attention_cuda import record_softmax
+
+        record_softmax(result, a)
+    return result
 
 
 def softmax_v1(a, log=False, zero_all_neg_inf=False):

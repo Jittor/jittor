@@ -738,6 +738,11 @@ def _matmul_impl(a, b):
         trans_a, trans_b = a_base is not None, b_base is not None
         fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
         if fast is not None:
+            if (len_a == 4 and jt.flags.no_grad and fast.placement_backend == 1
+                    and _jittor_dtype_name(fast.dtype) == "float16"):
+                from jittor.backends.cuda.kernels.nn.short_attention_cuda import record_matmul
+
+                record_matmul(fast, a, b)
             return _keep_operand_grads(a, b, aa, bb, fast)
     shape = []
     len_c = max(len_a, len_b)

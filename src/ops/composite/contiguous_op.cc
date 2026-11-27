@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <type_traits>
 #include "ops/composite/contiguous_op.h"
 #include "core/var.h"
 
@@ -17,15 +18,23 @@ static int transpose_column_begin(const Var* input, int unit_axis, int64& column
 #ifndef JIT
 static int packed_cuda_copy_width(const Var* input) {
     const int rank = input->shape.size();
-    const int width = 16 / input->dsize();
-    if (width < 2 || input->storage_stride(rank-1) != 1
-            || input->shape[rank-1] % width || input->storage_offset_bytes % 16)
-        return 1;
-    // An aligned base only suffices if every row begins at a vector boundary.
-    for (int axis = 0; axis < rank-1; ++axis)
-        if (input->shape[axis] > 1 && input->storage_stride(axis) % width)
-            return 1;
-    return width;
+    const int element_bytes = input->dsize();
+    if (input->storage_stride(rank - 1) != 1) return 1;
+    for (int copy_bytes : {16, 8, 4}) {
+        if (copy_bytes <= element_bytes) break;
+        const int width = copy_bytes / element_bytes;
+        if (input->shape[rank - 1] % width || input->storage_offset_bytes % copy_bytes)
+            continue;
+        bool aligned = true;
+        for (int axis = 0; axis < rank - 1; ++axis) {
+            if (input->shape[axis] > 1 && input->storage_stride(axis) % width) {
+                aligned = false;
+                break;
+            }
+        }
+        if (aligned) return width;
+    }
+    return 1;
 }
 
 static int tiled_cuda_transpose_axis(const Var* input) {
@@ -62,9 +71,7 @@ ContiguousOp::ContiguousOp(Var* input) : x(input) {
         if (cuda_copy_width == 1)
             cuda_transpose_axis = tiled_cuda_transpose_axis(x);
     }
-    // Keep transpose candidates eligible for fusion. The executor selects
-    // the tiled launch when this copy is alone in its segment.
-    set_type(cuda_copy_width > 1 ? OpType::other : OpType::element);
+    set_type(OpType::element);
     y = create_output(nullptr, x->dtype());
 }
 void ContiguousOp::infer_shape() { y->set_shape(x->shape); }
@@ -82,12 +89,16 @@ void ContiguousOp::jit_prepare(JK& jk) {
     jk << "«COPY_WIDTH=" << JK::hex(cuda_copy_width);
 }
 #else
-#if defined(JIT_cuda) && COPY_WIDTH > 1
+#if defined(JIT_cuda) && COPY_WIDTH > 1 && !defined(JIT_fuser)
 namespace {
+constexpr size_t copy_bytes = COPY_WIDTH * sizeof(Tx);
+using CopyVector = std::conditional_t<copy_bytes == 16, uint4,
+                   std::conditional_t<copy_bytes == 8, uint2, uint32_t>>;
+
 struct ContiguousCopy {
     index_t shape[DIM];
     index_t stride[DIM];
-    uint32 reciprocal[DIM];
+    uint32_t reciprocal[DIM];
     index_t vectors;
 };
 
@@ -100,27 +111,24 @@ __global__ void packed_contiguous(const Tx* __restrict__ input,
         index_t index = vector, offset = 0;
         #pragma unroll
         for (int axis = DIM-1; axis > 0; --axis) {
-            if constexpr (sizeof(index_t) == sizeof(uint32)) {
-                const uint32 extent = copy.shape[axis];
-                const uint32 position = index;
-                uint32 quotient = extent == 1 ? position : __umulhi(position, copy.reciprocal[axis]);
-                uint32 remainder = position - quotient * extent;
-                if (remainder >= extent) {
-                    ++quotient;
-                    remainder -= extent;
-                }
-                offset += index_t(remainder) * copy.stride[axis];
-                index = index_t(quotient);
+            const index_t extent = copy.shape[axis];
+            if (extent == 1) continue;
+            index_t quotient;
+            if constexpr (sizeof(index_t) == sizeof(uint32_t)) {
+                const uint32_t numerator = index;
+                const uint32_t estimate = __umulhi(numerator, copy.reciprocal[axis]);
+                quotient = estimate - (estimate * uint32_t(extent) > numerator);
             } else {
-                offset += (index % copy.shape[axis]) * copy.stride[axis];
-                index /= copy.shape[axis];
+                quotient = index / extent;
             }
+            offset += (index - quotient * extent) * copy.stride[axis];
+            index = quotient;
         }
         offset += index * copy.stride[0];
         const Tx* src = input + offset;
         Tx* dst = output + vector * COPY_WIDTH;
         if constexpr (aligned) {
-            *reinterpret_cast<uint4*>(dst) = *reinterpret_cast<const uint4*>(src);
+            *reinterpret_cast<CopyVector*>(dst) = *reinterpret_cast<const CopyVector*>(src);
         } else {
             #pragma unroll
             for (int lane = 0; lane < COPY_WIDTH; ++lane)
@@ -140,15 +148,16 @@ void launch_packed_contiguous(Var* x, Var* y) {
     }
     copy.shape[DIM-1] /= COPY_WIDTH;
     copy.stride[DIM-1] = COPY_WIDTH;
-    if constexpr (sizeof(index_t) == sizeof(uint32)) {
-        for (int axis = 1; axis < DIM; ++axis)
-            copy.reciprocal[axis] = copy.shape[axis] == 1 ? 0
-                : (uint64(1) << 32) / copy.shape[axis];
+    if constexpr (sizeof(index_t) == sizeof(uint32_t)) {
+        for (int axis = 1; axis < DIM; ++axis) {
+            const uint64_t extent = copy.shape[axis];
+            copy.reciprocal[axis] = extent > 1 ? ((uint64_t(1) << 32) + extent - 1) / extent : 0;
+        }
     }
     constexpr int threads = 256;
     const int blocks = std::min<index_t>((copy.vectors - 1) / threads + 1, 4096);
     // Foreign storage may publish a base pointer that is already offset.
-    if ((((size_t)xp | (size_t)yp) & 15) == 0)
+    if ((((size_t)xp | (size_t)yp) & (copy_bytes - 1)) == 0)
         packed_contiguous<true><<<blocks, threads>>>(xp, yp, copy);
     else
         packed_contiguous<false><<<blocks, threads>>>(xp, yp, copy);

@@ -101,6 +101,22 @@ def test_positive_step_slice_has_storage_offset_and_strides():
     np.testing.assert_array_equal((v*2).numpy(), [2, 6, 10, 14])
 
 
+@pytest.mark.parametrize("extent, first, last", (
+    (16, 0, 16), (12, 0, 12), (6, 0, 6), (7, 0, 6), (16, 2, 6), (16, 1, 9),
+))
+def test_contiguous_copy_with_variable_row_alignment(extent, first, last):
+    values = np.arange(3 * 5 * 17 * extent, dtype=np.float32).reshape(3, 5, 17, extent)
+    values = (values / 64).astype(np.float16)
+    with jt.flag_scope(transpose_storage_view=1):
+        source = jt.array(values).transpose(1, 2, 0, 3)[..., first:last]
+        result = source.contiguous()
+        result.sync()
+        assert result.location() == ("device" if jt.flags.use_cuda else "cpu")
+        assert result._storage_is_contiguous()
+        assert result._storage_address != source._storage_address
+        np.testing.assert_array_equal(result.numpy(), values.transpose(1, 2, 0, 3)[..., first:last])
+
+
 def test_split_last_axis_preserves_multidimensional_prefix():
     # A getitem copy collapsed consecutive implicit dims into one loop that
     # walked the first dim's stride, so splitting the last axis of a

@@ -532,7 +532,7 @@ class _Capture:
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
                  "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
                  "shape_dependencies", "folded_leaves", "scalar_epoch", "scalar_guards",
-                 "used_guarded_scalar")
+                 "used_guarded_scalar", "short_attention")
 
     def __init__(self):
         self.prologue = []
@@ -550,6 +550,7 @@ class _Capture:
         self.scalar_epoch = None
         self.scalar_guards = {}
         self.used_guarded_scalar = False
+        self.short_attention = {}
 
 
 def _finish_normally(roots):
@@ -792,6 +793,7 @@ class StepCapture:
                 jt.flags.auto_flush_ops = flush_before
                 jt.flags.keep_graph = before
                 _ACTIVE = None
+                cap.short_attention.clear()
         if _core._host_readback_count() != readbacks:
             cap.refused = cap.refused or (
                 "the step read a value back to the host, so its path depends on "

@@ -53,6 +53,8 @@ class TestLayerNormInference(unittest.TestCase):
             jw, jb, wr, br = 1.5, -0.25, 1.5, -0.25
         with jt.no_grad():
             got = _ln._layer_norm_no_grad_cuda(jx, (hidden,), jw, jb, 1e-5)
+        got.sync()
+        self.assertEqual(got.location(), "device")
         want = _reference(xr, wr, br, 1e-5)
         tol = 1e-5 if dtype == "float32" else 2e-2
         np.testing.assert_allclose(got.float64().numpy(), want, rtol=tol,
@@ -67,10 +69,11 @@ class TestLayerNormInference(unittest.TestCase):
                     self._check(2048, hidden, dtype, tensor_affine)
 
     def test_the_block_per_row_kernel(self):
-        for rows, hidden in ((128, 768), (1024, 2048)):
+        for rows, hidden in ((197, 190), (128, 768), (1024, 2048)):
             self.assertFalse(_ln._warp_rows(jt.zeros((rows, hidden)), hidden))
-            for tensor_affine in (True, False):
-                self._check(rows, hidden, "float32", tensor_affine)
+            for dtype in ("float32", "float16"):
+                for tensor_affine in (True, False):
+                    self._check(rows, hidden, dtype, tensor_affine)
 
     def test_a_row_whose_float_sums_overflow(self):
         for rows, hidden in ((2048, 320), (128, 768)):

@@ -2697,6 +2697,12 @@ def _api_contiguous(self, memory_format="contiguous_format"):
         return self
     fast = _FAST_CONTIGUOUS
     if fast is not None and _owner.jt.contiguous is _NATIVE_CONTIGUOUS:
+        if self.ndim == 4 and _owner.jt.flags.no_grad and self.placement_backend == 1:
+            from jittor.backends.cuda.kernels.nn.short_attention_cuda import try_contiguous
+
+            ready = try_contiguous(self)
+            if ready is not None:
+                return ready
         context = get_install_context(_owner.jt)
         result = fast(self, context.state["Var"])
         if result is not None:

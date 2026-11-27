@@ -575,13 +575,14 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     if io_bias:
         bias = bias.cast(query.dtype)
     if training:
-        out = logical(_CudnnAttention.apply(
-            query, key, value, bias, scale, bool(is_causal), layout))
+        out = _CudnnAttention.apply(query, key, value, bias, scale, bool(is_causal), layout)
     else:
-        out = logical(_forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0])
+        out = _forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0]
     # Empty rows were made safe before cuDNN computes statistics. This masks
-    # their outputs and upstream gradients to zero, so its backward stays finite.
-    return jt.ternary(live.broadcast(out.shape), out, jt.zeros_like(out))
+    # their outputs and upstream gradients to zero in the kernel's layout.
+    if q_seq:
+        live = live._storage_permute(jt.NanoVector((0, 2, 1, 3)))
+    return logical(jt.ternary(live.broadcast(out.shape), out, jt.zeros_like(out)))
 
 
 #: What the last mask was turned into: (key, mask, bias, live rows). One

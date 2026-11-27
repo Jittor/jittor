@@ -106,6 +106,9 @@ class TestCudnnFusedAttention(unittest.TestCase):
         np.testing.assert_allclose(seq_out.float32().numpy(), want[0].transpose(0, 2, 1, 3),
                                    atol=2e-3, rtol=2e-3)
         if mask is not None:
+            self.assertTrue(seq_out._storage_is_contiguous())
+            self.assertEqual(out._storage_strides()[1], d)
+            self.assertEqual(out.location(), "device")
             return
         grads = jt.grad((out.float32() * jt.array(dout)).sum(), sources)
         for name, got, expected in zip("qkv", grads, want[1:]):
@@ -123,7 +126,9 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def test_seq_major_inputs_with_a_mask(self):
         mask = np.ones((2, 1, 70, 70), bool)
         mask[1, ..., 50:] = False
-        self._check_seq_major("qkv", mask)
+        mask[0, :, 14, :] = False
+        with jt.flag_scope(transpose_storage_view=1):
+            self._check_seq_major("qkv", mask)
 
     def test_float16_unequal_lengths(self):
         self._check_training("float16", 2, 4, 4, 33, 47, 64, False, 3e-3)

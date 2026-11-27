@@ -278,31 +278,28 @@ def _block_rows_source_scalar(hidden, offset_literal, scale_literal):
 def _block_rows_source(hidden):
     # Formatted once per configuration: the source is a pure function
     # of these, and a BERT-base forward built it 25 times.
+    reductions = "".join(f"""
+        __device__ __forceinline__ {dtype} block_sum(
+                {dtype} value, {dtype}* scratch, int lane, int warp) {{
+            for (int offset = 16; offset > 0; offset >>= 1)
+                value += __shfl_down_sync(0xffffffff, value, offset);
+            if (lane == 0) scratch[warp] = value;
+            __syncthreads();
+            return (scratch[0] + scratch[2]) + (scratch[1] + scratch[3]);
+        }}
+    """ for dtype in ("float", "double"))
     return f"""
-        __device__ __forceinline__ float warp_sum(float value) {{
-            for (int offset = 16; offset > 0; offset >>= 1)
-                value += __shfl_down_sync(0xffffffff, value, offset);
-            return value;
-        }}
-        __device__ __forceinline__ double warp_sum_double(double value) {{
-            for (int offset = 16; offset > 0; offset >>= 1)
-                value += __shfl_down_sync(0xffffffff, value, offset);
-            return value;
-        }}
+        {reductions}
         __global__ static void kernel(
                 in0_type* x, in1_type* weight, in2_type* bias,
-                out0_type* y, int hidden, double eps) {{
+                out0_type* y, double eps) {{
+            constexpr int hidden = {hidden};
             int row = blockIdx.x;
             int tid = threadIdx.x;
             int lane = tid & 31;
             int warp = tid >> 5;
-            __shared__ float warp_buf[4];
-            __shared__ float mean_shared;
-            __shared__ float inv_std_shared;
-            __shared__ double warp_double_buf[4];
-            __shared__ double mean_double_shared;
-            __shared__ double inv_std_double_shared;
-            __shared__ int use_double;
+            __shared__ float sum_scratch[4], variance_scratch[4];
+            __shared__ double double_sum_scratch[4], double_variance_scratch[4];
             // The row is read once and kept in registers: the mean pass, the
             // variance pass and the write all want the same values, and
             // re-reading them made this kernel move 4x the row where torch's
@@ -314,93 +311,58 @@ def _block_rows_source(hidden):
             float cache[kCache ? kPer : 1];
             float sum = 0.0f;
             if (kCache) {{
-                int i = 0;
-                for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
-                    cache[i] = static_cast<float>(x[row * hidden + j]);
-                    sum += cache[i];
+                #pragma unroll
+                for (int part = 0; part < kPer; ++part) {{
+                    int column = tid + part * 128;
+                    if (column < hidden) {{
+                        cache[part] = static_cast<float>(x[row * hidden + column]);
+                        sum += cache[part];
+                    }}
                 }}
             }} else {{
-                for (int j = tid; j < hidden; j += blockDim.x)
+                for (int j = tid; j < hidden; j += 128)
                     sum += static_cast<float>(x[row * hidden + j]);
             }}
-            sum = warp_sum(sum);
-            if (lane == 0) warp_buf[warp] = sum;
-            __syncthreads();
-            if (warp == 0) {{
-                float total = lane < 4 ? warp_buf[lane] : 0.0f;
-                total = warp_sum(total);
-                if (lane == 0) {{
-                    use_double = !isfinite(total);
-                    if (!use_double) mean_shared = total / hidden;
-                }}
-            }}
-            __syncthreads();
+            sum = block_sum(sum, sum_scratch, lane, warp);
+            float mean = sum / hidden;
+            float inv_std = 0.0f;
+            bool use_double = !isfinite(sum);
             if (!use_double) {{
-                float mean = mean_shared;
                 float var = 0.0f;
                 if (kCache) {{
-                    int i = 0;
-                    for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
-                        float d = cache[i] - mean;
-                        var += d * d;
+                    #pragma unroll
+                    for (int part = 0; part < kPer; ++part) {{
+                        if (tid + part * 128 < hidden) {{
+                            float d = cache[part] - mean;
+                            var += d * d;
+                        }}
                     }}
                 }} else {{
-                    for (int j = tid; j < hidden; j += blockDim.x) {{
+                    for (int j = tid; j < hidden; j += 128) {{
                         float d = static_cast<float>(
                             x[row * hidden + j]) - mean;
                         var += d * d;
                     }}
                 }}
-                var = warp_sum(var);
-                if (lane == 0) warp_buf[warp] = var;
-                __syncthreads();
-                if (warp == 0) {{
-                    float total = lane < 4 ? warp_buf[lane] : 0.0f;
-                    total = warp_sum(total);
-                    if (lane == 0) {{
-                        use_double = !isfinite(total);
-                        if (!use_double)
-                            inv_std_shared = rsqrtf(
-                                total / hidden + static_cast<float>(eps));
-                    }}
-                }}
-                __syncthreads();
+                var = block_sum(var, variance_scratch, lane, warp);
+                use_double = !isfinite(var);
+                inv_std = rsqrtf(var / hidden + static_cast<float>(eps));
             }}
             if (use_double) {{
                 double double_sum = 0.0;
-                for (int j = tid; j < hidden; j += blockDim.x)
+                for (int j = tid; j < hidden; j += 128)
                     double_sum += static_cast<double>(
                         x[row * hidden + j]);
-                double_sum = warp_sum_double(double_sum);
-                if (lane == 0) warp_double_buf[warp] = double_sum;
-                __syncthreads();
-                if (warp == 0) {{
-                    double total = lane < 4 ? warp_double_buf[lane] : 0.0;
-                    total = warp_sum_double(total);
-                    if (lane == 0)
-                        mean_double_shared = total / hidden;
-                }}
-                __syncthreads();
-                double double_mean = mean_double_shared;
+                double double_mean = block_sum(double_sum, double_sum_scratch, lane, warp) / hidden;
                 double double_var = 0.0;
-                for (int j = tid; j < hidden; j += blockDim.x) {{
+                for (int j = tid; j < hidden; j += 128) {{
                     double d = static_cast<double>(
                         x[row * hidden + j]) - double_mean;
                     double_var += d * d;
                 }}
-                double_var = warp_sum_double(double_var);
-                if (lane == 0) warp_double_buf[warp] = double_var;
-                __syncthreads();
-                if (warp == 0) {{
-                    double total = lane < 4 ? warp_double_buf[lane] : 0.0;
-                    total = warp_sum_double(total);
-                    if (lane == 0)
-                        inv_std_double_shared = 1.0 / sqrt(
-                            total / hidden + eps);
-                }}
-                __syncthreads();
-                double double_inv_std = inv_std_double_shared;
-                for (int j = tid; j < hidden; j += blockDim.x) {{
+                double_var = block_sum(double_var, double_variance_scratch, lane, warp);
+                double double_inv_std = 1.0 / sqrt(double_var / hidden + eps);
+                for (int j = tid; j < hidden; j += 128) {{
                     double scale = static_cast<double>(weight[j]);
                     double offset = static_cast<double>(bias[j]);
                     y[row * hidden + j] = out0_type(
@@ -409,13 +371,14 @@ def _block_rows_source(hidden):
                         * double_inv_std * scale + offset);
                 }}
             }} else {{
-                float mean = mean_shared;
-                float inv_std = inv_std_shared;
-                int i = 0;
-                for (int j = tid; j < hidden; j += blockDim.x, ++i) {{
+                const int parts = kCache ? kPer : (hidden - tid + 127) / 128;
+                #pragma unroll
+                for (int part = 0; part < parts; ++part) {{
+                    int j = tid + part * 128;
+                    if (j >= hidden) break;
                     float scale = static_cast<float>(weight[j]);
                     float offset = static_cast<float>(bias[j]);
-                    float xv = kCache ? cache[i]
+                    float xv = kCache ? cache[part]
                                       : static_cast<float>(x[row * hidden + j]);
                     y[row * hidden + j] = out0_type(
                         (xv - mean) * inv_std * scale + offset);
@@ -425,7 +388,7 @@ def _block_rows_source(hidden):
         double eps = data["eps"];
         int rows = in0->num / {hidden};
         kernel<<<rows, 128>>>(
-            in0_p, in1_p, in2_p, out0_p, {hidden}, eps);
+            in0_p, in1_p, in2_p, out0_p, eps);
         """
 
 

@@ -236,9 +236,11 @@ Op* load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, in
     (void)tt;
     if (rr - ll == 1) {
         Op* op = ops[fuse_ops[ll]];
-        if (op->is_op(op_ids::contiguous()) && op->execution_backend() == BackendId::Cuda
-                && static_cast<ContiguousOp*>(op)->cuda_transpose_axis >= 0)
-            return op;
+        if (op->is_op(op_ids::contiguous()) && op->execution_backend() == BackendId::Cuda) {
+            const auto* contiguous = static_cast<ContiguousOp*>(op);
+            if (contiguous->cuda_copy_width > 1 || contiguous->cuda_transpose_axis >= 0)
+                return op;
+        }
     }
 
     fused_op.ops.clear();
