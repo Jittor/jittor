@@ -316,7 +316,7 @@ def _repeated_heads(tensor):
     if producer_name is None or producer_name() != "reshape":
         return None
     expanded = tensor._input(0)
-    if expanded._producer_name() == "contiguous":
+    while expanded._producer_name() in ("contiguous", "clone"):
         expanded = expanded._input(0)
     if expanded._producer_name() != "broadcast_to":
         return None
@@ -325,6 +325,8 @@ def _repeated_heads(tensor):
         return None
     b, heads, group, length, dim = shape
     unsqueezed = expanded._input(0)
+    while unsqueezed._producer_name() in ("contiguous", "clone"):
+        unsqueezed = unsqueezed._input(0)
     if _shape(unsqueezed) != (b, heads, 1, length, dim):
         return None
     if unsqueezed._producer_name() == "getitem" and _shape(unsqueezed._input(0)) == (

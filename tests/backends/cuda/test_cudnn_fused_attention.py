@@ -434,6 +434,30 @@ class TestCudnnFusedAttention(unittest.TestCase):
                 peak = jt.core.device_memory_peak(0) - base
                 self.assertLess(peak, scores / 4, "peaked at %.0f MiB" % (peak / 2**20))
 
+    def test_repeated_heads_unwraps_clone_and_contiguous_for_gqa(self):
+        from jittor.nn.functional.attention import _repeated_heads
+
+        rng = np.random.RandomState(47)
+        q = jt.array(rng.randn(1, 8, 32, 64).astype("float32")).bfloat16()
+        k_base = jt.array(rng.randn(1, 4, 32, 64).astype("float32")).bfloat16()
+        v_base = jt.array(rng.randn(1, 4, 32, 64).astype("float32")).bfloat16()
+        with jt.no_grad(), forbid_backend_fallbacks():
+            # Torch-shim repeat_kv inserts clone/contiguous views around broadcast_to.
+            k_rep = k_base[:, :, None, :, :].clone().broadcast((1, 4, 2, 32, 64)).clone().contiguous().reshape(1, 8, 32, 64)
+            v_rep = v_base[:, :, None, :, :].clone().broadcast((1, 4, 2, 32, 64)).clone().contiguous().reshape(1, 8, 32, 64)
+            unwrapped_k = _repeated_heads(k_rep)
+            unwrapped_v = _repeated_heads(v_rep)
+            self.assertIsNotNone(unwrapped_k)
+            self.assertIsNotNone(unwrapped_v)
+            self.assertEqual(unwrapped_k[1], 2)
+            self.assertEqual(unwrapped_v[1], 2)
+            self.assertEqual(tuple(unwrapped_k[0].shape), (1, 4, 32, 64))
+            self.assertEqual(tuple(unwrapped_v[0].shape), (1, 4, 32, 64))
+            out = scaled_dot_product_attention(q, k_rep, v_rep)
+            ref = scaled_dot_product_attention(q, k_base, v_base, enable_gqa=True)
+            out_np, ref_np = jt.fetch_sync([out.float32(), ref.float32()])
+            np.testing.assert_allclose(out_np, ref_np, atol=1e-2, rtol=1e-2)
+
 
 if __name__ == "__main__":
     unittest.main()
