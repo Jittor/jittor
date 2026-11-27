@@ -407,6 +407,46 @@ class TestScatterAddReduce(_SetitemCore):
 
         self._for_devices(body)
 
+    def test_split_slice_backward_shares_gradient_storage(self):
+        rng = np.random.default_rng(11)
+        x_np = rng.standard_normal((32, 32, 96)).astype(np.float32)
+        expected = np.empty_like(x_np)
+        expected[:, :, 0:32] = x_np[:, :, 0:32] * 1.0
+        expected[:, :, 32:64] = x_np[:, :, 32:64] * -2.0
+        expected[:, :, 64:96] = x_np[:, :, 64:96] * 0.5
+
+        def body(device):
+            x = self._f32(x_np)
+            x.sync()
+            with jt.profile(device=False, memory=True) as prof:
+                q = x[:, :, 0:32]
+                k = x[:, :, 32:64]
+                v = x[:, :, 64:96]
+                loss = (q * q * 0.5).sum() + (k * k * -1.0).sum() + (v * v * 0.25).sum()
+                gx = jt.grad(loss, x)
+                jt.sync([gx])
+            if device == "cuda":
+                self.assertEqual(gx.location(), "device")
+            np.testing.assert_allclose(gx.numpy(), expected, rtol=1e-5, atol=1e-5)
+            full_allocs = [
+                ev for ev in prof.result.memory.events
+                if ev.get("kind") == 0 and ev.get("bytes", 0) == x_np.nbytes
+            ]
+            # Chained GetitemOp::grad_into setitems share the single zero buffer
+            # instead of allocating a fresh full-sized tensor per slice (4 allocs before fix).
+            self.assertEqual(len(full_allocs), 1)
+
+            # A caller-retained pending tensor must NOT be overwritten by setitem.
+            base = self._f32(x_np) + 1.0
+            updated = base.setitem(0, 0.0)
+            jt.sync([base, updated])
+            np.testing.assert_allclose(base.numpy(), x_np + 1.0, atol=1e-6)
+            expected_upd = x_np + 1.0
+            expected_upd[0] = 0.0
+            np.testing.assert_allclose(updated.numpy(), expected_upd, atol=1e-6)
+
+        self._for_devices(body)
+
     def test_scatter_add_dim1_backward(self):
         # x.scatter_add(1, idx, src) -- distinct columns, dim 1.
         base = np.zeros((2, 3), dtype="float32")

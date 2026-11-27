@@ -48,12 +48,25 @@ static void setitem_inplace(SetitemOp* op) {
         for (auto* consumer : input->outputs())
             if (consumer != op && is_kept_op(consumer)) consumers--;
     }
+    auto input_op = input->input();
+    if (!input->is_finished() && !input->holder && input_op
+            && !input->flag(VarFlags::_kept)) {
+        // `build_exec_plan` temporarily holds every pending Var in the batch
+        // via `planning_hold` (+1 forward liveness), and a forward-live
+        // non-stop-grad producer also propagates +1 forward liveness onto
+        // `input`. When no external holder or VarPtr retains `input`, it is
+        // safe to share its buffer in place (e.g. chained slice/split backward).
+        int internal_owners = 1;
+        if (!input_op->is_stop_grad() && input_op->liveness.forward.active())
+            internal_owners += 1;
+        if (owners == internal_owners)
+            owners = 0;
+    }
     if (!(consumers == 1 &&
         owners<=1 &&
         (op->op == ns_void || op->op == ns_add || op->op == ns_subtract))) {
         return;
     }
-    auto input_op = input->input();
     if (input_op) {
         // make sure input op will not use input
         bool known_safe = input_op->type() == OpType::broadcast
