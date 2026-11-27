@@ -7,6 +7,7 @@ from .topk_cuda import supports_wide_topk, wide_topk_cuda
 
 from jittor._runtime.dispatch import optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
+from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._core.flags import _output_requires_grad, _stop_grad_outputs
 
 
@@ -467,6 +468,97 @@ def unique_compact_source(need_inverse):
         '''
     )
 
+
+
+_SCATTER_ADD_DIM0_HEADER = r'''
+__global__ static void scatter_init_copy_f32(float* __restrict__ dst, const float* __restrict__ src, int64_t n) {
+    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t stride = (int64_t)blockDim.x * gridDim.x;
+    for (; i < n; i += stride) dst[i] = src[i];
+}
+
+template <typename IdxT>
+__global__ static void scatter_add_rows_f32(
+        float* __restrict__ out,
+        const IdxT* __restrict__ idx,
+        const float* __restrict__ src,
+        int64_t E, int64_t N, int64_t C) {
+    int64_t total = E * C;
+    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    int64_t stride = (int64_t)blockDim.x * gridDim.x;
+    for (; i < total; i += stride) {
+        int64_t row = (C == 1) ? i : (i / C);
+        int64_t col = (C == 1) ? 0 : (i - row * C);
+        int64_t dst = static_cast<int64_t>(idx[row]);
+        if (dst >= 0 && dst < N) {
+            atomicAdd(out + dst * C + col, src[i]);
+        }
+    }
+}
+'''
+
+_SCATTER_ADD_DIM0_SOURCE = r'''
+int64_t n_out = out0->num;
+if (n_out > 0) {
+    int blocks = (int)std::min<int64_t>((n_out + 255) / 256, 65535);
+    scatter_init_copy_f32<<<blocks, 256>>>(out0_p, in0_p, n_out);
+}
+int64_t E = in1->shape[0];
+int64_t N = out0->shape[0];
+int64_t C = out0->shape.size() > 1 ? out0->shape[1] : 1;
+int64_t total = E * C;
+if (total > 0 && N > 0) {
+    int blocks = (int)std::min<int64_t>((total + 255) / 256, 65535);
+    scatter_add_rows_f32<<<blocks, 256>>>(out0_p, in1_p, in2_p, E, N, C);
+}
+'''
+
+
+def _extract_row_index_1d(index):
+    if index.ndim == 1:
+        return index
+    if index.ndim != 2:
+        return None
+    if index._producer_name() == "broadcast_to":
+        base = index._input(0)
+        if base.ndim == 2 and int(base.shape[0]) == int(index.shape[0]) and int(base.shape[1]) == 1:
+            return base.reshape((-1,))
+    if index._is_view():
+        strides = tuple(index._storage_strides())
+        if len(strides) == 2 and strides[1] == 0:
+            return index[:, 0]
+    return None
+
+
+def _supports_scatter_add_dim0(x, dim, index, src, reduce="void"):
+    if reduce != "add" or dim != 0:
+        return False
+    if not (isinstance(x, jt.Var) and isinstance(index, jt.Var) and isinstance(src, jt.Var)):
+        return False
+    if _output_requires_grad(x, src):
+        return False
+    if _jittor_dtype_name(x.dtype) != "float32" or _jittor_dtype_name(src.dtype) != "float32":
+        return False
+    if _jittor_dtype_name(index.dtype) not in ("int32", "int64"):
+        return False
+    if x.ndim not in (1, 2) or index.ndim != x.ndim or src.ndim != x.ndim:
+        return False
+    if tuple(int(s) for s in src.shape) != tuple(int(s) for s in index.shape):
+        return False
+    if x.ndim == 2 and int(index.shape[1]) != int(x.shape[1]):
+        return False
+    return _extract_row_index_1d(index) is not None
+
+
+@optional_kernel("tensor.scatter", _CUDA_CODE_BACKENDS, supports=_supports_scatter_add_dim0)
+def _scatter_add_dim0_cuda(x, dim, index, src, reduce="void"):
+    idx_1d = _extract_row_index_1d(index)
+    out = jt.code(
+        x.shape, x.dtype, [x, idx_1d, src],
+        cuda_header=_SCATTER_ADD_DIM0_HEADER,
+        cuda_src=_SCATTER_ADD_DIM0_SOURCE,
+    )
+    return _stop_grad_outputs(out)
 
 
 for _backend in _CUDA_CODE_BACKENDS:
