@@ -321,6 +321,23 @@ def test_nvrtc_packed_broadcasts_and_strided_fallback(layout, gate_dtype):
 
 
 @_test_capability.accelerator_required("cuda")
+def test_nvrtc_strided_offsets_across_runtime_shapes():
+    rng = np.random.default_rng(73)
+    with jt.flag_scope(use_cuda=1, use_nvrtc=1, jit_tier="1", backend_fallback="error"), jt.no_grad():
+        for batch, heads, tokens, width in [(2, 3, 97, 64), (3, 5, 131, 48), (2, 3, 97, 63)]:
+            values = rng.integers(-20, 21, size=(batch, heads, tokens, width)).astype(np.float32)
+            offsets = rng.integers(-8, 9, size=(batch, 1, tokens, 1)).astype(np.float32)
+            weights = rng.integers(-4, 5, size=(1, heads, 1, width)).astype(np.float32)
+            x, offset, weight = [jt.array(v) for v in (values, offsets, weights)]
+            jt.sync([x, offset, weight], True)
+            launches = jt.core._nvrtc_stats()[3]
+            result = x * weight + offset
+            result.sync(True)
+            assert result.location() == "device" and jt.core._nvrtc_stats()[3] > launches
+            np.testing.assert_array_equal(result.numpy(), values * weights + offsets)
+
+
+@_test_capability.accelerator_required("cuda")
 def test_nvrtc_compile_disk_cache_math_and_graph_capture():
     # Child 1: cold NVRTC compile, comprehensive parity (vec4, tails, strided,
     # multi-output, reuse_dying_inputs, scalar-broadcast shape reuse [1]->[64],

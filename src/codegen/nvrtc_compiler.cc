@@ -1133,6 +1133,23 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
     // Generate pure CUDA C kernel source (ZERO #includes!)
     std::ostringstream ss;
     ss << kNvrtcPrelude << "\n";
+    if (plan.any_strided) {
+        ss << R"CUDA(
+struct JtIndexDivisor {
+    unsigned int value, reciprocal;
+
+    __device__ __forceinline__ unsigned int div(unsigned int n) const {
+        unsigned int quotient = __umulhi(n, reciprocal);
+        // The truncated reciprocal underestimates the quotient by at most one.
+        return quotient + (n - quotient * value >= value);
+    }
+
+    __device__ __forceinline__ unsigned int mod(unsigned int n) const {
+        return n - div(n) * value;
+    }
+};
+)CUDA";
+    }
 
     // Helper device function computing one element given loaded inputs and scalar args.
     // Using an inline helper avoids duplicating DAG code between vec4 and scalar tail!
@@ -1201,8 +1218,8 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
     if (plan.any_strided) {
         for (int d = 0; d < plan.rank; ++d) {
             if (!(plan.union_stride_mask & (1u << d))) continue;
-            if (d > 0) ss << ",\n    int shape" << d;
-            if (d < plan.rank - 1) ss << ",\n    int above" << d;
+            if (d > 0) ss << ",\n    JtIndexDivisor shape" << d;
+            if (d < plan.rank - 1) ss << ",\n    JtIndexDivisor above" << d;
         }
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
             if (!plan.inputs[k].is_strided) continue;
@@ -1225,9 +1242,9 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
             if (!(plan.union_stride_mask & (1u << d))) continue;
             ss << "        int c" << d << " = ";
             if (plan.rank == 1) ss << "i";
-            else if (d == 0) ss << "(i / above0)";
-            else if (d == plan.rank - 1) ss << "(i % shape" << d << ")";
-            else ss << "((i / above" << d << ") % shape" << d << ")";
+            else if (d == 0) ss << "above0.div(i)";
+            else if (d == plan.rank - 1) ss << "shape" << d << ".mod(i)";
+            else ss << "shape" << d << ".mod(above" << d << ".div(i))";
             ss << ";\n";
         }
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
@@ -1675,17 +1692,25 @@ void nvrtc_fused_entry(Op* op) {
     }
 
     // Stride metadata if any input is strided
-    int shapes[8] = {};
-    int aboves[8] = {};
+    struct IndexDivisor {
+        uint32_t value, reciprocal;
+    };
+    const auto index_divisor = [](uint32_t value) {
+        return IndexDivisor{value, std::numeric_limits<uint32_t>::max() / value};
+    };
+    IndexDivisor shapes[8], aboves[8];
     int stride_vals[12 * 8];
     int stride_val_count = 0;
 
     if (plan.any_strided) {
-        for (int d = 0; d < plan.rank; ++d) shapes[d] = (int)ref_out->shape[d];
-        int acc = 1;
+        uint32_t stride = 1;
         for (int d = plan.rank - 1; d >= 0; --d) {
-            aboves[d] = acc;
-            acc *= shapes[d];
+            uint32_t size = ref_out->shape[d];
+            if (plan.union_stride_mask & (1u << d)) {
+                if (d > 0) shapes[d] = index_divisor(size);
+                if (d < plan.rank - 1) aboves[d] = index_divisor(stride);
+            }
+            stride *= size;
         }
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
             if (!plan.inputs[k].is_strided) continue;
