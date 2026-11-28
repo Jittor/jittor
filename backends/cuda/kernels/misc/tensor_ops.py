@@ -229,6 +229,64 @@ def _stack_sources(n, suffix, cpu_source):
     return cuda_src, cpu_src
 
 
+def _unbind_cuda_source(n, suffix, write_lines):
+    output = f"out{n - 1}_p"
+    for i in range(n - 2, -1, -1):
+        output = f"part == {i} ? out{i}_p : {output}"
+    output_ptrs = " | ".join(f"(size_t)out{i}_p" for i in range(n))
+    header = f"""
+    namespace jittor {{
+    template<typename Pack>
+    __global__ static void unbind_packed_kernel(@ARGS_DEF) {{
+        constexpr index_t width = sizeof(Pack) / sizeof(in0_type);
+        constexpr index_t chunk = {suffix} / (width ? width : 1);
+        if constexpr (width > 1 && chunk > 0) {{
+            const index_t tile = blockIdx.x / {n};
+            const index_t part = blockIdx.x - tile * {n};
+            const Pack* packed = reinterpret_cast<const Pack*>(in0_p) + part * chunk;
+            Pack* out = reinterpret_cast<Pack*>({output});
+            const index_t total = out0_shape0 / width;
+            const index_t step = blockDim.x * (gridDim.x / {n});
+            for (index_t oid = tile * blockDim.x + threadIdx.x;
+                 oid < total; oid += step) {{
+                const index_t prefix = oid / chunk;
+                const index_t base_in = oid + prefix * (({n} - 1) * chunk);
+                out[oid] = packed[base_in];
+            }}
+        }}
+    }}
+    __global__ static void unbind_kernel(@ARGS_DEF) {{
+        @PRECALC
+        const index_t step = blockDim.x * gridDim.x;
+        constexpr index_t suffix = {suffix};
+        for (index_t oid = (index_t)blockIdx.x * blockDim.x + threadIdx.x;
+             oid < out0_shape0; oid += step) {{
+            const index_t prefix = oid / suffix;
+            const index_t base_in = oid + prefix * (({n} - 1) * suffix);
+{write_lines}
+        }}
+    }}
+    }} // namespace jittor
+    """
+    source = f"""
+    constexpr int block = 256;
+    constexpr int width16 = 16 / sizeof(in0_type);
+    constexpr int width8 = 8 / sizeof(in0_type);
+    const size_t alignment = (size_t)in0_p | {output_ptrs};
+    if (width16 > 1 && {suffix} % width16 == 0 && (alignment & 15) == 0) {{
+        const int grid = std::min<index_t>((out0_shape0 / width16 - 1) / block + 1, 65535);
+        unbind_packed_kernel<uint4><<<grid * {n}, block>>>(@ARGS);
+    }} else if (width8 > 1 && {suffix} % (width8 ? width8 : 1) == 0 && (alignment & 7) == 0) {{
+        const int grid = std::min<index_t>((out0_shape0 / (width8 ? width8 : 1) - 1) / block + 1, 65535);
+        unbind_packed_kernel<uint2><<<grid * {n}, block>>>(@ARGS);
+    }} else {{
+        const int grid = std::min<index_t>((out0_shape0 - 1) / block + 1, 65535);
+        unbind_kernel<<<grid, block>>>(@ARGS);
+    }}
+    """
+    return header, source
+
+
 @optional_kernel("misc.unbind_no_grad", _CUDA_CODE_BACKENDS)
 def _unbind_no_grad_cuda_fast(x, dim, cpu_source=None):
     if _output_requires_grad(x):
@@ -267,30 +325,13 @@ def _unbind_no_grad_cuda_fast(x, dim, cpu_source=None):
         f"            @out{i}(oid) = @in0(base_in + {i} * suffix);"
         for i in range(n)
     )
-    cuda_src = f"""
-    __global__ void unbind_kernel(@ARGS_DEF) {{
-        @PRECALC
-        index_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-        index_t step = blockDim.x * gridDim.x;
-        const index_t suffix = {suffix};
-        const index_t full_stride = suffix * {n};
-        for (index_t oid = tid; oid < out0_shape0; oid += step) {{
-            index_t prefix = oid / suffix;
-            index_t rem = oid - prefix * suffix;
-            index_t base_in = prefix * full_stride + rem;
-{write_lines}
-        }}
-    }}
-    int block = 256;
-    int grid = (out0_shape0 + block - 1) / block;
-    if (grid > 65535) grid = 65535;
-    unbind_kernel<<<grid, block>>>(@ARGS);
-    """
+    cuda_header, cuda_src = _unbind_cuda_source(n, suffix, write_lines)
     cpu_src = cpu_source(suffix, n, write_lines) if cpu_source is not None else ""
     outs = jt.code(
         [[out_total] for _ in range(n)],
         [x.dtype for _ in range(n)],
         [flat],
+        cuda_header=cuda_header,
         cuda_src=cuda_src,
         cpu_src=cpu_src,
     )

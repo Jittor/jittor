@@ -28,3 +28,28 @@ class TestUnbindViews(unittest.TestCase):
                                     self.assertEqual(tuple(output._storage_strides()), expected_strides)
                                     np.testing.assert_array_equal(output.numpy(), array[:, :, index].transpose(0, 2, 1, 3))
                                     self.assertEqual(output.location(), 'device' if use_cuda else 'cpu')
+
+
+    def test_dense_no_grad_unbind_copies_aligned_and_unaligned_rows(self):
+        for count, rows, width, offset, dtype in (
+            (3, 4096, 32, 0, "float32"),
+            (3, 4096, 10, 0, "float32"),
+            (3, 4096, 13, 0, "int32"),
+            (3, 4096, 32, 1, "float32"),
+            (3, 4096, 32, 0, "bfloat16"),
+            (2, 16384, 64, 0, "float16"),
+        ):
+            with self.subTest(count=count, width=width, offset=offset, dtype=dtype):
+                length = rows * count * width
+                values = (np.arange(length + offset) % 111).astype(np.float32)
+                with jt.flag_scope(use_cuda=1, backend_fallback="error"), jt.no_grad():
+                    source = jt.array(values).cast(dtype)[offset:].reshape(rows, count, width)
+                    outputs = jt.unbind(source, -2)
+                    expected = values[offset:].reshape(rows, count, width)
+                    self.assertEqual(len(outputs), count)
+                    for index, output in enumerate(outputs):
+                        self.assertFalse(output.requires_grad)
+                        self.assertEqual(output.dtype, source.dtype)
+                        output.sync()
+                        self.assertEqual(output.location(), "device")
+                        np.testing.assert_array_equal(output.float32().numpy(), expected[:, index])
