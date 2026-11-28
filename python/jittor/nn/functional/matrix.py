@@ -169,6 +169,10 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False, alpha=1.0):
+    if type(alpha) is float:
+        result = jt.core._cublas_matmul_matching_batch(a, b, trans_a, trans_b, alpha)
+        if result is not None:
+            return result
     a, b = _broadcast_batch_dims(a, b)
     op = get_library_ops("cublas").cublas_batched_matmul
     if alpha == 1.0:

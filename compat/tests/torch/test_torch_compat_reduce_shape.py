@@ -418,6 +418,16 @@ class TestUnfold(Base):
 
 
 class TestSplitChunk(Base):
+    def test_dim_size_reads_current_tensor_shape(self):
+        def body(dev):
+            x = torch.ones((2, 3, 4), device=dev).transpose(0, 2)
+            self.assertEqual(x.size(-1), 2)
+            self.assertEqual(x.size(0), 4)
+            self.assertEqual(x.size(), torch.Size((np.int64(4), 3, 2)))
+            self.assertIsInstance(x.size(), torch.Size)
+
+        both_devices(body)
+
     def test_split_nonleading_axis_of_transpose(self):
         x = np.arange(48, dtype=np.float32).reshape(2, 4, 6)
         expected = np.split(x.transpose(0, 2, 1), [3], axis=-1)

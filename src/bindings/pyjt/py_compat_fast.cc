@@ -1280,7 +1280,7 @@ PyObject* neox_rope_cosine(PyObject* product, PyObject* source) {
     Py_RETURN_NONE;
 }
 
-PyObject* neox_rope_contract(PyObject* x, PyObject* cos, PyObject* sin, bool check_only) {
+PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_fn) {
     if (!PyObject_TypeCheck(x, &PyjtVarHolder.ht_type)
             || !PyObject_TypeCheck(cos, &PyjtVarHolder.ht_type)
             || !PyObject_TypeCheck(sin, &PyjtVarHolder.ht_type))
@@ -1303,8 +1303,8 @@ PyObject* neox_rope_contract(PyObject* x, PyObject* cos, PyObject* sin, bool che
     if (width % 2) Py_RETURN_NONE;
     // There is no matching source to stop at: walk through all identity
     // clones and broadcasts to get the original, smaller rotation factors.
-    VarPtr c(rope_factor_source(cosine->var, nullptr));
-    VarPtr s(rope_factor_source(sine->var, nullptr));
+    auto* c = rope_factor_source(cosine->var, nullptr);
+    auto* s = rope_factor_source(sine->var, nullptr);
     if (c->dtype() != dtype || s->dtype() != dtype || c->shape.size() > 4
             || c->shape.size() != s->shape.size())
         Py_RETURN_NONE;
@@ -1340,22 +1340,30 @@ PyObject* neox_rope_contract(PyObject* x, PyObject* cos, PyObject* sin, bool che
                 && (value->is_finished() || axes || (op && op->is_op(op_ids::reindex()))))
             Py_RETURN_NONE;
     }
-    if (check_only) Py_RETURN_TRUE;
+    if (!source_fn || source_fn == Py_None) Py_RETURN_TRUE;
 
+    // The view construction may submit a batch, so keep the live sources
+    // while constructing the kernel rather than creating Python wrappers.
+    VarPtr c_owner(c == cosine->var ? nullptr : c);
+    VarPtr s_owner(s == sine->var ? nullptr : s);
     PyTensorFrontendScope scope(x);
-    PyObjHolder dense, c_input, s_input;
+    unique_ptr<VarHolder> dense;
     if (transpose_view)
-        dense.obj = to_py_object<VarHolder*>(holder->transpose_view_source());
-    else if (producer_source)
-        dense.obj = to_py_object<VarHolder*>(new VarHolder(producer_source));
-    else if (permute_storage)
-        dense.obj = to_py_object<VarHolder*>(holder->storage_permute(swap_heads_sequence));
-    if (c.ptr != cosine->var) c_input.obj = to_py_object<VarHolder*>(new VarHolder(c.ptr));
-    if (s.ptr != sine->var) s_input.obj = to_py_object<VarHolder*>(new VarHolder(s.ptr));
-    return Py_BuildValue("(OOO(Liiiii))", dense.obj ? dense.obj : x,
-        c_input.obj ? c_input.obj : cos, s_input.obj ? s_input.obj : sin,
-        static_cast<long long>(width), dtype == ns_float32, dense.obj != nullptr,
-        factors[0] > 1, factors[1] > 1, factors[2] > 1);
+        dense.reset(holder->transpose_view_source());
+    else if (!producer_source && permute_storage)
+        dense.reset(holder->storage_permute(swap_heads_sequence));
+    VarPtr source(dense ? dense->var : producer_source ? producer_source : value);
+    PyObjHolder text(PyObject_CallFunction(source_fn, "Liiiii", static_cast<long long>(width),
+        dtype == ns_float32, dense != nullptr || producer_source != nullptr,
+        factors[0] > 1, factors[1] > 1, factors[2] > 1));
+    if (!text.obj) return nullptr;
+    Py_ssize_t size;
+    const char* code = PyUnicode_AsUTF8AndSize(text.obj, &size);
+    if (!code) return nullptr;
+    unique_ptr<VarHolder> out(new VarHolder(make_code(shape, dtype, {source.ptr, c, s},
+        "", {}, "", string(code, size), {}, "", {}, "")));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
 }
 
 namespace {

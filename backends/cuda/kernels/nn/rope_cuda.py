@@ -255,19 +255,13 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
 
 
 def _neox_rope_supported(x, cos, sin):
-    return jt.core._neox_rope_contract(x, cos, sin, True) is not None
+    return jt.core._neox_rope(x, cos, sin) is not None
 
 
 @optional_kernel("nn.neox_rope.inference", "cuda", supports=_neox_rope_supported)
 def _neox_rope_cuda(x, cos, sin):
     """Fused vectorized CUDA NeoX RoPE: ``x * cos + rotate_half(x) * sin``."""
-    contract = jt.core._neox_rope_contract(x, cos, sin)
-    if contract is None:
-        return None
-    x_dense, cos, sin, specialization = contract
-    return _stop_grad_outputs(jt.code(
-        x.shape, x.dtype, [x_dense, cos, sin], cuda_src=_neox_rope_source(*specialization),
-    ))
+    return jt.core._neox_rope(x, cos, sin, _neox_rope_source)
 
 
 @lru_cache(maxsize=256)

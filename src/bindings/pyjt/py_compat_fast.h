@@ -100,11 +100,11 @@ PyObject* rotate_half_source(PyObject* negative, PyObject* positive, int64 dim);
 // @pyjt(_neox_rope_cosine)
 PyObject* neox_rope_cosine(PyObject* product, PyObject* source);
 
-// Validate a fused NeoX rotation from live graph metadata. The support
-// query never builds views. The execution query returns the kernel inputs
-// and source specialization, or None if the layout or dtype needs eager ops.
-// @pyjt(_neox_rope_contract)
-PyObject* neox_rope_contract(PyObject* x, PyObject* cos, PyObject* sin, bool check_only=false);
+// Validate a fused NeoX rotation from live graph metadata. With a source
+// function, build the CodeOp in the same graph entry. A support query omits
+// that function and never creates new graph nodes.
+// @pyjt(_neox_rope)
+PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_fn=nullptr);
 
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency

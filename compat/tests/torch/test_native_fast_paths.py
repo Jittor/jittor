@@ -1487,6 +1487,21 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "the batched cuBLAS relay needs CUDA")
+    def test_batched_matmul_inference_with_transpose_and_broadcast(self):
+        rng = np.random.default_rng(14)
+        a = rng.normal(size=(2, 3, 4)).astype(np.float32)
+        b = rng.normal(size=(2, 5, 4)).astype(np.float32)
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            left = torch.tensor(a, device="cuda")
+            for rhs in (b, b[:1]):
+                right = torch.tensor(rhs, device="cuda").transpose(-1, -2)
+                out = torch.matmul(left, right)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                np.testing.assert_allclose(out.cpu().numpy(), a @ rhs.swapaxes(-1, -2),
+                                           rtol=2e-5, atol=2e-5)
+
     def test_nested_selector_arguments_beyond_inline_capacity(self):
         from jittor._runtime.dispatch import override_kernel, select_kernel
 

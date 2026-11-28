@@ -13,4 +13,10 @@ namespace jittor {
 PyObject* matmul_contraction_call(PyObject* body, PyObject* fallback,
                                 PyObject* a, PyObject* b);
 
+// The CUDA batched relay after provider selection, for inference operands
+// whose batch axes already agree. None leaves broadcasting to its caller.
+// @pyjt(_cublas_matmul_matching_batch)
+PyObject* cublas_matmul_matching_batch(PyObject* a, PyObject* b,
+                                      bool trans_a, bool trans_b, float alpha);
+
 } // namespace jittor

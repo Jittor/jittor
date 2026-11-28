@@ -90,10 +90,12 @@ def _torch_t(input):
     return _permutation_view(input, axes)
 
 def _torch_size(self, dim=None):
+    if dim is not None:
+        return self.shape[dim]
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]
     _Size = _native['_Size']
-    return self.shape[dim] if dim is not None else _Size(self.shape)
+    return _Size(self.shape)
 
 
 def _dtype_itemsize_name(ds):

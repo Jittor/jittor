@@ -342,10 +342,6 @@ def get_install_context(module, *, required=True):
     the memo (`transaction._clear_resolution_caches`).
     """
     global _compatibility_owner, _context_cache
-    compatibility_owner = _compatibility_owner
-    if compatibility_owner is None:
-        from .tensor_state import compatibility_owner as _owner
-        compatibility_owner = _compatibility_owner = _owner
     cache = _context_cache
     if cache is None:
         from .tensor_state import _CONTEXT_CACHE
@@ -361,6 +357,10 @@ def get_install_context(module, *, required=True):
             # optional lookup. Answer that again instead of re-resolving.
             if not required:
                 return None
+    compatibility_owner = _compatibility_owner
+    if compatibility_owner is None:
+        from .tensor_state import compatibility_owner as _owner
+        compatibility_owner = _compatibility_owner = _owner
     target = compatibility_owner(module)
     context = target.__dict__.get(InstallContext.CONTEXT_ATTR)
     if context is None and not required:
