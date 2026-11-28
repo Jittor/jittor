@@ -8,6 +8,7 @@ import jittor as jt
 from jittor._core.dtypes import dtype_name
 from jittor._core.var import device_scope_like
 from jittor._runtime.dispatch import dispatch_context, try_dispatch
+from jittor.backends.cuda.kernels.nn import resize_cuda as _resize_cuda  # noqa: F401
 from ._layout import channels_last_source, channels_last_view, records_no_grad
 
 
