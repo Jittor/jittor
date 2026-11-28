@@ -80,7 +80,7 @@ bool host_prefix_builtin(Op* op) {
     static const std::unordered_set<string> names{
         "array", "unary", "binary", "ternary", "broadcast_to", "reduce",
         "reindex", "reindex_reduce", "reshape", "transpose", "getitem",
-        "setitem", "index", "concat", "contiguous", "clone", "fuse_transpose"};
+        "setitem", "index", "concat", "contiguous", "clone", "copy", "fuse_transpose"};
     return names.count(op->name());
 }
 

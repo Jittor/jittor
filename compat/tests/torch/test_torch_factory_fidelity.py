@@ -75,7 +75,7 @@ class TestTorchFactoryFidelity(unittest.TestCase):
                 self.assertEqual(out.device.type, "cuda")
                 self.assertEqual(out.tolist(), [7 + offset])
             self.assertIsNone(compiled.refused)
-            self.assertGreater(compiled.stats["replayed"], 0)
+            self.assertGreater(compiled.stats["graph"], 0, compiled.graph_refused)
 
     def test_factory_objects_are_module_level_and_keep_public_identity(self):
         factories = importlib.import_module(
