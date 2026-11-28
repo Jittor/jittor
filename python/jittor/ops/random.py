@@ -81,11 +81,13 @@ def linspace(start, end, steps):
     happened to round that point to exactly 0.
     """
     import jittor as jt
+    if isinstance(steps, Var):
+        steps = int(steps.item())
     if steps > 1:
-        res = jt.index((steps,))[0]
-        res = res*float((end-start)/(steps-1))+start
-        # Pin the endpoint instead of trusting the accumulated rounding.
-        res = jt.cat([res[:-1], jt.array([end], dtype=res.dtype)])
+        indices = jt.index((steps,), 0)
+        res = indices * float((end - start) / (steps - 1)) + start
+        # Pin the endpoint in the same elementwise graph.
+        res = jt.ternary(indices == steps - 1, jt.array(end, dtype=res.dtype), res)
     else:
         res = jt.array([start])
     return res

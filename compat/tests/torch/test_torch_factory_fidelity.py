@@ -18,6 +18,25 @@ FACTORY_NAMES = (
 
 class TestTorchFactoryFidelity(unittest.TestCase):
 
+    def test_linspace_endpoint_can_feed_a_capture_time_list(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA unavailable")
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            count = torch.tensor(4, device="cuda")
+            values = torch.tensor([5.], device="cuda")
+
+            def apply(x):
+                points = torch.linspace(1., 0., count, device=x.device).tolist()
+                return x + sum(points[:-1]), x + points[-1]
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for _ in range(5):
+                total, last = compiled(values)
+                self.assertAlmostEqual(total.item(), 7.)
+                self.assertEqual(last.item(), 5.)
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0)
+
     def test_factory_objects_are_module_level_and_keep_public_identity(self):
         factories = importlib.import_module(
             "jittor.compat.torch.installers.factories")
