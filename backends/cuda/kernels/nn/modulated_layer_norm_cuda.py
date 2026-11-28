@@ -114,7 +114,7 @@ def _supports_modulated_layer_norm(x, scale, shift, eps, one_plus=True):
 
 
 @functools.lru_cache(maxsize=256)
-def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
+def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False, additive=False):
     """Build vectorized + register-cached CUDA kernel for modulated LayerNorm.
 
     ``mod_mode``: 0 = broadcast single row, 1 = per-batch (row / rows_per_mod),
@@ -131,6 +131,41 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
         "0LL" if mod_mode == 0 else ("(row / rows_per_mod)" if mod_mode == 1 else "row")
     )
     one_plus_int = 1 if one_plus else 0
+    compute = "float" if additive else "in1_type"
+    additive_args = (
+        "const in3_type* scale_add, const in4_type* shift_add, "
+        "long long rows_per_add, long long scale_add_pitch, long long shift_add_pitch, "
+        if additive else ""
+    )
+    select_add_row = """
+        scale_add += (row / rows_per_add) * scale_add_pitch;
+        shift_add += (row / rows_per_add) * shift_add_pitch;
+    """ if additive else ""
+    load_add_pack = """
+        auto scale_extra = reinterpret_cast<const JtModulatedNormPack<in3_type>*>(scale_add)[v];
+        auto shift_extra = reinterpret_cast<const JtModulatedNormPack<in4_type>*>(shift_add)[v];
+    """ if additive else ""
+    scale_vec = "static_cast<float>(sc.values[k])"
+    shift_vec = "static_cast<float>(sh.values[k])"
+    scale_one = "static_cast<float>(scale[d])"
+    shift_one = "static_cast<float>(shift[d])"
+    if additive:
+        scale_vec += " + static_cast<float>(scale_extra.values[k])"
+        shift_vec += " + static_cast<float>(shift_extra.values[k])"
+        scale_one += " + static_cast<float>(scale_add[d])"
+        shift_one += " + static_cast<float>(shift_add[d])"
+    additive_launch = """
+        const auto* scale_add = in3_p + (long long)data["scale_add_offset"];
+        const auto* shift_add = in4_p + (long long)data["shift_add_offset"];
+        long long rows_per_add = (long long)data["rows_per_add"];
+        long long scale_add_pitch = (long long)data["scale_add_pitch"];
+        long long shift_add_pitch = (long long)data["shift_add_pitch"];
+        aligned16 &= ((((size_t)scale_add | (size_t)shift_add |
+                        (size_t)scale_add_pitch * sizeof(in3_type) |
+                        (size_t)shift_add_pitch * sizeof(in4_type)) & 15u) == 0);
+    """ if additive else ""
+    extra_launch_args = ("scale_add, shift_add, rows_per_add, scale_add_pitch, shift_add_pitch, "
+                         if additive else "")
     # Each warp reduces the same partial sums in the packed 16-bit kernel.
     # Separate mean and variance buffers allow one block barrier per sum.
     return f"""
@@ -176,19 +211,19 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
         __syncthreads();
         return buf[0];
     }}
-    __device__ __forceinline__ out0_type mln_modulate(float normalized, in1_type scale, in2_type shift) {{
+    __device__ __forceinline__ out0_type mln_modulate(float normalized, float scale, float shift) {{
         // The scale and shift have the normalization's arithmetic dtype.
         // In the mixed path all arithmetic stays FP32 up to the final store.
-        in1_type nv = in1_type(normalized);
-        in1_type ms = {one_plus_int} ? in1_type(1.0f + static_cast<float>(scale)) : scale;
-        in1_type product = in1_type(static_cast<float>(nv) * static_cast<float>(ms));
-        return out0_type(static_cast<float>(product) + static_cast<float>(shift));
+        {compute} nv = {compute}(normalized);
+        {compute} ms = {compute}({one_plus_int} ? 1.0f + scale : scale);
+        {compute} product = {compute}(static_cast<float>(nv) * static_cast<float>(ms));
+        return out0_type(static_cast<float>(product) + shift);
     }}
     __global__ __launch_bounds__({vec2_t}) static void mln_vec2b(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ scale,
             const in2_type* __restrict__ shift,
-            out0_type* __restrict__ y,
+            {additive_args}out0_type* __restrict__ y,
             long long rows_per_mod, long long scale_pitch, long long shift_pitch, double eps) {{
         if (sizeof(in0_type) == 2 && {vec2_n} > 0) {{
             constexpr int kVecN = {vec2_n};
@@ -200,6 +235,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             long long mrow = {mod_idx_expr};
             scale += mrow * scale_pitch;
             shift += mrow * shift_pitch;
+            {select_add_row}
             int tid = threadIdx.x;
             __shared__ float means[kWarps], variances[kWarps];
             __shared__ double dwbuf[kWarps];
@@ -271,11 +307,12 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
                             const in0_type* xp = reinterpret_cast<const in0_type*>(&cache[i]);
                             auto sc = sc8[v];
                             auto sh = sh8[v];
+                            {load_add_pack}
                             JtModulatedNormPack<out0_type> out_raw;
                             #pragma unroll
                             for (int k = 0; k < 8; ++k) {{
                                 out_raw.values[k] = mln_modulate(
-                                    (static_cast<float>(xp[k]) - mean) * inv, sc.values[k], sh.values[k]);
+                                    (static_cast<float>(xp[k]) - mean) * inv, {scale_vec}, {shift_vec});
                             }}
                             y8[v] = out_raw;
                         }}
@@ -286,11 +323,12 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
                         const in0_type* xp = reinterpret_cast<const in0_type*>(&x_raw);
                         auto sc = sc8[v];
                         auto sh = sh8[v];
+                            {load_add_pack}
                         JtModulatedNormPack<out0_type> out_raw;
                         #pragma unroll
                         for (int k = 0; k < 8; ++k) {{
                             out_raw.values[k] = mln_modulate(
-                                (static_cast<float>(xp[k]) - mean) * inv, sc.values[k], sh.values[k]);
+                                (static_cast<float>(xp[k]) - mean) * inv, {scale_vec}, {shift_vec});
                         }}
                         y8[v] = out_raw;
                     }}
@@ -313,7 +351,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             double di = d_inv;
             for (int d = tid; d < {hidden}; d += kThreads) {{
                 float nv = static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - dm) * di);
-                y[row * {hidden}LL + d] = mln_modulate(nv, scale[d], shift[d]);
+                y[row * {hidden}LL + d] = mln_modulate(nv, {scale_one}, {shift_one});
             }}
         }}
     }}
@@ -454,12 +492,13 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ scale,
             const in2_type* __restrict__ shift,
-            out0_type* __restrict__ y,
+            {additive_args}out0_type* __restrict__ y,
             long long rows_per_mod, long long scale_pitch, long long shift_pitch, double eps) {{
         long long row = blockIdx.x;
         long long mrow = {mod_idx_expr};
         scale += mrow * scale_pitch;
         shift += mrow * shift_pitch;
+        {select_add_row}
         int tid = threadIdx.x;
         __shared__ float wbuf[4];
         __shared__ double dwbuf[4];
@@ -506,7 +545,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             float nf = use_d
                 ? static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - d_mean) * d_inv)
                 : (static_cast<float>(x[row * {hidden}LL + d]) - s_mean) * s_inv;
-            y[row * {hidden}LL + d] = mln_modulate(nf, scale[d], shift[d]);
+            y[row * {hidden}LL + d] = mln_modulate(nf, {scale_one}, {shift_one});
         }}
     }}
     double eps = data["eps"];
@@ -519,16 +558,17 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
     bool aligned16 = ((((size_t)in0_p | (size_t)scale | (size_t)shift | (size_t)out0_p |
                         (size_t)scale_pitch * sizeof(in1_type) |
                         (size_t)shift_pitch * sizeof(in2_type)) & 15u) == 0);
+    {additive_launch}
     if (rows > 0) {{
         if (sizeof(in0_type) == 2 && {vec2_n} > 0 && aligned16) {{
             mln_vec2b<<<(unsigned)rows, {vec2_t}>>>(
-                in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
+                in0_p, scale, shift, {extra_launch_args}out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }} else if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0 && aligned16) {{
             mln_vec4b<<<(unsigned)rows, {vec4_t}>>>(
                 in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }} else {{
             mln_scalar<<<(unsigned)rows, 128>>>(
-                in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
+                in0_p, scale, shift, {extra_launch_args}out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }}
     }}
     CHECK(0 == cudaGetLastError());
@@ -549,9 +589,35 @@ def _mixed_modulated_layer_norm(x, scale, shift, eps, one_plus=True, *, output_d
     return _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype)
 
 
+def _additive_modulation_layout(x_shape, scale, shift, expected):
+    from jittor.ops.shape_ops import _pending_slice_of_float_add
+
+    scale_terms = _pending_slice_of_float_add(scale)
+    shift_terms = _pending_slice_of_float_add(shift)
+    if scale_terms is None or shift_terms is None:
+        return None
+    # The two operands may appear in either order. Drive the row axis with
+    # the less broadcast operand and keep the other at its original pitch.
+    scale, scale_add = sorted(scale_terms, key=lambda term: term.numel(), reverse=True)
+    shift, shift_add = sorted(shift_terms, key=lambda term: term.numel(), reverse=True)
+    if any(_resolve_mod_layout(x_shape, tuple(term.shape)) != expected for term in (scale, shift)):
+        return None
+    bias_layout = _resolve_mod_layout(x_shape, tuple(scale_add.shape))
+    if bias_layout is None or bias_layout != _resolve_mod_layout(x_shape, tuple(shift_add.shape)):
+        return None
+    rows, rows_per_add = bias_layout
+    hidden = x_shape[-1]
+    a = _strided_modulation_operand(scale_add, hidden, rows)
+    b = _strided_modulation_operand(shift_add, hidden, rows)
+    if a is None or b is None:
+        return None
+    return scale, shift, a, b, rows_per_add
+
+
 def _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype=None):
     import jittor as jt
 
+    mixed = output_dtype is not None
     contract = _modulated_layer_norm_contract(x, scale, shift, eps, output_dtype)
     if contract is None:
         return None
@@ -566,6 +632,20 @@ def _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype=None
     from jittor._runtime.dispatch import dispatch_context
 
     many_rows = total_rows >= 512 and dispatch_context(x, scale, shift).backend == "cuda"
+    extra = {}
+    extra_inputs = ()
+    if mixed:
+        layout = _additive_modulation_layout(tuple(x.shape), scale, shift, (mod_rows, rows_per_mod))
+        if layout is not None:
+            scale, shift, a, b, rows_per_add = layout
+            extra_inputs = a[0], b[0]
+            extra = {
+                "scale_add_pitch": float(a[1]),
+                "shift_add_pitch": float(b[1]),
+                "scale_add_offset": float(a[2]),
+                "shift_add_offset": float(b[2]),
+                "rows_per_add": float(rows_per_add),
+            }
     scale_layout = _strided_modulation_operand(scale, hidden, mod_rows)
     shift_layout = _strided_modulation_operand(shift, hidden, mod_rows)
     scale, scale_pitch, scale_offset = scale_layout or (scale.reshape((mod_rows, hidden)), hidden, 0)
@@ -573,9 +653,9 @@ def _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype=None
     return _stop_grad_outputs(jt.code(
         x.shape,
         output_dtype,
-        [x, scale, shift],
+        [x, scale, shift, *extra_inputs],
         cuda_header=_PACK_HEADER,
-        cuda_src=_modulated_ln_source(hidden, bool(one_plus), mod_mode, many_rows),
+        cuda_src=_modulated_ln_source(hidden, bool(one_plus), mod_mode, many_rows, bool(extra_inputs)),
         data={
             "eps": eps_value,
             "rows_per_mod": float(rows_per_mod),
@@ -583,6 +663,7 @@ def _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype=None
             "shift_pitch": float(shift_pitch),
             "scale_offset": float(scale_offset),
             "shift_offset": float(shift_offset),
+            **extra,
         },
     ))
 

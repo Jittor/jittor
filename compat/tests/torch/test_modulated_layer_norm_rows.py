@@ -77,3 +77,43 @@ def test_modulated_layer_norm_cast_preserves_mutation():
         wide.add_(2)
         np.testing.assert_array_equal(wide.type_as(x).float().cpu().numpy(),
                                       np.full((2, 5, 128), 3, dtype=np.float32))
+
+
+@pytest.mark.parametrize("width", [123, 768])
+def test_modulated_layer_norm_reads_broadcast_add_slices(width):
+    import jittor as jt
+
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    rng = np.random.default_rng(72)
+    with torch.no_grad(), forbid_backend_fallbacks():
+        def tensor(shape):
+            return torch.tensor(rng.normal(size=shape), dtype=torch.bfloat16, device="cuda")
+
+        x = tensor((2, 19, width))
+        offsets = tensor((2, 1, 3, width))
+        modulation = tensor((2, 19, 3, width))
+        jt.sync_all(True)
+
+        def apply(terms):
+            scale, shift, gate = terms.unbind(2)
+            norm = (F.layer_norm(x.float(), (width,)) * (1 + scale) + shift).type_as(x)
+            return (norm * gate).type_as(x)
+
+        def forward():
+            return apply(offsets + modulation.float())
+
+        terms = offsets + modulation.float()
+        terms.sync()
+        reference = apply(terms)
+        reference.sync()
+        actual = forward()
+        actual.sync()
+        with jt.profile(device=True, memory=False) as trace:
+            actual = forward()
+            actual.sync()
+        kernels = [row["name"] for row in trace.result.kernel_records]
+        assert actual.location() == "device"
+        assert sum("mln_" in name for name in kernels) == 1
+        assert all(row["out_bytes"] < terms.nbytes for row in trace.result.op_records)
+        np.testing.assert_array_equal(actual.float().cpu().numpy(), reference.float().cpu().numpy())

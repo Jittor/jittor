@@ -2363,6 +2363,21 @@ def _split_silu_mul(left, right):
     return None
 
 
+def _read_broadcast_add_slice(tensor, other):
+    if (not isinstance(other, _NativeVar) or tensor.ndim != 3
+            or _jittor_dtype_name(tensor.dtype) != "float32"
+            or tensor._storage_is_contiguous() or not _owner.jt.flags.no_grad
+            or _owner.jt.flags.amp_reg or tensor.placement_backend != 1):
+        return tensor
+    from jittor.ops.shape_ops import _pending_slice_of_float_add
+
+    operands = _pending_slice_of_float_add(tensor)
+    if operands is None:
+        return tensor
+    a, b = operands
+    return a.float() + b.float()
+
+
 def _tensor_mul(self, other):
     gated = _split_silu_mul(self, other)
     if gated is not None:
@@ -2373,6 +2388,9 @@ def _tensor_mul(self, other):
     if type(other) in (int, float) and _preserve_autocast_arithmetic():
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__mul__', False)
+    self = _read_broadcast_add_slice(self, other)
+    if isinstance(other, _NativeVar):
+        other = _read_broadcast_add_slice(other, self)
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
@@ -2391,6 +2409,9 @@ def _tensor_rmul(self, other):
     if type(other) in (int, float) and _preserve_autocast_arithmetic():
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__rmul__', True)
+    self = _read_broadcast_add_slice(self, other)
+    if isinstance(other, _NativeVar):
+        other = _read_broadcast_add_slice(other, self)
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
