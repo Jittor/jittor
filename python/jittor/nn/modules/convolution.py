@@ -4,7 +4,7 @@ import math
 
 import jittor as jt
 from jittor.misc import _pair
-from jittor.nn.functional.convolution import _capture_conv1d_width, same_padding_pairs
+from jittor.nn.functional.convolution import _conv1d_width, same_padding_pairs
 
 #: torch's ``padding_mode`` values. ``'zeros'`` is the kernels' own padding;
 #: the others pad the input explicitly and convolve with none, as torch does.
@@ -260,10 +260,9 @@ class Conv1d(jt.Module):
         assert C==self.in_channels
         conv = self._conv[0]
         weight = self.weight
-        if (jt.flags.keep_graph == 2 and conv.padding_mode == 'zeros'
-                and not isinstance(conv.padding, str)):
-            result = _capture_conv1d_width(x, weight, self.bias, conv.stride[0],
-                                           conv.padding[0], conv.dilation[0], conv.groups)
+        if conv.padding_mode == 'zeros' and not isinstance(conv.padding, str):
+            result = _conv1d_width(x, weight, self.bias, conv.stride[0],
+                                    conv.padding[0], conv.dilation[0], conv.groups)
             if result is not None:
                 return result
         conv.weight = weight.unsqueeze(-1)
