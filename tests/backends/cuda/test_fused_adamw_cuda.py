@@ -55,6 +55,19 @@ class TestFusedAdamwCuda(unittest.TestCase):
         for got, want in zip(actual, expected):
             np.testing.assert_allclose(got, want, atol=5e-7, rtol=2e-6)
 
+    def test_bias_correction_keeps_betas_close_to_one(self):
+        hyper = dict(lr=.01, b1=0.99999999, b2=0.999999999, wd=0., eps=1e-8)
+        with jt.flag_scope(use_cuda=1, backend_fallback="error"):
+            for header_values in ([1.], [1., hyper["lr"], 0., hyper["b1"], hyper["b2"], 0., hyper["eps"]]):
+                parameter, moment, variance, gradient = [
+                    jt.array([value], dtype="float32") for value in (1., 0., 0., .5)]
+                header = jt.array(header_values, dtype="float64")
+                out = jt.fused_adamw([parameter], [moment], [variance], [gradient], header,
+                                     hyper["lr"], hyper["b1"], hyper["b2"], hyper["wd"], hyper["eps"])
+                jt.sync(out)
+                expected = _adamw(1., 0., 0., .5, 1., **hyper)
+                np.testing.assert_allclose([value.item() for value in out], expected, atol=0, rtol=1e-6)
+
     def test_live_hyperparameter_header_and_found_inf_skip(self):
         rng = np.random.RandomState(31)
         arrays = [rng.randn(17).astype('float32') for _ in range(4)]

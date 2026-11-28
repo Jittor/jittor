@@ -65,7 +65,7 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
     this is the update for step ``steps + 1``, as the per-parameter path
     computes it. Entries are grouped by step and dtype, one operator each.
 
-    ``lr`` may instead be a two-element float32 Var ``[step, lr]``, which the
+    ``lr`` may instead be a two-element Var ``[step, lr]``, which the
     kernel reads on the device and which then stands for every entry's step:
     what a captured step passes, so that a replay advances the count and
     follows the learning rate without the optimizer running.
@@ -93,7 +93,7 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
         if hyper is not None:
             step, lr = hyper, 0.0
         else:
-            step = jt.array(float(steps + 1), dtype="float32").stop_grad()
+            step = jt.array(float(steps + 1), dtype="float64").stop_grad()
         for start in range(0, len(indices), _MAX_FUSED_ENTRIES):
             batch = indices[start:start + _MAX_FUSED_ENTRIES]
             count = len(batch)
@@ -109,5 +109,6 @@ def _cuda_fused_adamw_updates(entries, lr, beta1, beta2, weight_decay, eps):
 #: Takes ``[step, lr]`` as a device Var in place of the learning rate.
 _cuda_fused_adamw_updates.accepts_live_step = True
 _cuda_fused_adamw_updates.accepts_live_hyperparameters = True
+_cuda_fused_adamw_updates.live_hyperparameter_dtype = "float64"
 
 register_kernel("optim.adamw_fused", "cuda", _cuda_fused_adamw_updates, supports=_supports)
