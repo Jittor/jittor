@@ -963,6 +963,11 @@ def _align_advanced_index(data, index):
 
 
 def _torch_getitem(self, slices):
+    fast_getitem = _owner.jt.core._fast_getitem
+    fast = fast_getitem(self, slices)
+    if fast is not NotImplemented:
+        return fast
+    original = slices
     slices = _normalize_index_sequence(slices)
     # Convert advanced masks before the native fast path or dispatcher.
     def normalize(index):
@@ -992,10 +997,11 @@ def _torch_getitem(self, slices):
         if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
             out = _owner._mark_cpu_like(out, self)
         return out
-    # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
-    fast = _owner.jt.core._fast_getitem(self, slices)
-    if fast is not NotImplemented:
-        return fast
+    # A legacy indexing sequence can normalize to a basic tuple.
+    if slices is not original:
+        fast = fast_getitem(self, slices)
+        if fast is not NotImplemented:
+            return fast
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']

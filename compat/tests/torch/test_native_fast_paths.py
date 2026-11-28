@@ -338,6 +338,18 @@ class TestFastCatRegisteredBackend(unittest.TestCase):
 
 
 class TestFastGetitem(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "requires the CUDA indexing fast path")
+    def test_basic_index_bypasses_sequence_normalization(self):
+        from jittor.compat.torch.installers.tensor import method_api
+
+        x = torch.arange(12, device="cuda").view(3, 4)
+        with _refusing(method_api, "_normalize_index_sequence"):
+            result = x[..., 1:3]
+        self.assertTrue(result.is_cuda)
+        np.testing.assert_array_equal(result.cpu().numpy(), np.arange(12).reshape(3, 4)[:, 1:3])
+        with self.assertRaisesRegex(IndexError, "too many indices for tensor of dimension 2"):
+            x[0, :, :]
+
     def test_basic_indices(self):
         a = torch.randn(4, 5, 6, device=_cuda())
         n = a.numpy()

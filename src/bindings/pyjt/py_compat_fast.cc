@@ -954,10 +954,26 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
 
 PyObject* fast_getitem(PyObject* self, PyObject* index) {
     if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    Var* var = holder->var;
     if (PyTuple_CheckExact(index)) {
         Py_ssize_t n = PyTuple_GET_SIZE(index);
         for (Py_ssize_t i = 0; i < n; i++)
             if (!basic_item(PyTuple_GET_ITEM(index, i))) return not_implemented();
+        if (n > var->shape.size() && n > 1 && PyLong_CheckExact(PyTuple_GET_ITEM(index, 0))) {
+            // The frontend validates this spelling before consulting a provider.
+            bool trailing_full_slices = true;
+            for (Py_ssize_t i = 1; i < n; ++i) {
+                PyObject* item = PyTuple_GET_ITEM(index, i);
+                if (!PySlice_Check(item)) { trailing_full_slices = false; break; }
+                auto* slice = reinterpret_cast<PySliceObject*>(item);
+                if (slice->start != Py_None || slice->stop != Py_None || slice->step != Py_None) {
+                    trailing_full_slices = false;
+                    break;
+                }
+            }
+            if (trailing_full_slices) return not_implemented();
+        }
     } else if (!basic_item(index)) {
         return not_implemented();
     }
@@ -978,8 +994,6 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
             if (!accepted) return not_implemented();
         }
     }
-    auto* holder = GET_RAW_PTR(VarHolder, self);
-    Var* var = holder->var;
     // A CPU-resident hint or a `.data` record changes what the result must
     // carry; the Python path owns those.
     if (var->placement.explicit_backend && var->placement.device.backend == BackendId::Cpu)
