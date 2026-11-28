@@ -7,13 +7,8 @@ from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel, select_kernel
 
 def _supports_softmax(a, log=False, zero_all_neg_inf=False, dim=-1):
-    if not a.shape:
-        return False
-    if dim != -1 and dim != len(a.shape)-1:
-        return False
-    if int(a.shape[-1]) <= 0:
-        return False
-    return True
+    shape = a.shape
+    return bool(shape) and (dim == -1 or dim == len(shape) - 1) and int(shape[-1]) > 0
 
 
 def can_softmax_v1(a, dim):
@@ -266,13 +261,23 @@ kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
 """
 
-    class CodeSoftmax(jt.Function):
-        def execute(self, x):
-            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
+    def forward(x, inference):
+        header = f'''
 #include <{library_resource('cub', 'home')}cub/cub.cuh>
 #include <type/fp16_compute.h>
 #include <type_traits>
-''', cuda_src=execute_source)
+'''
+        if inference:
+            return jt.core._cuda_inference_unary_code(x, execute_source, header)
+        return jt.code(x.shape, x.dtype, [x], cuda_header=header, cuda_src=execute_source)
+
+    class CodeSoftmax(jt.Function):
+        @staticmethod
+        def inference(x):
+            return forward(x, True)
+
+        def execute(self, x):
+            self.save_vars = forward(x, False)
             return self.save_vars
 
         def grad(self, grad_x):
@@ -560,8 +565,9 @@ def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
     cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
            if kind == "register" else
            _softmax_streaming_cls(threads, bool(log), bool(zero_all_neg_inf)))
-    result = cls()(a)
-    if (not log and not zero_all_neg_inf and a.ndim == 4 and jt.flags.no_grad
+    no_grad = jt.flags.no_grad
+    result = cls.inference(a) if kind == "register" and no_grad else cls()(a)
+    if (not log and not zero_all_neg_inf and a.ndim == 4 and no_grad
             and 16 <= length <= 64 and a.numel() // length >= 1024):
         from .short_attention_cuda import record_softmax
 

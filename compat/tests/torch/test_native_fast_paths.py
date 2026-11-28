@@ -871,6 +871,21 @@ class TestRegisteredRmsInference(unittest.TestCase):
         return self.values / np.sqrt((self.values ** 2).mean(-1, keepdims=True)
                                      + self.norm.variance_epsilon)
 
+    def test_attribute_override_can_decline_a_registered_provider(self):
+        class UnweightedRMSNorm(_ToyRMSNorm):
+            def __getattr__(self, name):
+                if name == "pass_weight":
+                    return False
+                return super().__getattr__(name)
+
+        def unexpected(*args):
+            raise AssertionError("the module's attribute override declined this provider")
+
+        outer = torch.nn.Sequential(UnweightedRMSNorm(8).cpu().eval()).eval()
+        with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", unexpected):
+            outer(self.x).sync()
+            np.testing.assert_allclose(outer(self.x).numpy(), self._reference(), rtol=1e-6, atol=1e-6)
+
     def test_registered_provider_runs_once_and_reads_current_weight_and_epsilon(self):
         seen = []
 

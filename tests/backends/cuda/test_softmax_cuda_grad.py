@@ -116,6 +116,21 @@ def _grad_tolerance(prob, cot_np, grad_ref, log, sum_error):
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestSoftmaxCudaGrad(unittest.TestCase):
+    def test_register_inference_matches_the_autograd_forward(self):
+        rng = np.random.default_rng(142)
+        values = rng.standard_normal((2, 3, 7, 263)).astype(np.float32)
+        with jt.flag_scope(use_cuda=1, backend_fallback="error"):
+            for dtype in ("float32", "float16", "bfloat16"):
+                for log in (False, True):
+                    value = jt.array(values).cast(dtype).start_grad()
+                    reference = softmax_v1(value, log=log)
+                    with jt.no_grad():
+                        result = softmax_v1(value, log=log)
+                        result.sync()
+                        self.assertEqual(result.location(), "device")
+                        self.assertFalse(result.requires_grad)
+                        np.testing.assert_array_equal(result.float32().numpy(), reference.float32().numpy())
+
     def test_row_floor_preserves_wide_softmax_bits(self):
         rng = np.random.default_rng(891)
         with jt.flag_scope(use_cuda=1, no_grad=1, backend_fallback="error"):

@@ -1293,7 +1293,7 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
         Py_RETURN_NONE;
 
     Var* value = holder->var;
-    const auto& shape = value->shape;
+    const auto shape = value->shape;
     const auto dtype = value->dtype();
     if (shape.size() != 4 || (dtype != ns_float16 && dtype != ns_bfloat16 && dtype != ns_float32))
         Py_RETURN_NONE;
@@ -1353,17 +1353,50 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
     else if (!producer_source && permute_storage)
         dense.reset(holder->storage_permute(swap_heads_sequence));
     VarPtr source(dense ? dense->var : producer_source ? producer_source : value);
-    PyObjHolder text(PyObject_CallFunction(source_fn, "Liiiii", static_cast<long long>(width),
-        dtype == ns_float32, dense != nullptr || producer_source != nullptr,
-        factors[0] > 1, factors[1] > 1, factors[2] > 1));
-    if (!text.obj) return nullptr;
-    Py_ssize_t size;
-    const char* code = PyUnicode_AsUTF8AndSize(text.obj, &size);
-    if (!code) return nullptr;
+    const bool seq_major = dense != nullptr || producer_source != nullptr;
+    using SourceKey = std::tuple<int64, bool, bool, bool, bool, bool>;
+    const SourceKey key{width, dtype == ns_float32, seq_major,
+                        factors[0] > 1, factors[1] > 1, factors[2] > 1};
+    // The registered provider formats source from this specialization only.
+    // A different callable still supplies its own text on every invocation.
+    static PyObject* source_owner = nullptr;
+    static std::map<SourceKey, string> sources;
+    if (!source_owner) {
+        Py_INCREF(source_fn);
+        source_owner = source_fn;
+    }
+    const bool cacheable = source_fn == source_owner;
+    auto found = cacheable ? sources.find(key) : sources.end();
+    string code;
+    if (found != sources.end()) {
+        code = found->second;
+    } else {
+        // A source callback can run Python, so the inputs must outlive it.
+        if (!c_owner.ptr) c_owner = VarPtr(c);
+        if (!s_owner.ptr) s_owner = VarPtr(s);
+        PyObjHolder text(PyObject_CallFunction(source_fn, "Liiiii", static_cast<long long>(width),
+            dtype == ns_float32, seq_major, factors[0] > 1, factors[1] > 1, factors[2] > 1));
+        if (!text.obj) return nullptr;
+        Py_ssize_t size;
+        const char* bytes = PyUnicode_AsUTF8AndSize(text.obj, &size);
+        if (!bytes) return nullptr;
+        code.assign(bytes, size);
+        if (cacheable) {
+            if (sources.size() >= 256) sources.clear();
+            sources.emplace(key, code);
+        }
+    }
     unique_ptr<VarHolder> out(new VarHolder(make_code(shape, dtype, {source.ptr, c, s},
-        "", {}, "", string(code, size), {}, "", {}, "")));
+        "", {}, "", move(code), {}, "", {}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
+}
+
+VarHolder* cuda_inference_unary_code(VarHolder* input, string&& source, string&& header) {
+    USER_CHECK(no_grad) << "unary inference code requires no_grad";
+    auto* value = input->grad_input();
+    return new VarHolder(make_code(value->shape, value->dtype(), {value}, "", {}, "",
+                                   move(source), {}, move(header), {}, ""));
 }
 
 namespace {

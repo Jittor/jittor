@@ -44,6 +44,7 @@ PyObject* prefer_forward_fn = nullptr;
 PyObject* standard_rms_norm = nullptr;
 PyObject* rms_selector_state = nullptr;
 thread_local bool parallel_linear_scope = false;
+PyObject* rms_getattr_state = nullptr;
 PyObject* linear_execute = nullptr;
 PyObject* linear_training_state = nullptr;
 #if PY_VERSION_HEX < 0x030C0000
@@ -199,6 +200,7 @@ PyObject* call_depth_key = nullptr;
 PyObject* weight_key = nullptr;
 PyObject* bias_key = nullptr;
 PyObject* getattribute_key = nullptr;
+PyObject* getattr_key = nullptr;
 PyObject* linear_input_keys[6] = {};
 
 PyObject* interned(PyObject*& slot, const char* text) {
@@ -1046,30 +1048,46 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
 // code operator from `_rms_norm_source`. nullptr for anything else.
 PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     if (!dict || !is_var(x)) return nullptr;
+    bool plain_lookup = false;
+    PyTypeObject* type = Py_TYPE(module);
+    if (rms_getattr_state) {
+        auto* owner = PyTuple_GET_ITEM(rms_getattr_state, 0);
+        auto* shim_getattr = PyTuple_GET_ITEM(rms_getattr_state, 1);
+        auto* native_getattr = PyTuple_GET_ITEM(rms_getattr_state, 3);
+        auto* getattribute = interned(getattribute_key, "__getattribute__");
+        plain_lookup = _PyType_Lookup(type, getattribute) == _PyType_Lookup(&PyBaseObject_Type, getattribute)
+            && _PyType_Lookup(type, interned(getattr_key, "__getattr__")) == shim_getattr
+            && PyFunction_GET_CODE(shim_getattr) == PyTuple_GET_ITEM(rms_getattr_state, 2)
+            && PyFunction_GET_CODE(native_getattr) == PyTuple_GET_ITEM(rms_getattr_state, 4)
+            && !PyDict_GetItemString(PyFunction_GET_GLOBALS(native_getattr), "object")
+            && PyDict_GetItemString(owner, "_ORIG_MODULE_GETATTR") == native_getattr
+            && PyDict_GetItemString(owner, "_TORCH_HOOK_TABLES") == PyTuple_GET_ITEM(rms_getattr_state, 5);
+    }
     // Match the public contract guard in `_standard_rms_norm` before
     // kernel selection sees even an intentionally unused affine tensor.
-    // Resolve attributes normally so class options/descriptors also agree.
-    for (const char* name : {"has_weight", "pass_weight", "variance_size_override"}) {
-        PyObject* option_value = PyObject_GetAttrString(module, name);
-        if (!option_value) {
-            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
-            PyErr_Clear();
+    // Default Module lookup can answer instance-only names directly. Class
+    // descriptors and any custom attribute implementation use Python.
+    static PyObject* option_keys[4]{};
+    const char* names[] = {"has_weight", "pass_weight", "variance_size_override", "forward_native"};
+    for (int i = 0; i < 4; ++i) {
+        auto* key = interned(option_keys[i], names[i]);
+        if (!key) return nullptr;
+        PyObjHolder option;
+        if (plain_lookup && !_PyType_Lookup(type, key)) {
+            option.obj = PyDict_GetItemWithError(dict, key);
+            Py_XINCREF(option.obj);
+        } else {
+            option.obj = PyObject_GetAttr(module, key);
+            if (!option.obj && PyErr_ExceptionMatches(PyExc_AttributeError)) PyErr_Clear();
+        }
+        if (!option.obj) {
+            if (PyErr_Occurred()) return nullptr;
             continue;
         }
-        PyObjHolder option(option_value);
-        if (std::strcmp(name, "variance_size_override") == 0) {
-            if (option.obj != Py_None) return nullptr;
-        } else if (option.obj == Py_False) {
+        if ((i < 2 && option.obj == Py_False)
+                || (i == 2 && option.obj != Py_None)
+                || (i == 3 && PyCallable_Check(option.obj)))
             return nullptr;
-        }
-    }
-    PyObject* native_forward_value = PyObject_GetAttrString(module, "forward_native");
-    if (native_forward_value) {
-        PyObjHolder native_forward(native_forward_value);
-        if (PyCallable_Check(native_forward.obj)) return nullptr;
-    } else {
-        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
-        PyErr_Clear();
     }
     // These public contract guards apply to backend providers too, before
     // selection can inspect a weight the module has explicitly disabled.
@@ -1285,6 +1303,13 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     };
     part(prefer_forward_fn, "prefer_forward");
     part(standard_rms_norm, "standard_rms_norm");
+    part(rms_getattr_state, "rms_getattr_state");
+    if (rms_getattr_state && (!PyTuple_CheckExact(rms_getattr_state)
+            || PyTuple_GET_SIZE(rms_getattr_state) != 6
+            || !PyDict_Check(PyTuple_GET_ITEM(rms_getattr_state, 0))
+            || !PyFunction_Check(PyTuple_GET_ITEM(rms_getattr_state, 1))
+            || !PyFunction_Check(PyTuple_GET_ITEM(rms_getattr_state, 3))))
+        throw std::invalid_argument("invalid module attribute lookup state");
     part(rms_selector_state, "rms_selector_state");
     if (rms_selector_state && (!PyTuple_CheckExact(rms_selector_state)
             || PyTuple_GET_SIZE(rms_selector_state) != 9

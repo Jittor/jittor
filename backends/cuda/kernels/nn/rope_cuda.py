@@ -264,7 +264,6 @@ def _neox_rope_cuda(x, cos, sin):
     return jt.core._neox_rope(x, cos, sin, _neox_rope_source)
 
 
-@lru_cache(maxsize=256)
 def _neox_rope_source(d, float32, seq_major, c0_gt1, c1_gt1, c2_gt1):
     half = d // 2
     vec2 = int(not float32 and half % 8 == 0)

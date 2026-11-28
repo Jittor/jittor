@@ -61,9 +61,9 @@ _ORIG_MODULE_GETATTR = nn.Module.__getattr__
 _ORIG_MODULE_REGISTER_BACKWARD_HOOK = nn.Module.register_backward_hook
 _ORIG_MODULE_REMOVE_BACKWARD_HOOK = nn.Module.remove_backward_hook
 
-_TORCH_HOOK_TABLES = {
+_TORCH_HOOK_TABLES = frozenset({
     "_forward_hooks", "_forward_pre_hooks", "_backward_hooks", "_backward_pre_hooks",
-}
+})
 
 
 def _getattr(self, name):
@@ -1673,6 +1673,9 @@ def _install_module_methods(nn, registry=None):
         "prefer_forward": _prefer_forward,
         "standard_rms_norm": _standard_rms_norm,
         "rms_selector_state": _rms_selector_state,
+        "rms_getattr_state": (globals(), _getattr, _getattr.__code__,
+                              _ORIG_MODULE_GETATTR, _ORIG_MODULE_GETATTR.__code__,
+                              _TORCH_HOOK_TABLES),
         "linear_execute": _NativeLinear.execute,
         "linear_training_state": _linear_training_dispatch_state(nn, _kernel_dispatch),
         "matmul_kernel": _matrix._cublas_matmul,

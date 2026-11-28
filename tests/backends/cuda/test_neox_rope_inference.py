@@ -88,6 +88,18 @@ class TestNeoxRopeInference(unittest.TestCase):
         s = jt.randn((1, 1, 8, 64), dtype="float32")
         self.assertIsNone(try_dispatch("nn.neox_rope.inference", x, c, s))
 
+    def test_repeated_launches_use_live_rotation_factors(self):
+        with jt.flag_scope(backend_fallback="error"), jt.no_grad():
+            x = jt.array(np.ones((1, 2, 3, 16), np.float32))
+            cos = jt.array(np.ones((3, 16), np.float32))
+            for weight in (2., 3., 4.):
+                out = try_dispatch("nn.neox_rope.inference", x, cos, cos * weight)
+                self.assertIsNotNone(out)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                expected = np.broadcast_to([1. - weight] * 8 + [1. + weight] * 8, (1, 2, 3, 16))
+                np.testing.assert_array_equal(out.numpy(), expected)
+
 
     def test_pending_broadcast_factors(self):
         shape = (2, 3, 5, 16)
