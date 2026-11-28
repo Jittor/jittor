@@ -19,33 +19,43 @@ import jittor.models as jtmodels
 
 
 @pytest.mark.cuda
-def test_large_depthwise_filter_reuses_rows_with_numerical_gradients():
+@pytest.mark.parametrize("use_bias", (False, True))
+def test_large_depthwise_filter_reuses_rows_with_numerical_gradients(use_bias):
     _test_capability.require_accelerator("cuda")
     from jittor.backends.cuda.kernels.nn import depthwise
+    from jittor.nn.modules import depthwise as depthwise_module
 
     rng = np.random.default_rng(274)
     x = (rng.standard_normal((2, 64, 37, 59)) / 4).astype(np.float32)
     weight = (rng.standard_normal((64, 1, 7, 9)) / 8).astype(np.float32)
     padding = (3, 4)
     cotangent = rng.standard_normal(x.shape).astype(np.float32)
-    inputs = [value.astype(np.float64) for value in (x, weight)]
+    values = [x, weight]
+    if use_bias:
+        values.append(rng.standard_normal(x.shape[1], dtype=np.float32))
+    inputs = [value.astype(np.float64) for value in values]
 
-    def reference(data, kernels):
+    def reference(data, kernels, bias=None):
         ph, pw = padding
         padded = np.pad(data, ((0, 0), (0, 0), (ph, ph), (pw, pw)))
         windows = np.lib.stride_tricks.sliding_window_view(padded, kernels.shape[-2:], axis=(-2, -1))
-        return np.einsum("ncyxij,cij->ncyx", windows, kernels[:, 0])
+        out = np.einsum("ncyxij,cij->ncyx", windows, kernels[:, 0])
+        return out if bias is None else out + bias[None, :, None, None]
 
-    with unittest.mock.patch.object(depthwise, "_depthwise_forward_rows",
+    owner = depthwise_module if use_bias else depthwise
+    with unittest.mock.patch.object(owner, "_depthwise_forward_rows",
                                    wraps=depthwise._depthwise_forward_rows) as launch:
         with jt.flag_scope(use_cuda=1, backend_fallback="error", amp_reg=0):
-            jx, jw = jt.array(x), jt.array(weight)
-            y = jt.nn.conv2d(jx, jw, padding=padding, groups=x.shape[1])
-            grads = jt.grad((y * jt.array(cotangent)).sum(), [jx, jw])
+            tensors = [jt.array(value) for value in values]
+            y = jt.nn.conv2d(*tensors, padding=padding, groups=x.shape[1])
+            grads = jt.grad((y * jt.array(cotangent)).sum(), tensors)
             jt.sync([y, *grads], device_sync=True)
             assert all(t.location() == "device" for t in [y, *grads])
             actual, *gradients = jt.fetch_sync([y, *grads])
         launch.assert_called_once()
+        if use_bias:
+            assert len(launch.call_args.args) == 5
+            assert launch.call_args.args[-1].shape == tensors[-1].shape
     np.testing.assert_allclose(actual, reference(*inputs), atol=1e-6, rtol=1e-5)
     for index, grad in enumerate(gradients):
         direction = rng.standard_normal(grad.shape)

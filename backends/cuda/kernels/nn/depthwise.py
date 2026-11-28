@@ -77,10 +77,11 @@ def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, d
 
 
 _DEPTHWISE_ROWS_KERNEL = r"""
-template <int KH, int KW, int ROWS>
+template <int KH, int KW, int ROWS, bool BIAS>
 __global__ void depthwise_reuse_rows(
         const float* __restrict__ x, const float* __restrict__ weight,
-        float* __restrict__ out, int channels, int height, int width,
+        const float* __restrict__ bias, float* __restrict__ out,
+        int channels, int height, int width,
         int oh, int ow, int ph, int pw) {
     const int item = blockIdx.x * blockDim.x + threadIdx.x;
     const int row = (item / ow) * ROWS;
@@ -112,15 +113,17 @@ __global__ void depthwise_reuse_rows(
             }
         }
     }
+    const float shift = BIAS ? bias[channel] : 0.f;
     #pragma unroll
     for (int r = 0; r < ROWS; ++r) {
-        if (row + r < oh) out[(row + r) * ow + column] = result[r];
+        if (row + r < oh)
+            out[(row + r) * ow + column] = BIAS ? result[r] + shift : result[r];
     }
 }
 """
 
 
-def _depthwise_forward_rows(x, weight, output_shape, padding):
+def _depthwise_forward_rows(x, weight, output_shape, padding, bias=None):
     batch, channels, height, width = x.shape
     kh, kw = weight.shape[-2:]
     oh, ow = output_shape[-2:]
@@ -128,26 +131,33 @@ def _depthwise_forward_rows(x, weight, output_shape, padding):
     items = ((oh + rows - 1) // rows) * ow
     threads = 32 if items <= 64 else 128
     blocks = (items + threads - 1) // threads
-    return jt.code(output_shape, x.dtype, [x, weight], cuda_header=_DEPTHWISE_ROWS_KERNEL, cuda_src=f"""
-        depthwise_reuse_rows<{kh}, {kw}, {rows}>
+    inputs = [x, weight] if bias is None else [x, weight, bias]
+    bias_pointer = "nullptr" if bias is None else "in2_p"
+    return jt.code(output_shape, x.dtype, inputs, cuda_header=_DEPTHWISE_ROWS_KERNEL, cuda_src=f"""
+        depthwise_reuse_rows<{kh}, {kw}, {rows}, {str(bias is not None).lower()}>
             <<<dim3({blocks}, {channels}, {batch}), {threads}>>>(
-                in0_p, in1_p, out0_p, {channels}, {height}, {width},
+                in0_p, in1_p, {bias_pointer}, out0_p, {channels}, {height}, {width},
                 {oh}, {ow}, {padding[0]}, {padding[1]});
     """)
 
 
-def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
-    Kh, Kw = weight.shape[-2:]
+def _supports_depthwise_rows(x, weight, output_shape, stride, dilation):
+    kh, kw = weight.shape[-2:]
     # Large filters reuse input pixels across adjacent output rows. Each
     # output still accumulates its filter in row-major order. The bounds
     # keep this unrolled kernel within a practical register budget.
-    if (stride == dilation == (1, 1) and 49 <= Kh * Kw and max(Kh, Kw) <= 9
+    return (stride == dilation == (1, 1) and 49 <= kh * kw and max(kh, kw) <= 9
             and dtype_name(x.dtype) == dtype_name(weight.dtype) == "float32"
             and x.shape[0] <= 65535 and x.shape[1] <= 65535
             and 4 <= output_shape[2] and output_shape[2] * output_shape[3] < (1 << 30)
             and x.shape[2] * x.shape[3] < (1 << 30)
-            and x.numel() >= (1 << 18)):
+            and x.numel() >= (1 << 18))
+
+
+def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
+    if _supports_depthwise_rows(x, weight, output_shape, stride, dilation):
         return _depthwise_forward_rows(x, weight, output_shape, padding)
+    Kh, Kw = weight.shape[-2:]
     return jt.code(
             output_shape,
             x.dtype,
