@@ -2118,7 +2118,72 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
                           '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
 
 
+def _try_fused_neox_rope_add(cos_term, src, sin_tensor):
+    """Fuse ``(x * cos) + (rotate_half(x) * sin)`` into one CUDA RoPE kernel."""
+    jt_mod = _owner.jt
+    if not isinstance(cos_term, jt_mod.Var) or not isinstance(src, jt_mod.Var):
+        return None
+    op = cos_term._producer_op()
+    if op == "binary.multiply":
+        in0, in1 = cos_term._input(0), cos_term._input(1)
+    elif op == "transpose":
+        outer_axes = tuple(cos_term._producer_transpose_axes())
+        inner = cos_term._input(0)
+        if (
+            not isinstance(inner, jt_mod.Var)
+            or inner._producer_op() != "binary.multiply"
+            or not outer_axes
+            or tuple(outer_axes[a] for a in outer_axes) != tuple(range(len(outer_axes)))
+        ):
+            return None
+        t0, t1 = inner._input(0), inner._input(1)
+        if (
+            not isinstance(t0, jt_mod.Var)
+            or not isinstance(t1, jt_mod.Var)
+            or tuple(t0._producer_transpose_axes()) != outer_axes
+            or tuple(t1._producer_transpose_axes()) != outer_axes
+        ):
+            return None
+        in0, in1 = t0._input(0), t1._input(0)
+    else:
+        return None
+    u0, u1 = in0, in1
+    while (
+        isinstance(u0, jt_mod.Var)
+        and u0.var_ptr != src.var_ptr
+        and u0._producer_name() in ("broadcast_to", "clone")
+    ):
+        u0 = u0._input(0)
+    while (
+        isinstance(u1, jt_mod.Var)
+        and u1.var_ptr != src.var_ptr
+        and u1._producer_name() in ("broadcast_to", "clone")
+    ):
+        u1 = u1._input(0)
+    if u0.var_ptr == src.var_ptr:
+        cos_tensor = u1
+    elif u1.var_ptr == src.var_ptr:
+        cos_tensor = u0
+    else:
+        return None
+    from jittor._runtime.dispatch import try_dispatch
+    fused = try_dispatch("nn.neox_rope.inference", src, cos_tensor, sin_tensor)
+    if fused is None:
+        return None
+    return _owner._mark_cpu_like(fused, src)
+
+
 def _tensor_add(self, other):
+    rope_sin = getattr(other, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_fused_neox_rope_add(self, rope_sin[0], rope_sin[1])
+        if fused is not None:
+            return fused
+    rope_sin = getattr(self, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_fused_neox_rope_add(other, rope_sin[0], rope_sin[1])
+        if fused is not None:
+            return fused
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 0)
@@ -2128,6 +2193,16 @@ def _tensor_add(self, other):
 
 
 def _tensor_radd(self, other):
+    rope_sin = getattr(self, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_fused_neox_rope_add(other, rope_sin[0], rope_sin[1])
+        if fused is not None:
+            return fused
+    rope_sin = getattr(other, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_fused_neox_rope_add(self, rope_sin[0], rope_sin[1])
+        if fused is not None:
+            return fused
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 1)
@@ -2175,6 +2250,17 @@ def _cuda_scalar_multiply(self, other):
     return _owner._mark_cpu_like(result, self)
 
 
+def _tag_rope_sin_mul(left, right, out):
+    rh_src = getattr(left, "_jt_rotate_half_src", None)
+    if rh_src is not None and isinstance(right, _owner.jt.Var):
+        out._jt_rope_sin = (rh_src, right)
+    elif isinstance(right, _owner.jt.Var):
+        rh_src = getattr(right, "_jt_rotate_half_src", None)
+        if rh_src is not None:
+            out._jt_rope_sin = (rh_src, left)
+    return out
+
+
 def _tensor_mul(self, other):
     scalar = _cuda_scalar_multiply(self, other)
     if scalar is not None:
@@ -2186,8 +2272,8 @@ def _tensor_mul(self, other):
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__mul__', False)
+            return _tag_rope_sin_mul(self, other, out)
+    return _tag_rope_sin_mul(self, other, _promoting_binary(self, other, '__mul__', False))
 
 
 def _tensor_rmul(self, other):
@@ -2201,8 +2287,8 @@ def _tensor_rmul(self, other):
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__rmul__', True)
+            return _tag_rope_sin_mul(other, self, out)
+    return _tag_rope_sin_mul(other, self, _promoting_binary(self, other, '__rmul__', True))
 
 
 def _tensor_floordiv(self, other):

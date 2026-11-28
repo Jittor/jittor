@@ -800,7 +800,7 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
                 conflicting_placement = placement != (backend, _builtins.max(int(first.device_id), 0))
         fast = NotImplemented if conflicting_placement else (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
-            return _cat_grad_result(fast, tensors)
+            return _maybe_tag_rotate_half(_cat_grad_result(fast, tensors), tensors, dim)
         # The native fast path above declines whenever a backend registers its
         # own concat kernel (ACL does), so on ACL every `cat` falls through the
         # whole frontend below -- the `__torch_function__` scan, the `None`
@@ -829,7 +829,7 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
                 # so restore the common input dtype the frontend promises.
                 if _jittor_dtype_name(result.dtype) != name0:
                     result = result.cast(name0)
-                return _cat_grad_result(result, seq)
+                return _maybe_tag_rotate_half(_cat_grad_result(result, seq), seq, dim)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -908,6 +908,21 @@ def _cat_grad_result(value, tensors):
             isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
         return value.detach()
     return value
+
+
+def _maybe_tag_rotate_half(result, tensors, dim):
+    if (
+        isinstance(result, jt.Var)
+        and result.ndim == 4
+        and isinstance(tensors, (list, tuple))
+        and len(tensors) == 2
+        and (dim == -1 or dim == 3)
+    ):
+        from jittor.ops.concatenation import _detect_rotate_half_source
+        src = _detect_rotate_half_source(tensors, 3)
+        if src is not None:
+            result._jt_rotate_half_src = src
+    return result
 
 
 def _cat_result(value, out):

@@ -275,6 +275,10 @@ def concat(arr, dim=0):
                 and not select_kernel._is_registered("tensor.setitem"):
             out = native(arr, dim)
             if out is not NotImplemented:
+                if len(arr) == 2 and (dim == -1 or dim == len(first.shape) - 1):
+                    src = _detect_rotate_half_source(arr, len(first.shape) - 1)
+                    if src is not None:
+                        out._jt_rotate_half_src = src
                 return out
     amp_reg = jt.flags.amp_reg
     keep_reduce = jt.amp_flags.keep_reduce
@@ -282,6 +286,45 @@ def concat(arr, dim=0):
         return _concat(jt, arr, dim)
     with jt.flag_scope(amp_reg=amp_reg | keep_reduce):
         return _concat(jt, arr, dim)
+
+
+def _detect_rotate_half_source(arr, dim):
+    """Return ``x`` when ``arr`` is ``(-x[..., half:], x[..., :half])`` along the last axis."""
+    if len(arr) != 2:
+        return None
+    a, b = arr[0], arr[1]
+    rank = len(a.shape)
+    if dim != rank - 1 or rank != 4:
+        return None
+    half = int(a.shape[dim])
+    if half <= 0 or int(b.shape[dim]) != half:
+        return None
+    if a._producer_unary() != "negative":
+        return None
+    x2 = a._input(0)
+    x1 = b
+    while x2._producer_name() == "clone":
+        x2 = x2._input(0)
+    while x1._producer_name() == "clone":
+        x1 = x1._input(0)
+    if x1._producer_name() != "getitem" or x2._producer_name() != "getitem":
+        return None
+    src1, src2 = x1._input(0), x2._input(0)
+    if src1.var_ptr != src2.var_ptr:
+        return None
+    if tuple(int(s) for s in src1.shape) != tuple(int(s) for s in a.shape[:-1]) + (2 * half,):
+        return None
+    src_strides = tuple(int(s) for s in src1._storage_strides())
+    if src_strides[-1] != 1:
+        return None
+    if (
+        tuple(int(s) for s in x1._storage_strides()) != src_strides
+        or tuple(int(s) for s in x2._storage_strides()) != src_strides
+        or int(x1._storage_offset()) != int(src1._storage_offset())
+        or int(x2._storage_offset()) != int(src1._storage_offset()) + half
+    ):
+        return None
+    return src1
 
 
 _tracing = None
@@ -350,8 +393,17 @@ def _concat_after_kernel(arr, dim, dtype):
     if _tracing():
         fused = _concat_fused(arr, dim, dtype)
         if fused is not None:
+            if len(arr) == 2 and dim == len(arr[0].shape) - 1:
+                src = _detect_rotate_half_source(arr, dim)
+                if src is not None:
+                    fused._jt_rotate_half_src = src
             return fused
-    return _concat_bounded(arr, dim, dtype)
+    out = _concat_bounded(arr, dim, dtype)
+    if len(arr) == 2 and dim == len(arr[0].shape) - 1:
+        src = _detect_rotate_half_source(arr, dim)
+        if src is not None:
+            out._jt_rotate_half_src = src
+    return out
 
 
 cat = concat
