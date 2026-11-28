@@ -42,9 +42,10 @@ __global__ static void gelu_forward(
 long long n = in0->num;
 constexpr int VEC = 16 / sizeof(in0_type);
 if (VEC > 1 && n >= VEC && ((((size_t)in0_p | (size_t)out0_p) & 15) == 0)) {
-    long long blocks = ((n / VEC) + 255) / 256;
+    constexpr int threads = GELU_VECTOR_THREADS;
+    long long blocks = ((n / VEC) + threads - 1) / threads;
     if (blocks > 65536) blocks = 65536;
-    gelu_forward_vec16<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    gelu_forward_vec16<<<(unsigned)blocks, threads>>>(in0_p, out0_p, n);
 } else {
     long long blocks = (n + 255) / 256;
     if (blocks > 65536) blocks = 65536;
@@ -52,11 +53,13 @@ if (VEC > 1 && n >= VEC && ((((size_t)in0_p | (size_t)out0_p) & 15) == 0)) {
 }
 """
 
-_GELU_EXACT_FWD = r"""
+_GELU_EXACT = r"""
 __device__ __forceinline__ float jt_gelu_fwd(float v) {
     return (0.5f * v) * (1.0f + erff(v * 0.7071067811865476f));
 }
-""" + _GELU_FWD
+"""
+_GELU_EXACT_FWD = _GELU_EXACT + _GELU_FWD.replace("GELU_VECTOR_THREADS", "256")
+_GELU_FP16_INFERENCE_FWD = _GELU_EXACT + _GELU_FWD.replace("GELU_VECTOR_THREADS", "128")
 
 _GELU_TANH_INFERENCE_FWD = r"""
 __device__ __forceinline__ float jt_gelu_fwd(float v) {
@@ -64,7 +67,7 @@ __device__ __forceinline__ float jt_gelu_fwd(float v) {
     float inner = 0.7978845608028654f * (v + 0.044715f * cubic);
     return (0.5f * v) * (1.0f + tanhf(inner));
 }
-""" + _GELU_FWD
+""" + _GELU_FWD.replace("GELU_VECTOR_THREADS", "256")
 
 _GELU_EXACT_BWD = r"""
 __device__ __forceinline__ float jt_gelu_exact_bwd(float dy, float v) {
@@ -258,19 +261,27 @@ def _install_gelu_training_cuda(jt, output_requires_grad, optional_kernel):
         if (approximate not in ("none", "tanh") or not isinstance(x, jt.Var) or jt.flags.amp_reg
                 or output_requires_grad(x) or not x._storage_is_contiguous()):
             return False
-        if dtype_name(x.dtype) == "float32":
+        dtype = dtype_name(x.dtype)
+        if dtype == "float32":
             # One full block of vectors before choosing a standalone launch.
             return x.numel() >= 256 * 4 and _has_gelu_input_boundary(x)
         # Pending narrow activations can fuse into their consumers, including
         # gated products. A CodeOp inserts an extra launch and rounding boundary.
         # Narrow elementwise kernels already do well at smaller sizes.
-        return x.is_finished and x.numel() >= (1 << 20)
+        return (x.numel() >= (1 << 20)
+                and (x.is_finished or (dtype == "float16" and approximate == "none"
+                                       and _has_gelu_input_boundary(x))))
 
     @optional_kernel(
         "nn.gelu.inference", "cuda", dtypes=_GELU_DTYPES, supports=supports_inference,
     )
     def gelu_inference_cuda(x, approximate="none"):
-        source = _GELU_TANH_INFERENCE_FWD if approximate == "tanh" else _GELU_EXACT_FWD
+        if approximate == "tanh":
+            source = _GELU_TANH_INFERENCE_FWD
+        elif dtype_name(x.dtype) == "float16":
+            source = _GELU_FP16_INFERENCE_FWD
+        else:
+            source = _GELU_EXACT_FWD
         return jt.code(x.shape, x.dtype, [x], cuda_src=source).stop_grad()
 
     global _gelu_training_cuda
