@@ -2173,6 +2173,36 @@ def _try_fused_neox_rope_add(cos_term, src, sin_tensor):
     return _owner._mark_cpu_like(fused, src)
 
 
+def _try_fused_mod_ln_add(mod_ln, shift):
+    """Fuse ``layer_norm(x) * (1 + scale) + shift`` into one CUDA kernel."""
+    jt_mod = _owner.jt
+    if not isinstance(shift, jt_mod.Var):
+        return None
+    x, eps, scale_expr = mod_ln
+    if not isinstance(x, jt_mod.Var) or not isinstance(scale_expr, jt_mod.Var):
+        return None
+    one_plus_src = getattr(scale_expr, "_jt_one_plus_src", None)
+    if isinstance(one_plus_src, jt_mod.Var) and str(one_plus_src.dtype) == str(x.dtype):
+        scale_tensor = one_plus_src
+        one_plus = True
+    else:
+        scale_tensor = scale_expr
+        one_plus = False
+    from jittor._runtime.dispatch import try_dispatch
+    fused = try_dispatch(
+        "nn.layer_norm.modulated", x, scale_tensor, shift, eps, one_plus=one_plus,
+    )
+    if fused is None:
+        return None
+    return _owner._mark_cpu_like(fused, x)
+
+
+def _tag_one_plus(var_operand, scalar_operand, out):
+    if type(scalar_operand) in (int, float) and scalar_operand == 1:
+        out._jt_one_plus_src = var_operand
+    return out
+
+
 def _tensor_add(self, other):
     rope_sin = getattr(other, "_jt_rope_sin", None)
     if rope_sin is not None:
@@ -2184,12 +2214,22 @@ def _tensor_add(self, other):
         fused = _try_fused_neox_rope_add(other, rope_sin[0], rope_sin[1])
         if fused is not None:
             return fused
+    mod_ln = getattr(self, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, other)
+        if fused is not None:
+            return fused
+    mod_ln = getattr(other, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, self)
+        if fused is not None:
+            return fused
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 0)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__add__', False)
+            return _tag_one_plus(self, other, out)
+    return _tag_one_plus(self, other, _promoting_binary(self, other, '__add__', False))
 
 
 def _tensor_radd(self, other):
@@ -2203,12 +2243,22 @@ def _tensor_radd(self, other):
         fused = _try_fused_neox_rope_add(self, rope_sin[0], rope_sin[1])
         if fused is not None:
             return fused
+    mod_ln = getattr(self, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, other)
+        if fused is not None:
+            return fused
+    mod_ln = getattr(other, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, self)
+        if fused is not None:
+            return fused
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 1)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__radd__', True)
+            return _tag_one_plus(self, other, out)
+    return _tag_one_plus(self, other, _promoting_binary(self, other, '__radd__', True))
 
 
 def _tensor_sub(self, other):
@@ -2258,6 +2308,13 @@ def _tag_rope_sin_mul(left, right, out):
         rh_src = getattr(right, "_jt_rotate_half_src", None)
         if rh_src is not None:
             out._jt_rope_sin = (rh_src, left)
+    plain_ln = getattr(left, "_jt_plain_ln", None)
+    if plain_ln is not None and isinstance(right, _owner.jt.Var):
+        out._jt_mod_ln_mul = (plain_ln[0], plain_ln[1], right)
+    elif isinstance(right, _owner.jt.Var):
+        plain_ln = getattr(right, "_jt_plain_ln", None)
+        if plain_ln is not None:
+            out._jt_mod_ln_mul = (plain_ln[0], plain_ln[1], left)
     return out
 
 

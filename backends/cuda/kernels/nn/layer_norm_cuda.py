@@ -1219,11 +1219,14 @@ def _layer_norm_no_grad_cuda(
         if _warp_rows(x, hidden):
             affine = ("", f"* {scale_literal} + {offset_literal}",
                       f"* {scale_value!r} + {offset_value!r}")
-            return jt.code(
+            y = jt.code(
                 x.shape, x.dtype, [x],
                 cuda_src=_warp_rows_source(hidden, affine)
                 + _warp_rows_launch(hidden, "in0_p, out0_p"),
                 data={"eps": eps_value})
+            if scale_value == 1.0 and offset_value == 0.0:
+                y._jt_plain_ln = (x, eps_value)
+            return y
         y = jt.code(
             x.shape,
             x.dtype,
@@ -1231,6 +1234,8 @@ def _layer_norm_no_grad_cuda(
             cuda_src=_block_rows_source_scalar(hidden, offset_literal, scale_literal),
             data={"eps": eps_value},
         )
+        if scale_value == 1.0 and offset_value == 0.0:
+            y._jt_plain_ln = (x, eps_value)
         return y
     if has_weight and not has_bias:
         offset_value = float(bias)
