@@ -47,3 +47,19 @@ def test_gelu_selects_matmul_boundary_and_leaves_elementwise_chain_fusable():
         assert not narrow.is_finished
         assert select_kernel(op, narrow, approximate="tanh") is None
     assert select_kernel(op, jt.ones((8193,)).start_grad()) is None
+
+
+@pytest.mark.cuda
+def test_exact_half_gelu_reads_pending_dense_gemm():
+    require_accelerator("cuda")
+    with jt.flag_scope(use_cuda=1, backend_fallback="error", cuda_kernel_math="strict"), jt.no_grad():
+        left = jt.randn((1024, 48)).float16()
+        right = jt.randn((48, 1024)).float16()
+        product = jt.nn.matmul(left, right)
+        assert not product.is_finished
+        op = "nn.gelu.inference"
+        result = jt.nn.gelu(product)
+        assert result._producer_op() == "code"
+        with override_kernel(op, "cuda", None):
+            expected = jt.nn.gelu(product)
+        np.testing.assert_array_equal(result.float32().numpy(), expected.float32().numpy())

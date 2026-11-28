@@ -176,7 +176,7 @@ PyObject* partial_type = nullptr;
 PyObject* group_norm_name = nullptr;
 PyObject* lt_linear_header = nullptr;
 PyObject* lt_linear_source_fn = nullptr;
-std::map<std::tuple<int64, int64, int64, bool>, const string*> lt_linear_sources;
+std::map<std::tuple<int64, int64, int64, bool, bool>, const string*> lt_linear_sources;
 string lt_linear_header_text;
 auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
@@ -968,11 +968,13 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     int64 rows = cin ? a->num / cin : 0;
     if (rows * cout * cin < (int64(1) << 18)) return nullptr;
     bool half = dtype == ns_float16;
-    auto key = std::make_tuple(rows, cin, cout, half);
+    bool capture = half && keep_graph == 2;
+    auto key = std::make_tuple(rows, cin, cout, half, capture);
     auto found = lt_linear_sources.find(key);
     if (found == lt_linear_sources.end()) {
-        PyObjHolder src(PyObject_CallFunction(lt_linear_source_fn, "LLLs",
-            (long long)rows, (long long)cin, (long long)cout, half ? "float16" : "float32"));
+        PyObjHolder src(PyObject_CallFunction(lt_linear_source_fn, "LLLsO",
+            (long long)rows, (long long)cin, (long long)cout, half ? "float16" : "float32",
+            capture ? Py_True : Py_False));
         Py_ssize_t size;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
         if (!text) return nullptr;

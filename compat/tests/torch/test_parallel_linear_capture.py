@@ -115,3 +115,36 @@ def test_large_projections_feeding_gelu_gate(device):
         assert actual.is_contiguous()
         np.testing.assert_allclose(actual.float().cpu().numpy(), expected.float().cpu().numpy(),
                                    rtol=3e-3, atol=1e-4)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_capture_uses_wide_half_linear_search(monkeypatch):
+    from jittor.backends.cuda.kernels.cublas import lt_linear_cuda as provider
+
+    calls = []
+    source = provider._source
+
+    def observe(rows, cin, cout, dtype, capture=False):
+        calls.append((dtype, capture))
+        return source(rows, cin, cout, dtype, capture)
+
+    monkeypatch.setattr(provider, "_source", observe)
+    with torch.no_grad(), forbid_backend_fallbacks(), jt.flag_scope(auto_graph_replay=0):
+        x = torch.randn((1024, 1024), dtype=torch.float16, device="cuda") * 0.1
+        weight = torch.randn_like(x) * 0.1
+        bias = torch.zeros(1024, dtype=x.dtype, device=x.device)
+
+        def linear(value):
+            return F.linear(value, weight, bias)
+
+        expected = linear(x)
+        expected.sync()
+        run = torch.compile(linear, mode="reduce-overhead")
+        for _ in range(6):
+            actual = run(x)
+            actual.sync()
+        assert actual.device.type == "cuda"
+        assert run.stats["graph"] > 0
+        assert ("float16", True) in calls
+        np.testing.assert_allclose(actual.float().cpu().numpy(), expected.float().cpu().numpy(),
+                                   rtol=2e-3, atol=5e-4)

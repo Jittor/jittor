@@ -370,22 +370,29 @@ def _supports(x, weight, bias, *args, **kwargs):
 
 
 @functools.lru_cache(maxsize=256)
-def _source(rows, cin, cout, dtype):
+def _source(rows, cin, cout, dtype, capture=False):
     # The one place the element type enters the kernel. The accumulate is
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha
     # and beta stay floats either way.
     ct, kt = _LT_TYPES[dtype]
     # A single generous workspace limit can fill the heuristic shortlist with
     # split-K variants and omit faster unsplit kernels. Check lower limits for
-    # large BF16 products where the search amortizes over repeated calls.
+    # large BF16 products and captured FP16 products where the search amortizes.
+    tuned_half = (capture and dtype == "float16" and min(rows, cin, cout) >= 128
+                  and rows * cin * cout >= (1 << 30))
     tune_large = (dtype == "bfloat16" and min(rows, cin, cout) >= 128
                   and rows * cin * cout >= (1 << 27))
-    shortlist = 24 if tune_large else _CANDIDATES
+    shortlist = 24 if (tune_large or tuned_half) else _CANDIDATES
+    repeats = 12 if tuned_half else 3
+    workspace = (32 << 20) if tuned_half else _WORKSPACE
     workspace_tiers = """
         add_candidates(op, lc, 1 << 20, false);
         add_candidates(op, lc, 0, false);
         if (bias_layout) add_candidates(broadcast_op, bias_layout, wsize, true);
-""" if tune_large else ""
+""" if tune_large else ("""
+        add_candidates(op, lc, 1 << 20, false);
+        add_candidates(op, lc, 0, false);
+""" if tuned_half else "")
     deep_dot_plans = """
         jt_lt_check_deep_dot_plans(lt, op, la, lb, lc, candidates, wsize);
 """ if tune_large and cin >= 2 * max(rows, cout) else ""
@@ -399,7 +406,7 @@ def _source(rows, cin, cout, dtype):
         CHECK(cublasLtMatmulPreferenceSetAttribute(
             pref, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction,
             sizeof(reduction)) == CUBLAS_STATUS_SUCCESS);
-""" if dtype == "bfloat16" else ""
+""" if dtype == "bfloat16" or tuned_half else ""
     if dtype == "bfloat16":
         # Split-K may reduce partial sums into BF16. If no plan keeps the
         # accumulator wide, preserve that rounding boundary with an FP32 GEMM
@@ -509,9 +516,9 @@ def _source(rows, cin, cout, dtype):
     JtLtChoice& choice = choices[slot];
     if (!choice.ready) {{
         choice.ready = true;
-        JtLtWorkspace probe({_WORKSPACE});
+        JtLtWorkspace probe({workspace});
         void* ws = probe.ptr;
-        size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
+        size_t wsize = ws ? (size_t){workspace} : 0;
         cublasLtMatmulPreference_t pref = nullptr;
         CHECK(cublasLtMatmulPreferenceCreate(&pref) == CUBLAS_STATUS_SUCCESS);
         {reduction_policy}
@@ -543,9 +550,9 @@ def _source(rows, cin, cout, dtype):
                 return launch(result.algo, candidate.bias_as_c, ws, result.workspaceSize);
             }};
             if (once() != CUBLAS_STATUS_SUCCESS) continue;
-            cudaDeviceSynchronize();
+            {"" if tuned_half else "cudaDeviceSynchronize();"}
             cudaEventRecord(beg, cudaStreamPerThread);
-            for (int r = 0; r < 3; r++) once();
+            for (int r = 0; r < {repeats}; r++) once();
             cudaEventRecord(end, cudaStreamPerThread);
             if (cudaEventSynchronize(end) != cudaSuccess) continue;
             float ms = 0.0f;
@@ -1009,8 +1016,9 @@ def lt_linear_cuda(x, weight, bias):
         weight = weight.cast(dtype)
     if _jittor_dtype_name(bias.dtype) != dtype:
         bias = bias.cast(dtype)
+    capture = dtype == "float16" and jt.flags.keep_graph == 2
     result = jt.code(shape[:-1] + [cout], dtype, [x, weight, bias],
-                     cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype))
+                     cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype, capture))
     if jt.flags.keep_graph == 2:
         from jittor._runtime.step_capture import _remember_pure_code
         return _remember_pure_code(result)
