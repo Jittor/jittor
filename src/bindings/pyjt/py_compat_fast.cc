@@ -8,6 +8,7 @@
 #include "bindings/pyjt/py_type_lifetime.h"
 #include "ops/op_register.h"
 #include "core/op.h"
+#include "ops/composite/array_op.h"
 #include "ops/composite/code_op.h"
 #include "ops/composite/code_source.h"
 #include "ops/composite/transpose_op.h"
@@ -1395,10 +1396,99 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
     return to_py_object<VarHolder*>(out.release());
 }
 
-VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header) {
+namespace {
+const string* masked_softmax_code = nullptr;
+
+bool can_read_original_storage(Var* value) {
+    auto version = value->peek_storage_version();
+    return !version || (!version->value.load(std::memory_order_relaxed)
+        && !version->externally_visible.load(std::memory_order_relaxed));
+}
+
+Var* unbroadcast(Var* value) {
+    while (auto* op = pending_producer(value)) {
+        if (!op->is_op(op_ids::broadcast_to()) || op->_inputs.size() != 1) break;
+        value = op->input(0);
+    }
+    return value;
+}
+
+bool read_scalar(Var* value, float& scalar) {
+    value = unbroadcast(value);
+    auto* op = pending_producer(value);
+    if (!op || !op->is_op(op_ids::array()) || value->num != 1 || value->dtype() != ns_float32
+            || !can_read_original_storage(value))
+        return false;
+    auto* array = static_cast<ArrayOp*>(op);
+    if (!array->host_value_known()) return false;
+    scalar = *array->ptr<float>();
+    return std::isfinite(scalar);
+}
+
+bool accepts_score_operand(Var* operand, Var* scores) {
+    const int rank = operand->shape.size();
+    if (rank > 4 || !operand->is_contiguous() || !can_read_original_storage(operand)
+            || !operand->placement.explicit_backend || operand->placement != scores->placement)
+        return false;
+    for (int i = 0; i < rank; ++i)
+        if (operand->shape[i] != 1 && operand->shape[i] != scores->shape[4 - rank + i])
+            return false;
+    return true;
+}
+
+VarPtr try_masked_row_softmax(Var* scores) {
+    if (!masked_softmax_code || scores->dtype() != ns_float32
+            || !scores->placement.explicit_backend || scores->placement.device.backend != BackendId::Cuda
+            || scores->shape.size() != 4 || scores->shape[2] > 4 || scores->shape[3] > 2048
+            || scores->num <= 0 || scores->num > std::numeric_limits<int>::max()
+            || !can_read_original_storage(scores))
+        return {};
+    auto* addition = pending_producer(scores);
+    if (!addition || !addition->is_op(op_ids::binary()) || addition->ns != ns_add
+            || addition->_inputs.size() != 2)
+        return {};
+    Var* masked = addition->input(0);
+    Var* bias = unbroadcast(addition->input(1));
+    auto* selection = pending_producer(masked);
+    static const OpId ternary = get_op_id("ternary");
+    if (!selection || !selection->is_op(ternary) || selection->_inputs.size() != 3
+            || !can_read_original_storage(masked) || bias->dtype() != ns_float32
+            || !accepts_score_operand(bias, scores))
+        return {};
+    Var* mask = unbroadcast(selection->input(0));
+    Var* scaled = selection->input(2);
+    float fill;
+    if (mask->dtype() != ns_bool || !accepts_score_operand(mask, scores)
+            || !read_scalar(selection->input(1), fill) || !can_read_original_storage(scaled))
+        return {};
+    auto* multiplication = pending_producer(scaled);
+    if (!multiplication || !multiplication->is_op(op_ids::binary())
+            || multiplication->ns != ns_multiply || multiplication->_inputs.size() != 2)
+        return {};
+    Var* unscaled = multiplication->input(0);
+    float scale;
+    if (unscaled->dtype() != ns_float32 || unscaled->shape != scores->shape
+            || !accepts_score_operand(unscaled, scores) || !read_scalar(multiplication->input(1), scale))
+        return {};
+    return make_prepared_code(scores->shape, ns_float32, {unscaled, mask, bias},
+                              masked_softmax_code, DataMap{{"scale", scale}, {"fill", fill}}, "cuda");
+}
+} // namespace
+
+void bind_masked_row_softmax(const string& source) {
+    masked_softmax_code = &code_source_token("", source);
+}
+
+VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
+                                    bool plain_row_softmax) {
     USER_CHECK(no_grad) << "unary inference code requires no_grad";
     USER_CHECK(PyUnicode_CheckExact(source) && PyUnicode_CheckExact(header))
         << "inference code sources and headers must be strings";
+    auto* value = input->grad_input();
+    if (plain_row_softmax && !graph_capture_active()) {
+        if (auto fused = try_masked_row_softmax(value))
+            return new VarHolder(move(fused));
+    }
     struct Entry {
         PyObject* source = nullptr;
         PyObject* header = nullptr;
@@ -1430,7 +1520,6 @@ VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObjec
         entry = {source, header, token};
         next = (next + 1) % 16;
     }
-    auto* value = input->grad_input();
     return new VarHolder(make_prepared_code(value->shape, value->dtype(), {value}, token, {}, ""));
 }
 

@@ -109,7 +109,11 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
 // CUDA inference providers sometimes have a single same-shaped input and
 // no saved tensors. Build that CodeOp without the general Python overload.
 // @pyjt(_cuda_inference_unary_code)
-VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header);
+VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
+                                    bool plain_row_softmax=false);
+
+// @pyjt(_bind_masked_row_softmax)
+void bind_masked_row_softmax(const string& source);
 
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency

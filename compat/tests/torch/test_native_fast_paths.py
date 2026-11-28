@@ -1520,6 +1520,26 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "masked row softmax needs CUDA")
+    def test_softmax_reads_scale_mask_and_bias_from_pending_scores(self):
+        rng = np.random.default_rng(87)
+        raw = rng.standard_normal((2, 3, 2, 271)).astype(np.float32)
+        mask = rng.random((2, 1, 2, 271)) > .75
+        mask[0, :, 0] = True
+        bias = rng.standard_normal((1, 1, 1, 271)).astype(np.float32)
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error", auto_flush_ops=0,
+                                             async_flush_ops=0):
+            x, hide, add = (torch.tensor(data, device="cuda") for data in (raw, mask, bias))
+            scores = (x * .125).masked_fill(hide, torch.finfo(torch.float32).min) + add
+            out = torch.nn.functional.softmax(scores, dim=-1)
+            self.assertEqual(len(out._inputs()), 3)
+            scores.sync()
+            reference = torch.nn.functional.softmax(scores, dim=-1)
+            out.sync()
+            self.assertEqual(out.location(), "device")
+            np.testing.assert_allclose(out.cpu().numpy(), reference.cpu().numpy(),
+                                       rtol=2e-5, atol=2e-7)
+
     @unittest.skipUnless(_CUDA_KERNELS, "cuBLAS requires CUDA")
     def test_frontend_batched_matmul_honors_live_provider_override(self):
         from jittor._runtime.dispatch import override_kernel
