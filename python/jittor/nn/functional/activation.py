@@ -334,6 +334,9 @@ def sigmoid(x):
     ''' Element-wise sigmoid. Exposed as a function (torch.nn.functional.sigmoid /
     nn.functional.sigmoid) -- jittor only had jt.sigmoid / Var.sigmoid before, so
     `F.sigmoid(x)` (used by qwen2_moe and others) raised AttributeError.'''
+    fast = _fused_activation(x, "sigmoid")
+    if fast is not None:
+        return fast
     return jt.sigmoid(x)
 
 
