@@ -276,7 +276,8 @@ const TypeInfo& info_of(PyTypeObject* type) {
         return name.size() >= suffix.size()
             && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
     };
-    info.rms_named = ends_with("RMSNorm") && !ends_with("RMSNormGated");
+    info.rms_named = (ends_with("RMSNorm") && !ends_with("RMSNormGated"))
+        || ends_with("T5LayerNorm");
     try {
         on_type_collected((PyObject*)type, forget_type_info);
     } catch (...) {
