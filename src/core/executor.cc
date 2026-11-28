@@ -632,7 +632,12 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // edges released (`release_inputs`, which the shim uses to park tensors),
     // and the planner reads them.
     VarPtrBatch& batch_hold = state->batch_hold;
-    {
+    if (planning_hold.size() == plan.all_vars.size()
+            && std::equal(plan.all_vars.begin(), plan.all_vars.end(), planning_hold.vars.begin())) {
+        // The traversal can own exactly the runner's Vars in release-slot
+        // order. Transfer those claims without a second liveness pass.
+        batch_hold = std::move(planning_hold);
+    } else {
         std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         batch_hold.own_all_locked(plan.all_vars);
         if (vars.size() != static_cast<size_t>(plan.start_var_num)) {
