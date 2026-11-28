@@ -1,6 +1,7 @@
 """CUDA depthwise convolution forward and gradient kernels."""
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name
 from jittor._runtime.backend_libraries import library_resource
 
 
@@ -75,8 +76,78 @@ def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, d
     )
 
 
+_DEPTHWISE_ROWS_KERNEL = r"""
+template <int KH, int KW, int ROWS>
+__global__ void depthwise_reuse_rows(
+        const float* __restrict__ x, const float* __restrict__ weight,
+        float* __restrict__ out, int channels, int height, int width,
+        int oh, int ow, int ph, int pw) {
+    const int item = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = (item / ow) * ROWS;
+    if (row >= oh) return;
+    const int column = item % ow;
+    const int channel = blockIdx.y;
+    const size_t plane = (size_t)blockIdx.z * channels + channel;
+    x += plane * height * width;
+    out += plane * oh * ow;
+    weight += channel * KH * KW;
+    float filter[KH * KW];
+    #pragma unroll
+    for (int i = 0; i < KH * KW; ++i) filter[i] = weight[i];
+
+    float result[ROWS] = {};
+    #pragma unroll
+    for (int i = 0; i < KH + ROWS - 1; ++i) {
+        const int h = row - ph + i;
+        if ((unsigned)h >= (unsigned)height) continue;
+        #pragma unroll
+        for (int j = 0; j < KW; ++j) {
+            const int w = column - pw + j;
+            if ((unsigned)w >= (unsigned)width) continue;
+            const float pixel = x[h * width + w];
+            #pragma unroll
+            for (int r = 0; r < ROWS; ++r) {
+                if (i >= r && i < r + KH)
+                    result[r] = fmaf(filter[(i - r) * KW + j], pixel, result[r]);
+            }
+        }
+    }
+    #pragma unroll
+    for (int r = 0; r < ROWS; ++r) {
+        if (row + r < oh) out[(row + r) * ow + column] = result[r];
+    }
+}
+"""
+
+
+def _depthwise_forward_rows(x, weight, output_shape, padding):
+    batch, channels, height, width = x.shape
+    kh, kw = weight.shape[-2:]
+    oh, ow = output_shape[-2:]
+    rows = 4 if oh >= 8 else 2
+    items = ((oh + rows - 1) // rows) * ow
+    threads = 32 if items <= 64 else 128
+    blocks = (items + threads - 1) // threads
+    return jt.code(output_shape, x.dtype, [x, weight], cuda_header=_DEPTHWISE_ROWS_KERNEL, cuda_src=f"""
+        depthwise_reuse_rows<{kh}, {kw}, {rows}>
+            <<<dim3({blocks}, {channels}, {batch}), {threads}>>>(
+                in0_p, in1_p, out0_p, {channels}, {height}, {width},
+                {oh}, {ow}, {padding[0]}, {padding[1]});
+    """)
+
+
 def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
     Kh, Kw = weight.shape[-2:]
+    # Large filters reuse input pixels across adjacent output rows. Each
+    # output still accumulates its filter in row-major order. The bounds
+    # keep this unrolled kernel within a practical register budget.
+    if (stride == dilation == (1, 1) and 49 <= Kh * Kw and max(Kh, Kw) <= 9
+            and dtype_name(x.dtype) == dtype_name(weight.dtype) == "float32"
+            and x.shape[0] <= 65535 and x.shape[1] <= 65535
+            and 4 <= output_shape[2] and output_shape[2] * output_shape[3] < (1 << 30)
+            and x.shape[2] * x.shape[3] < (1 << 30)
+            and x.numel() >= (1 << 18)):
+        return _depthwise_forward_rows(x, weight, output_shape, padding)
     return jt.code(
             output_shape,
             x.dtype,
