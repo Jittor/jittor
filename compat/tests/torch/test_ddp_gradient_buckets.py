@@ -99,3 +99,21 @@ def test_bucket_reduction_keeps_aligned_gradient_views():
             assert value.device.type == 'cuda'
             np.testing.assert_array_equal(value.cpu().numpy(), np.arange(original.numel()) + .5)
         assert jt.core.backend_fallback_count() == before
+
+
+@jt.flag_scope(backend_fallback='error')
+def test_grouped_reduction_orders_all_inputs_with_one_wait():
+    rank = dist.get_rank()
+    device = torch.cuda.current_device()
+    with torch.no_grad(), jt.flag_scope(auto_flush_ops=0):
+        values = [torch.empty(0, dtype=torch.float32, device='cuda')]
+        values += [torch.arange(1024, dtype=torch.float32, device='cuda') + i + rank
+                   for i in range(4)]
+        before = jt.core._cuda_stream_dependency_count(1, device)
+        reduced = collectives._all_reduce_mean_many(values)
+        jt.sync(reduced, True, False)
+        assert jt.core._cuda_stream_dependency_count(1, device) - before == 2
+        assert reduced[0].numel() == 0
+        for i, value in enumerate(reduced[1:]):
+            assert value.device.type == 'cuda'
+            np.testing.assert_array_equal(value.cpu().numpy(), np.arange(1024) + i + .5)
