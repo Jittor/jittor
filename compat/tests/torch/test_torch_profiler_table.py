@@ -72,7 +72,9 @@ class TestTorchProfilerTable(unittest.TestCase):
         forward = [e for e in self.prof.events() if e.name == "forward"]
         self.assertEqual(len(forward), 1)
         forward = forward[0]
+        self.assertTrue(forward.is_user_annotation)
         self.assertTrue(forward.cpu_children, "nothing built in the range was charged to it")
+        self.assertTrue(all(not c.is_user_annotation for c in forward.cpu_children))
         self.assertAlmostEqual(forward.cpu_time_total,
                                forward.self_cpu_time_total
                                + sum(c.cpu_time_total for c in forward.cpu_children), places=6)
@@ -94,8 +96,11 @@ class TestTorchProfilerTable(unittest.TestCase):
         run = next(e for e in events if e.name == "run")
         ops = [e for e in events if e.cpu_parent is build]
         self.assertTrue(ops)
-        # Only the executor's own work (planning-time compiles) is the run's.
-        self.assertFalse([e for e in events if e.cpu_parent is run and e.name != "jit_compile"])
+        # Only the executor's own work (planning-time compiles) and the D2H
+        # scalar copy built by `y.item()` belong to `run`; every tensor op built
+        # inside `build` stays a child of `build`.
+        self.assertFalse([e for e in events if e.cpu_parent is run
+                          and e.name not in ("jit_compile", "device_copy")])
         self.assertTrue(all(run.time_range.start <= e.time_range.start for e in ops))
         # The range they ran in does not count them as its own time, and the
         # one that built them totals them.
@@ -138,7 +143,8 @@ class TestTorchProfilerTable(unittest.TestCase):
             path = os.path.join(d, "stacks.txt")
             prof.export_stacks(path, "self_cpu_time_total")
             lines = open(path).read().splitlines()
-        marks = ["(%d):" % first, "(%d):" % second]
+        name = os.path.basename(__file__)
+        marks = ["%s(%d):" % (name, first), "%s(%d):" % (name, second)]
         self.assertTrue(any(marks[0] in line for line in lines), lines)
         self.assertTrue(any(marks[1] in line for line in lines), lines)
         self.assertFalse([line for line in lines if marks[0] in line and marks[1] in line], lines)
@@ -233,12 +239,22 @@ class TestTorchProfilerTable(unittest.TestCase):
         for key in ("External id", "device", "stream", "correlation", "grid", "block",
                     "registers per thread", "shared memory"):
             self.assertIn(key, kernel["args"])
-        starts = {e["id"] for e in events if e.get("ph") == "s"}
-        ends = {e["id"] for e in events if e.get("ph") == "f"}
-        self.assertEqual(starts, ends)
+        starts_list = [e["id"] for e in events if e.get("ph") == "s"]
+        ends_list = [e["id"] for e in events if e.get("ph") == "f"]
+        self.assertEqual(len(starts_list), len(set(starts_list)))
+        self.assertEqual(set(starts_list), set(ends_list))
+        mem_events = [e for e in events if e.get("name") == "[memory]"]
+        self.assertTrue(mem_events)
+        for me in mem_events:
+            self.assertLessEqual(me["args"]["Total Allocated"], me["args"]["Total Reserved"], me)
         labels = [e["args"]["labels"] for e in events if e.get("name") == "process_labels"]
         self.assertIn("CPU", labels)
         self.assertIn("GPU %d" % kernel["pid"], labels)
+
+    def test_demangle_handles_itanium_symbols(self):
+        from jittor.compat.torch import profiler_events
+        self.assertEqual(profiler_events._demangle("_Z8kernel_0PfS_i"),
+                         "kernel_0(float*, float*, int)")
 
     def test_the_memory_timeline_is_pytorchs_shape(self):
         with tempfile.TemporaryDirectory() as d:

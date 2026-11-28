@@ -20,6 +20,7 @@ What differs from PyTorch is what the allocator is:
   forced); a workspace is charged to the operator that needed it.
 """
 
+from collections import deque
 import os
 import pickle
 import sys
@@ -34,7 +35,11 @@ _ACTIONS = ("alloc", "free_requested", "free_completed", "segment_alloc",
             "segment_free", "oom", "snapshot")
 # What the current recording asked for that the native side does not keep.
 _settings = {"trace_stacks": False}
-_annotations = []
+_annotations = deque()
+_jt_module = None
+# Incremental cache of the append-only native frame/stack tables.
+_cached_frames = []
+_cached_stacks = [[]]
 
 
 def record_memory_history(enabled="all", context="all", stacks="all", max_entries=sys.maxsize,
@@ -53,12 +58,18 @@ def record_memory_history(enabled="all", context="all", stacks="all", max_entrie
         device: accepted for PyTorch's signature; all devices are recorded.
         clear_history: drop the trace recorded so far.
     """
+    global _annotations
     if enabled not in (None, "state", "all"):
         raise ValueError("enabled must be None, 'state' or 'all', not %r" % (enabled,))
     if context not in (None, "state", "alloc", "all"):
         raise ValueError("context must be None, 'state', 'alloc' or 'all', not %r" % (context,))
     if stacks not in ("python", "all"):
         raise ValueError("stacks must be 'python' or 'all', not %r" % (stacks,))
+    entries = int(max_entries)
+    if entries < 0:
+        raise ValueError("max_entries must be non-negative, not %r" % (max_entries,))
+    native_entries = -1 if entries >= (1 << 62) else entries
+    ann_limit = None if native_entries < 0 else native_entries
     mode = 0
     if enabled is not None:
         mode = _ON | (_TRACE if enabled == "all" else 0)
@@ -68,13 +79,14 @@ def record_memory_history(enabled="all", context="all", stacks="all", max_entrie
             mode |= _FREE_STACKS
         if clear_history:
             mode |= _CLEAR_TRACE
+        if clear_history:
+            _annotations = deque(maxlen=ann_limit)
+        elif _annotations.maxlen != ann_limit:
+            _annotations = deque(_annotations, maxlen=ann_limit)
     else:
-        del _annotations[:]
+        _annotations = deque()
     _settings["trace_stacks"] = context in ("alloc", "all")
-    if clear_history:
-        del _annotations[:]
-    entries = int(max_entries)
-    _core.memory_history_start(mode, entries if 0 < entries < (1 << 62) else 0)
+    _core.memory_history_start(mode, native_entries)
 
 
 def record_memory_history_legacy(enabled, record_context=True, trace_alloc_max_entries=1,
@@ -97,9 +109,12 @@ def record_memory_history_legacy(enabled, record_context=True, trace_alloc_max_e
 
 def note_annotation(stage, name):
     """A ``record_function`` range edge, kept while the history is on."""
+    global _jt_module
     if _core.memory_history_mode_now():
-        import jittor as jt
-        device = int(jt.core.current_device()) if jt.flags.use_cuda else 0
+        if _jt_module is None:
+            import jittor as jt
+            _jt_module = jt
+        device = int(_core.current_device()) if _jt_module.flags.use_cuda else 0
         _annotations.append({"stage": stage, "name": name, "device": device,
                              "time_us": time.time_ns() // 1000})
 
@@ -113,17 +128,22 @@ def _layout():
 
 
 def _stack_table():
-    flat = _core.memory_history_frames()
-    frames = [{"name": flat[i + 2], "filename": flat[i], "line": int(flat[i + 1])}
-              for i in range(0, len(flat), 3)]
-    raw = _core.memory_history_stacks()
-    stacks = [[]]
-    i = 0
-    while i < len(raw):
-        n = raw[i]
-        stacks.append([frames[f] for f in raw[i + 1:i + 1 + n]])
-        i += 1 + n
-    return stacks
+    new_frames = _core.memory_history_frames_since(len(_cached_frames))
+    if new_frames:
+        for i in range(0, len(new_frames), 3):
+            _cached_frames.append({"name": new_frames[i + 2],
+                                   "filename": new_frames[i],
+                                   "line": int(new_frames[i + 1])})
+    raw = _core.memory_history_stacks_since(len(_cached_stacks))
+    if raw:
+        frames = _cached_frames
+        i = 0
+        end = len(raw)
+        while i < end:
+            n = raw[i]
+            _cached_stacks.append([frames[f] for f in raw[i + 1:i + 1 + n]])
+            i += 1 + n
+    return _cached_stacks
 
 
 def _allocator_settings():
@@ -173,7 +193,8 @@ def memory_snapshot():
                 "allocated_size": seg["allocated_size"], "active_size": seg["allocated_size"],
                 "requested_size": seg["requested_size"], "stream": seg["stream"],
                 "segment_type": "small" if seg["is_small"] else "large",
-                "segment_pool_id": (0, 0), "is_expandable": False, "frames": [],
+                "segment_pool_id": (0, 0), "is_expandable": False,
+                "frames": frames(seg["stack"]),
                 "blocks": blocks})
     trace_stacks = _settings["trace_stacks"]
     device_traces = []

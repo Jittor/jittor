@@ -19,8 +19,8 @@
 
 namespace jittor {
 
-int memory_history_mode = 0;
-int capture_op_stacks = 0;
+std::atomic<int> memory_history_mode{0};
+std::atomic<int> capture_op_stacks{0};
 
 namespace {
 
@@ -43,7 +43,7 @@ struct Live {
 
 struct HistoryState {
     std::mutex mutex;
-    int64 max_entries = 0;
+    int64 max_entries = -1;
     // frame id -> (file, line, name), flattened; id 0 is "no frame". Frames
     // and stacks are never dropped: an Op built under one recording keeps its
     // stack id into the next.
@@ -64,7 +64,8 @@ struct HistoryState {
     }
 
     void push(int device, const Entry& e) {
-        if (!(memory_history_mode & mh_trace)) return;
+        if (!(memory_history_mode.load(std::memory_order_relaxed) & mh_trace)) return;
+        if (max_entries == 0) return;
         auto& trace = traces[device];
         trace.push_back(e);
         while (max_entries > 0 && (int64)trace.size() > max_entries) trace.pop_front();
@@ -88,7 +89,7 @@ inline int64 now_us() {
 // The stack an allocation is charged to: the producer of the Var being
 // allocated, else the operator running, else the caller of the moment.
 uint32 allocation_stack() {
-    if (!(memory_history_mode & mh_alloc_stacks)) return 0;
+    if (!(memory_history_mode.load(std::memory_order_relaxed) & mh_alloc_stacks)) return 0;
     if (Var* v = step_trace_current_var())
         if (Op* op = v->input())
             if (op->memory_stack) return op->memory_stack;
@@ -97,7 +98,8 @@ uint32 allocation_stack() {
 }
 
 uint32 free_stack() {
-    return (memory_history_mode & mh_free_stacks) ? capture_memory_stack() : 0;
+    return (memory_history_mode.load(std::memory_order_relaxed) & mh_free_stacks)
+        ? capture_memory_stack() : 0;
 }
 
 } // namespace
@@ -151,15 +153,16 @@ void memory_history_start(int64 mode, int64 max_entries) {
     if (!mode) s.clear();
     if (mode & mh_clear_trace) s.traces.clear();
     s.max_entries = max_entries;
-    memory_history_mode = (int)(mode & ~mh_clear_trace);
-    set_op_stack_capture(1, memory_history_mode & mh_alloc_stacks);
+    int effective = (int)(mode & ~mh_clear_trace);
+    memory_history_mode.store(effective, std::memory_order_release);
+    set_op_stack_capture(1, (effective & mh_alloc_stacks) != 0);
 }
 
-int64 memory_history_mode_now() { return memory_history_mode; }
+int64 memory_history_mode_now() { return memory_history_mode.load(std::memory_order_relaxed); }
 
 void set_op_stack_capture(int64 user, bool on) {
-    if (on) capture_op_stacks |= (int)user;
-    else capture_op_stacks &= ~(int)user;
+    if (on) capture_op_stacks.fetch_or((int)user, std::memory_order_release);
+    else capture_op_stacks.fetch_and(~(int)user, std::memory_order_release);
 }
 
 string memory_history_layout() { return kLayout; }
@@ -170,11 +173,24 @@ vector<string> memory_history_frames() {
     return s.frames;
 }
 
-vector<int64> memory_history_stacks() {
+vector<string> memory_history_frames_since(int64 from_frame) {
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mutex);
+    size_t start = from_frame > 0 ? (size_t)from_frame * 3 : 0;
+    if (start >= s.frames.size()) return {};
+    return vector<string>(s.frames.begin() + start, s.frames.end());
+}
+
+vector<int64> memory_history_stacks() {
+    return memory_history_stacks_since(1);
+}
+
+vector<int64> memory_history_stacks_since(int64 from_stack) {
+    auto& s = state();
+    std::lock_guard<std::mutex> guard(s.mutex);
+    size_t start = from_stack > 1 ? (size_t)from_stack : 1;
     vector<int64> out;
-    for (size_t i = 1; i < s.stacks.size(); i++) {
+    for (size_t i = start; i < s.stacks.size(); i++) {
         out.push_back(s.stacks[i].size());
         out.insert(out.end(), s.stacks[i].begin(), s.stacks[i].end());
     }
@@ -284,7 +300,7 @@ void memory_history_block(int action, int device, const void* ptr, int64 request
     // A free: PyTorch records the request and its completion; the pools here
     // never defer a free behind a stream, so both happen now.
     auto found = s.blocks.find(addr);
-    int64 nbytes = size;
+    int64 nbytes = requested > 0 ? requested : size;
     if (found != s.blocks.end()) {
         nbytes = found->second.requested;
         s.blocks.erase(found);

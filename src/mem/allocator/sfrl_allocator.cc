@@ -598,7 +598,7 @@ size_t CachingBlockPool::free_all_cached_blocks(Allocator* underlying, long long
             // a nested caching allocator below would otherwise be asked to
             // release block id 0, which is never a live allocation.
             underlying->free((void*)block->memory_ptr, block->size, block->allocation);
-            if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+            if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
                 memory_history_segment(mha_segment_free, device, block->memory_ptr, block->size);
             note_segment_released(device, block);
             freed_memory += block->size;
@@ -691,7 +691,7 @@ void SFRLAllocator::trim_before_growing(size_t need) {
         if (block->prev || block->next) continue;
         if (alloc_count - block->freed_at < kTrimIdle || block->size * kTrimFraction < need) continue;
         underlying->free((void*)block->memory_ptr, block->size, block->allocation);
-        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
             memory_history_segment(mha_segment_free, device(), block->memory_ptr, block->size);
         note_segment_released(device(), block);
         freed += block->size;
@@ -702,7 +702,7 @@ void SFRLAllocator::trim_before_growing(size_t need) {
     if (!freed) return;
     unused_memory -= freed;
     note_device_reserve(device(), -(int64)freed);
-    step_trace_mem(stm_reserve, device(), -(int64)freed, this, 0);
+    step_trace_mem(stm_reserve, is_cuda() ? device() : -1, -(int64)freed, this, 0);
 }
 
 void SFRLAllocator::note_history_oom(size_t requested) {
@@ -727,7 +727,7 @@ size_t SFRLAllocator::release_cached(CachingBlockPool& pool, long long free_size
     unused_memory -= freed;
     if (freed) {
         note_device_reserve(device(), -(int64)freed);
-        step_trace_mem(stm_reserve, device(), -(int64)freed, this, 0);
+        step_trace_mem(stm_reserve, is_cuda() ? device() : -1, -(int64)freed, this, 0);
     }
     return freed;
 }
@@ -768,17 +768,18 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
                 ptr = underlying->alloc(alloc_size, under_allocation);
             } catch (...) {
                 note_counter(dev, sfrl_counter_ooms);
-                if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode)) note_history_oom(requested);
+                if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
+                    note_history_oom(requested);
                 throw;
             }
         }
-        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
             memory_history_segment(mha_segment_alloc, dev, ptr, alloc_size);
         held_high = std::max(held_high, used_memory + unused_memory + (int64)alloc_size);
         block = new_block(alloc_size, alloc_size, blocks, ptr);
         block->allocation = under_allocation;
         note_segment_allocated(dev, pool_of(block), (int64)alloc_size);
-        step_trace_mem(stm_reserve, dev, alloc_size, this, 0);
+        step_trace_mem(stm_reserve, is_cuda() ? dev : -1, alloc_size, this, 0);
     } else {
         unused_memory -= block->size;
         if (inactive_split(block)) popped_split_size = (int64)block->size;
@@ -806,8 +807,8 @@ void* SFRLAllocator::alloc(size_t size, size_t& allocation) {
     used_memory += block->size;
     record_block_alloc(dev, pool_of(block), (int64)block->size, (int64)requested,
                        popped_split_size, rest_split_size);
-    step_trace_mem(stm_pool, dev, block->size, this, allocation);
-    if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
+    step_trace_mem(stm_pool, is_cuda() ? dev : -1, block->size, this, allocation);
+    if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
         memory_history_block(mha_alloc, dev, block->memory_ptr, requested, block->size);
     if (PREDICT_BRANCH_NOT_TAKEN(capture_held_frees != nullptr))
         note_capture_touch(block);
@@ -848,9 +849,9 @@ void SFRLAllocator::free(void* mem_ptr, size_t size, const size_t& allocation) {
         const int64 merged_split_size = inactive_split(block) ? (int64)block->size : -1;
         record_block_free(dev, blk_pool, blk_size, blk_requested,
                           prev_split_size, next_split_size, merged_split_size);
-        step_trace_mem(stm_pool, dev, -blk_size, this, allocation);
-        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode))
-            memory_history_block(mha_free_requested, dev, orig_mem_ptr, 0, (size_t)blk_size);
+        step_trace_mem(stm_pool, is_cuda() ? dev : -1, -blk_size, this, allocation);
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
+            memory_history_block(mha_free_requested, dev, orig_mem_ptr, blk_requested, (size_t)blk_size);
         block->freed_at = alloc_count;
         block->blocks = get_blocks(block->size);
         block->blocks->insert(block);
@@ -955,6 +956,9 @@ void SFRLAllocator::fence_capture(vector<Allocation>& held) {
                            old_split_size, left_split_size, right_split_size);
         size_t id = block->blocks->insert_occupied(block);
         used_memory += block->size;
+        step_trace_mem(stm_pool, is_cuda() ? dev : -1, (int64)block->size, this, id);
+        if (PREDICT_BRANCH_NOT_TAKEN(memory_history_mode.load(std::memory_order_relaxed)))
+            memory_history_block(mha_alloc, dev, block->memory_ptr, (int64)block->size, (int64)block->size);
         held.emplace_back(block->memory_ptr, id, block->size, this);
     }
     spans.clear();

@@ -213,9 +213,46 @@ class TestMemoryHistory(unittest.TestCase):
         self.assertTrue(data["device_traces"][self.device])
 
     def test_bad_arguments_are_refused(self):
-        for kwargs in ({"enabled": "yes"}, {"context": "everything"}, {"stacks": "cpp"}):
+        for kwargs in ({"enabled": "yes"}, {"context": "everything"}, {"stacks": "cpp"},
+                       {"max_entries": -1}):
             with self.assertRaises(ValueError):
                 profiling.record_memory_history(**kwargs)
+
+    def test_segment_frames_populated_and_annotations_bounded(self):
+        jt.gc()
+        profiling.record_memory_history(max_entries=5)
+        big = jt.randn(4096, 4096)
+        big.sync()
+        for i in range(15):
+            with profiling.record_function("ann_%d" % i):
+                pass
+        snap = profiling.memory_snapshot()
+        self.assertEqual(len(snap["external_annotations"]), 5)
+        segs_with_frames = [s for s in snap["segments"] if s["frames"]]
+        self.assertTrue(segs_with_frames, "expected newly allocated segment to carry frames")
+        del big
+
+    def test_preexisting_tensor_free_reports_requested_size(self):
+        pre = jt.randn(100, 100)            # 40000 bytes (aligned to 40448)
+        pre.sync()
+        profiling.record_memory_history(context="all")
+        del pre
+        trace = profiling.memory_snapshot()["device_traces"][self.device]
+        frees = [e["size"] for e in trace if e["action"] == "free_completed"]
+        self.assertIn(40000, frees, frees)
+
+    def test_incremental_stack_table_updates_across_snapshots(self):
+        profiling.record_memory_history()
+        a = jt.randn(500, 500)
+        a.sync()
+        profiling.memory_snapshot()
+        b = jt.randn(501, 501); second_line = _here()
+        b.sync()
+        snap = profiling.memory_snapshot()
+        mine = [blk for blk in _active_blocks(snap) if blk["requested_size"] == 501 * 501 * 4]
+        self.assertEqual(len(mine), 1)
+        self.assertIn(second_line, _lines_in_this_file(mine[0]["frames"]))
+        del a, b
 
 
 if __name__ == "__main__":

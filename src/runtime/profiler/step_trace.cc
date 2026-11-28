@@ -6,10 +6,16 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <map>
 #include <mutex>
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#ifdef _WIN32
+#include <malloc.h>
+#endif
 #include "runtime/profiler/step_trace.h"
 #include "runtime/profiler/memory_history.h"
 #include "runtime/launch_diagnostics.h"
@@ -25,9 +31,11 @@
 
 namespace jittor {
 
-int step_trace_mode = 0;
+std::atomic<int> step_trace_mode{0};
 
 namespace {
+
+std::atomic<uint64> trace_generation{0};
 
 constexpr const char* kLayout =
     "ops:seq,kind,batch,name,t_start,t_alloc,t_end,device,fused,shapes,site,out_bytes,stack,range,"
@@ -49,6 +57,237 @@ enum OpKind { ok_op = 0, ok_graph_launch = 1, ok_range = 2 };
 using CorrelationPush = int (*)(int, uint64);
 using CorrelationPop = int (*)(int, uint64*);
 constexpr int kCorrelationKind = 3;   // CUPTI_EXTERNAL_CORRELATION_KIND_CUSTOM0
+
+// ---- Pure-C++ CUPTI activity collector ------------------------------------
+// Callbacks run directly in C++ without acquiring the Python GIL, eliminating
+// GIL-vs-CUPTI deadlocks when an 8 MiB buffer completes mid-step on CUPTI's
+// background delivery thread and speeding up record decoding by ~50x.
+
+using CuptiGetNextRecord = int (*)(uint8_t*, size_t, void**);
+using CuptiGetDropped = int (*)(void*, uint32_t, size_t*);
+
+constexpr uint32_t kCuptiKindMemcpy = 1;
+constexpr uint32_t kCuptiKindMemset = 2;
+constexpr uint32_t kCuptiKindConcurrentKernel = 10;
+constexpr uint32_t kCuptiKindMemcpy2 = 22;
+constexpr uint32_t kCuptiKindExternalCorrelation = 39;
+constexpr uint32_t kCuptiExtKindCustom0 = 3;
+constexpr size_t kCuptiBufferBytes = 8u << 20;
+constexpr size_t kCuptiMaxSpareBuffers = 8;
+
+template <typename T>
+inline T read_unaligned(const uint8_t* base, size_t offset) {
+    T val;
+    std::memcpy(&val, base + offset, sizeof(T));
+    return val;
+}
+
+inline uint8_t* alloc_cupti_buffer() {
+#ifdef _WIN32
+    return static_cast<uint8_t*>(_aligned_malloc(kCuptiBufferBytes, 8));
+#else
+    void* ptr = nullptr;
+    if (posix_memalign(&ptr, 8, kCuptiBufferBytes) != 0) return nullptr;
+    return static_cast<uint8_t*>(ptr);
+#endif
+}
+
+inline void free_cupti_buffer(uint8_t* ptr) {
+    if (!ptr) return;
+#ifdef _WIN32
+    _aligned_free(ptr);
+#else
+    std::free(ptr);
+#endif
+}
+
+struct CuptiState {
+    std::atomic<CuptiGetNextRecord> get_next{nullptr};
+    std::atomic<CuptiGetDropped> get_dropped{nullptr};
+
+    std::mutex buf_mutex;
+    vector<uint8_t*> spare_buffers;
+
+    std::mutex data_mutex;
+    vector<string> names;
+    unordered_map<string, int64> name_ids;
+    vector<int64> kernels;       // 15 int64s per kernel
+    vector<int64> copies;        // 7 int64s per copy/memset
+    vector<int64> correlations;  // 2 int64s per pair: (correlation_id, external_id)
+    int64 dropped = 0;
+
+    int64 intern_name_locked(const string& s) {
+        auto it = name_ids.find(s);
+        if (it != name_ids.end()) return it->second;
+        int64 id = (int64)names.size();
+        names.push_back(s);
+        name_ids.emplace(s, id);
+        return id;
+    }
+
+    void reset() {
+        {
+            std::lock_guard<std::mutex> guard(data_mutex);
+            names.clear();
+            name_ids.clear();
+            kernels.clear();
+            copies.clear();
+            correlations.clear();
+            dropped = 0;
+        }
+        std::lock_guard<std::mutex> bguard(buf_mutex);
+        while (spare_buffers.size() < 4) {
+            uint8_t* buf = alloc_cupti_buffer();
+            if (!buf) break;
+            spare_buffers.push_back(buf);
+        }
+    }
+};
+
+CuptiState& cupti_state() {
+    static CuptiState* s = new CuptiState();  // outlives static destructors
+    return *s;
+}
+
+void cupti_buffer_requested(uint8_t** buffer, size_t* size, size_t* max_num_records) {
+    auto& cs = cupti_state();
+    uint8_t* buf = nullptr;
+    {
+        std::lock_guard<std::mutex> guard(cs.buf_mutex);
+        if (!cs.spare_buffers.empty()) {
+            buf = cs.spare_buffers.back();
+            cs.spare_buffers.pop_back();
+        }
+    }
+    if (!buf) buf = alloc_cupti_buffer();
+    *buffer = buf;
+    *size = buf ? kCuptiBufferBytes : 0;
+    *max_num_records = 0;
+}
+
+void cupti_buffer_completed(void* ctx, uint32_t stream_id, uint8_t* buffer,
+                            size_t size, size_t valid_size) {
+    (void)size;
+    auto& cs = cupti_state();
+    auto get_next = cs.get_next.load(std::memory_order_acquire);
+    auto get_dropped = cs.get_dropped.load(std::memory_order_acquire);
+    size_t local_dropped = 0;
+    if (get_dropped) {
+        size_t d = 0;
+        if (get_dropped(ctx, stream_id, &d) == 0) local_dropped = d;
+    }
+
+    vector<string> local_names;
+    unordered_map<string, int64> local_name_ids;
+    vector<int64> local_kernels;
+    vector<int64> local_copies;
+    vector<int64> local_corrs;
+
+    if (buffer && valid_size > 0 && get_next) {
+        void* record = nullptr;
+        while (get_next(buffer, valid_size, &record) == 0 && record) {
+            const uint8_t* r = static_cast<const uint8_t*>(record);
+            uint32_t kind = read_unaligned<uint32_t>(r, 0);
+            if (kind == kCuptiKindConcurrentKernel) {
+                const char* cname = read_unaligned<const char*>(r, 104);
+                string sname = cname ? string(cname) : string("?");
+                int64 nid;
+                auto it = local_name_ids.find(sname);
+                if (it != local_name_ids.end()) {
+                    nid = it->second;
+                } else {
+                    nid = (int64)local_names.size();
+                    local_names.push_back(sname);
+                    local_name_ids.emplace(std::move(sname), nid);
+                }
+                int64 rec[15] = {
+                    (int64)read_unaligned<uint64_t>(r, 16),   // start
+                    (int64)read_unaligned<uint64_t>(r, 24),   // end
+                    (int64)read_unaligned<uint32_t>(r, 40),   // device
+                    (int64)read_unaligned<uint32_t>(r, 48),   // stream
+                    (int64)read_unaligned<uint32_t>(r, 92),   // correlation
+                    nid,                                      // local name id
+                    (int64)read_unaligned<uint32_t>(r, 156),  // graph
+                    (int64)read_unaligned<uint32_t>(r, 52),   // gridX
+                    (int64)read_unaligned<uint32_t>(r, 56),   // gridY
+                    (int64)read_unaligned<uint32_t>(r, 60),   // gridZ
+                    (int64)read_unaligned<uint32_t>(r, 64),   // blockX
+                    (int64)read_unaligned<uint32_t>(r, 68),   // blockY
+                    (int64)read_unaligned<uint32_t>(r, 72),   // blockZ
+                    (int64)read_unaligned<uint16_t>(r, 6),    // registersPerThread
+                    (int64)read_unaligned<uint32_t>(r, 76)
+                        + (int64)read_unaligned<uint32_t>(r, 80),  // static + dynamic shmem
+                };
+                local_kernels.insert(local_kernels.end(), rec, rec + 15);
+            } else if (kind == kCuptiKindMemcpy) {
+                int64 rec[7] = {
+                    (int64)read_unaligned<uint64_t>(r, 16),  // start
+                    (int64)read_unaligned<uint64_t>(r, 24),  // end
+                    (int64)read_unaligned<uint32_t>(r, 32),  // device
+                    (int64)read_unaligned<uint32_t>(r, 40),  // stream
+                    (int64)read_unaligned<uint32_t>(r, 44),  // correlation
+                    (int64)read_unaligned<uint8_t>(r, 4),    // copyKind (1..10)
+                    (int64)read_unaligned<uint64_t>(r, 8),   // bytes
+                };
+                local_copies.insert(local_copies.end(), rec, rec + 7);
+            } else if (kind == kCuptiKindMemset) {
+                int64 rec[7] = {
+                    (int64)read_unaligned<uint64_t>(r, 16),  // start
+                    (int64)read_unaligned<uint64_t>(r, 24),  // end
+                    (int64)read_unaligned<uint32_t>(r, 32),  // device
+                    (int64)read_unaligned<uint32_t>(r, 40),  // stream
+                    (int64)read_unaligned<uint32_t>(r, 44),  // correlation
+                    0,                                       // 0 encodes memset
+                    (int64)read_unaligned<uint64_t>(r, 8),   // bytes
+                };
+                local_copies.insert(local_copies.end(), rec, rec + 7);
+            } else if (kind == kCuptiKindMemcpy2) {
+                // CUpti_ActivityMemcpyPtoP4: copyKind@4, bytes@8, start@16,
+                // end@24, stream@40, srcDeviceId@44, correlationId@60.
+                uint8_t ckind = read_unaligned<uint8_t>(r, 4);
+                int64 rec[7] = {
+                    (int64)read_unaligned<uint64_t>(r, 16),  // start
+                    (int64)read_unaligned<uint64_t>(r, 24),  // end
+                    (int64)read_unaligned<uint32_t>(r, 44),  // srcDeviceId
+                    (int64)read_unaligned<uint32_t>(r, 40),  // stream
+                    (int64)read_unaligned<uint32_t>(r, 60),  // correlation
+                    (int64)(ckind ? ckind : 10),             // default PtoP (10)
+                    (int64)read_unaligned<uint64_t>(r, 8),   // bytes
+                };
+                local_copies.insert(local_copies.end(), rec, rec + 7);
+            } else if (kind == kCuptiKindExternalCorrelation) {
+                if (read_unaligned<uint32_t>(r, 4) == kCuptiExtKindCustom0) {
+                    local_corrs.push_back((int64)read_unaligned<uint32_t>(r, 16));
+                    local_corrs.push_back((int64)read_unaligned<uint64_t>(r, 8));
+                }
+            }
+        }
+    }
+
+    if (buffer) {
+        std::lock_guard<std::mutex> bguard(cs.buf_mutex);
+        if (cs.spare_buffers.size() < kCuptiMaxSpareBuffers) {
+            cs.spare_buffers.push_back(buffer);
+            buffer = nullptr;
+        }
+    }
+    if (buffer) free_cupti_buffer(buffer);
+
+    if (!local_kernels.empty() || !local_copies.empty() || !local_corrs.empty() || local_dropped) {
+        std::lock_guard<std::mutex> guard(cs.data_mutex);
+        if (!local_names.empty()) {
+            vector<int64> remap(local_names.size());
+            for (size_t i = 0; i < local_names.size(); ++i)
+                remap[i] = cs.intern_name_locked(local_names[i]);
+            for (size_t i = 5; i < local_kernels.size(); i += 15)
+                local_kernels[i] = remap[(size_t)local_kernels[i]];
+        }
+        cs.kernels.insert(cs.kernels.end(), local_kernels.begin(), local_kernels.end());
+        cs.copies.insert(cs.copies.end(), local_copies.begin(), local_copies.end());
+        cs.correlations.insert(cs.correlations.end(), local_corrs.begin(), local_corrs.end());
+        cs.dropped += (int64)local_dropped;
+    }
+}
 
 struct TraceState {
     std::mutex mutex;
@@ -125,6 +364,7 @@ struct PendingOp {
     // A fused op's members' stacks, distinct and in member order, as an
     // interned "id,id,..." string; 0 for an unfused op.
     int64 stacks = 0;
+    uint64 gen = 0;
     int kind = ok_op;
 };
 
@@ -132,7 +372,9 @@ thread_local vector<PendingOp> pending_ops;
 thread_local int64 current_batch = -1;
 thread_local int64 current_op = -1;
 thread_local Var* current_var = nullptr;
+thread_local int wait_depth = 0;
 thread_local int64 wait_started = 0;
+thread_local uint64 wait_gen = 0;
 
 inline int64 now_ns() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -178,21 +420,33 @@ string fused_name(const vector<Op*>& ops) {
 }
 
 void push_correlation(int64 id) {
-    auto push = state().push.load();
+    auto push = state().push.load(std::memory_order_relaxed);
     if (push) push(kCorrelationKind, (uint64)id);
 }
 
 void pop_correlation() {
-    auto pop = state().pop.load();
+    auto pop = state().pop.load(std::memory_order_relaxed);
     uint64 last = 0;
     if (pop) pop(kCorrelationKind, &last);
 }
 
+inline void purge_stale_pending(uint64 cur_gen) {
+    if (pending_ops.empty()) return;
+    pending_ops.erase(
+        std::remove_if(pending_ops.begin(), pending_ops.end(),
+                       [cur_gen](const PendingOp& p) { return p.gen != cur_gen; }),
+        pending_ops.end());
+    current_op = pending_ops.empty() ? -1 : pending_ops.back().seq;
+}
+
 int64 begin_record(int kind, int64 name) {
+    uint64 cur_gen = trace_generation.load(std::memory_order_acquire);
+    purge_stale_pending(cur_gen);
     PendingOp p;
     p.kind = kind;
     p.batch = current_batch;
     p.name = name;
+    p.gen = cur_gen;
     {
         auto& s = state();
         std::lock_guard<std::mutex> guard(s.mutex);
@@ -214,14 +468,22 @@ PendingOp* find_pending(int64 seq) {
 
 void end_record(int64 seq) {
     int64 t_end = now_ns();
-    pop_correlation();
+    uint64 cur_gen = trace_generation.load(std::memory_order_acquire);
     PendingOp p;
+    bool found = false;
     for (auto it = pending_ops.end(); it != pending_ops.begin(); ) {
         --it;
-        if (it->seq == seq) { p = *it; pending_ops.erase(it); break; }
+        if (it->seq == seq) {
+            p = *it;
+            pending_ops.erase(it);
+            found = true;
+            break;
+        }
     }
-    current_op = pending_ops.empty() ? -1 : pending_ops.back().seq;
-    if (p.seq < 0) return;
+    if (found) pop_correlation();
+    purge_stale_pending(cur_gen);
+    if (!found || p.seq < 0 || p.gen != cur_gen || !(step_trace_mode.load(std::memory_order_relaxed) & st_ops))
+        return;
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mutex);
     if (!s.room(s.ops, kOpFields)) return;
@@ -233,30 +495,96 @@ void end_record(int64 seq) {
 
 void record_existing_allocations() {
     // What is already live is part of every peak the trace will see, so it is
-    // reported rather than left as an unexplained floor. Reachable from the
-    // holders, as the legacy memory profiler walks it.
+    // reported rather than left as an unexplained floor. Gather Var metadata
+    // from the holder graph, then emit every occupied SFRL pool block at its
+    // exact aligned block size (so views/slices, alignment padding, and
+    // graph-fenced blocks never cause untracked_at_start / unattributed_at_peak
+    // drift), followed by any non-SFRL existing Var allocations.
     ExecutorEntryScope entry;
+    struct ExistingVarMeta {
+        int64 var_id = -1;
+        int64 var_size = 0;
+        int device = -1;
+        string desc;
+        string producer;
+        uint64 origin = 0;
+    };
     vector<Node*> queue;
     unordered_set<Node*> seeds;
     for (auto& vh : runtime_holder_state().holders())
         if (seeds.insert(vh->var).second) queue.push_back(vh->var);
     bfs_both(queue, [](Node*){ return true; });
-    std::set<pair<const void*, int64>> seen;
-    int64 t = now_ns();
-    auto& s = state();
-    std::lock_guard<std::mutex> guard(s.mutex);
+    std::map<pair<const void*, int64>, ExistingVarMeta> by_block;
     for (Node* node : queue) {
         if (!node->is_var()) continue;
         Var* v = (Var*)node;
         if (!v->mem_ptr || !v->allocator || v->size <= 0) continue;
         auto key = std::make_pair((const void*)v->allocator, (int64)v->allocation);
-        if (!seen.insert(key).second) continue;
+        auto it = by_block.find(key);
+        // If several views alias one block, prefer the largest Var (usually
+        // the owning tensor rather than a small slice).
+        if (it != by_block.end() && it->second.var_size >= v->size) continue;
+        ExistingVarMeta meta;
+        meta.var_id = v->id;
+        meta.var_size = v->size;
+        meta.device = v->allocator->is_cuda() ? v->allocator->device() : -1;
+        meta.desc = var_desc(v);
         Op* producer = v->input();
-        int64 rec[kMemFields] = {t, stm_existing, v->allocator->device(), v->size,
-            (int64)(uintptr_t)v->allocator, (int64)v->allocation, -1, v->id,
-            s.intern(var_desc(v)),
-            producer ? s.intern(producer->name_ex()) : (v->name.size() ? s.intern(string("param:") + v->name.c_str()) : 0),
-            producer ? s.site(producer->launch_origin) : -1};
+        if (producer) {
+            meta.producer = producer->name_ex();
+            meta.origin = producer->launch_origin;
+        } else if (v->name.size()) {
+            meta.producer = string("param:") + v->name.c_str();
+        }
+        by_block[key] = std::move(meta);
+    }
+
+    struct PoolBlockEntry {
+        int device;
+        int64 bytes;
+        const void* allocator;
+        int64 allocation;
+    };
+    vector<PoolBlockEntry> pool_blocks;
+    std::set<pair<const void*, int64>> emitted;
+    for (SFRLAllocator* a : SFRLAllocator::sfrl_allocators) {
+        std::unique_lock<std::recursive_mutex> lock(a->mutex);
+        const int dev = a->is_cuda() ? a->device() : -1;
+        for (CachingBlock* b : a->id_space.occupied_id_mapper) {
+            if (!b || !b->occupied) continue;
+            pool_blocks.push_back({dev, (int64)b->size, (const void*)a, (int64)b->id});
+        }
+    }
+
+    int64 t = now_ns();
+    auto& s = state();
+    std::lock_guard<std::mutex> guard(s.mutex);
+    for (const auto& pb : pool_blocks) {
+        auto key = std::make_pair(pb.allocator, pb.allocation);
+        emitted.insert(key);
+        int64 var_id = -1, desc_id = 0, prod_id = 0, site_id = -1;
+        auto it = by_block.find(key);
+        if (it != by_block.end()) {
+            var_id = it->second.var_id;
+            desc_id = s.intern(it->second.desc);
+            prod_id = it->second.producer.empty() ? 0 : s.intern(it->second.producer);
+            site_id = s.site(it->second.origin);
+        }
+        int64 rec[kMemFields] = {t, stm_existing, pb.device, pb.bytes,
+            (int64)(uintptr_t)pb.allocator, pb.allocation, -1, var_id,
+            desc_id, prod_id, site_id};
+        if (!s.room(s.memory, kMemFields)) return;
+        s.memory.insert(s.memory.end(), rec, rec + kMemFields);
+    }
+    // Non-SFRL existing Vars (e.g., when use_sfrl_allocator=0).
+    for (const auto& kv : by_block) {
+        if (emitted.count(kv.first)) continue;
+        const auto& meta = kv.second;
+        int64 rec[kMemFields] = {t, stm_existing, meta.device, meta.var_size,
+            (int64)(uintptr_t)kv.first.first, kv.first.second, -1, meta.var_id,
+            s.intern(meta.desc),
+            meta.producer.empty() ? 0 : s.intern(meta.producer),
+            s.site(meta.origin)};
         if (!s.room(s.memory, kMemFields)) return;
         s.memory.insert(s.memory.end(), rec, rec + kMemFields);
     }
@@ -267,16 +595,20 @@ void record_existing_allocations() {
 // ---- Python API ----------------------------------------------------------
 
 void step_trace_start(int64 mode) {
+    trace_generation.fetch_add(1, std::memory_order_acq_rel);
     auto& s = state();
     {
         std::lock_guard<std::mutex> guard(s.mutex);
         s.clear();
     }
     if (mode & st_memory) record_existing_allocations();
-    step_trace_mode = (int)mode;
+    step_trace_mode.store((int)mode, std::memory_order_release);
 }
 
-void step_trace_stop() { step_trace_mode = 0; }
+void step_trace_stop() {
+    step_trace_mode.store(0, std::memory_order_release);
+    trace_generation.fetch_add(1, std::memory_order_acq_rel);
+}
 
 void step_trace_clear() {
     auto& s = state();
@@ -284,13 +616,68 @@ void step_trace_clear() {
     s.clear();
 }
 
-int64 step_trace_active() { return step_trace_mode; }
+int64 step_trace_active() { return step_trace_mode.load(std::memory_order_relaxed); }
 int64 step_trace_now() { return now_ns(); }
 
 void step_trace_set_correlation(int64 push_fn, int64 pop_fn) {
     auto& s = state();
-    s.push.store((CorrelationPush)(uintptr_t)push_fn);
-    s.pop.store((CorrelationPop)(uintptr_t)pop_fn);
+    s.push.store((CorrelationPush)(uintptr_t)push_fn, std::memory_order_release);
+    s.pop.store((CorrelationPop)(uintptr_t)pop_fn, std::memory_order_release);
+}
+
+vector<int64> step_trace_cupti_init(int64 get_next_record_fn, int64 get_dropped_fn) {
+    auto& cs = cupti_state();
+    cs.get_next.store((CuptiGetNextRecord)(uintptr_t)get_next_record_fn, std::memory_order_release);
+    cs.get_dropped.store((CuptiGetDropped)(uintptr_t)get_dropped_fn, std::memory_order_release);
+    return {
+        (int64)(uintptr_t)&cupti_buffer_requested,
+        (int64)(uintptr_t)&cupti_buffer_completed,
+    };
+}
+
+void step_trace_cupti_reset() {
+    cupti_state().reset();
+}
+
+vector<string> step_trace_cupti_take_names() {
+    auto& cs = cupti_state();
+    std::lock_guard<std::mutex> guard(cs.data_mutex);
+    vector<string> out;
+    out.swap(cs.names);
+    cs.name_ids.clear();
+    return out;
+}
+
+vector<int64> step_trace_cupti_take_kernels() {
+    auto& cs = cupti_state();
+    std::lock_guard<std::mutex> guard(cs.data_mutex);
+    vector<int64> out;
+    out.swap(cs.kernels);
+    return out;
+}
+
+vector<int64> step_trace_cupti_take_copies() {
+    auto& cs = cupti_state();
+    std::lock_guard<std::mutex> guard(cs.data_mutex);
+    vector<int64> out;
+    out.swap(cs.copies);
+    return out;
+}
+
+vector<int64> step_trace_cupti_take_correlations() {
+    auto& cs = cupti_state();
+    std::lock_guard<std::mutex> guard(cs.data_mutex);
+    vector<int64> out;
+    out.swap(cs.correlations);
+    return out;
+}
+
+int64 step_trace_cupti_dropped() {
+    auto& cs = cupti_state();
+    std::lock_guard<std::mutex> guard(cs.data_mutex);
+    int64 d = cs.dropped;
+    cs.dropped = 0;
+    return d;
 }
 
 vector<string> step_trace_strings() {
@@ -319,7 +706,7 @@ string step_trace_layout() {
 }
 
 int64 step_trace_range_begin(const string& name) {
-    if (!(step_trace_mode & st_ops)) return -1;
+    if (!(step_trace_mode.load(std::memory_order_relaxed) & st_ops)) return -1;
     int64 sid;
     {
         auto& s = state();
@@ -327,7 +714,7 @@ int64 step_trace_range_begin(const string& name) {
         sid = s.intern(name);
     }
     int64 seq = begin_record(ok_range, sid);
-    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks))
+    if (PREDICT_BRANCH_NOT_TAKEN(capture_op_stacks.load(std::memory_order_relaxed)))
         if (PendingOp* p = find_pending(seq)) p->stack = capture_memory_stack();
     return seq;
 }
@@ -337,7 +724,7 @@ void step_trace_range_end(int64 id) {
     end_record(id);
 }
 
-int64 graph_launch_count() { return graph_launches.load(); }
+int64 graph_launch_count() { return graph_launches.load(std::memory_order_relaxed); }
 
 vector<int64> device_pool_stats(int device) {
     int64 used = 0, reserved = 0, free_blocks = 0, largest_free = 0;
@@ -358,6 +745,7 @@ vector<int64> device_pool_stats(int device) {
     for (auto* a : TempAllocator::temp_allocators) {
         if (a->is_cuda() == host) continue;
         if (!host && a->device() != device) continue;
+        std::unique_lock<std::recursive_mutex> lock(a->mutex);
         temp_used += a->used_memory;
         temp_reserved += a->used_memory + a->unused_memory;
     }
@@ -369,7 +757,7 @@ vector<int64> device_pool_stats(int device) {
 // ---- hooks ---------------------------------------------------------------
 
 StepTraceOpScope::StepTraceOpScope() {
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops))
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops))
         seq = begin_record(ok_op, 0);
 }
 
@@ -385,7 +773,7 @@ void StepTraceOpScope::named(Op* op, bool is_fused, int device) {
     string shapes;
     int64 out_bytes = 0;
     Op* root = op;
-    const bool with_shapes = step_trace_mode & st_shapes;
+    const bool with_shapes = step_trace_mode.load(std::memory_order_relaxed) & st_shapes;
     if (is_fused) {
         auto* fop = (FusedOp*)op;
         p->fused = fop->ops.size();
@@ -410,7 +798,15 @@ void StepTraceOpScope::named(Op* op, bool is_fused, int device) {
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mutex);
     auto built = s.built_in_range.find(root->id);
-    if (built != s.built_in_range.end()) p->range = built->second;
+    if (built != s.built_in_range.end()) {
+        p->range = built->second;
+    } else if (is_fused) {
+        auto* fop = (FusedOp*)op;
+        for (auto it = fop->ops.rbegin(); it != fop->ops.rend(); ++it) {
+            auto mb = s.built_in_range.find((*it)->id);
+            if (mb != s.built_in_range.end()) { p->range = mb->second; break; }
+        }
+    }
     p->name = s.intern(name);
     p->shapes = with_shapes ? s.intern(shapes) : 0;
     p->site = s.site(root->launch_origin);
@@ -433,7 +829,9 @@ void StepTraceOpScope::named(Op* op, bool is_fused, int device) {
 }
 
 StepTraceCompileScope::StepTraceCompileScope() {
-    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops) || current_op < 0) return;
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops)
+            || current_op < 0)
+        return;
     // Only the op's own compile: one a batch nested inside it does while
     // planning is that batch's compile phase.
     PendingOp* p = find_pending(current_op);
@@ -456,19 +854,21 @@ void StepTraceOpScope::allocated() {
 }
 
 StepTraceBatchScope::StepTraceBatchScope() {
-    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops)) return;
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops)) return;
+    gen = trace_generation.load(std::memory_order_acquire);
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mutex);
     if (!s.room(s.batches, kBatchFields)) return;
+    prev_batch = current_batch;
     batch = s.next_batch++;
     int64 t = now_ns();
-    int64 rec[kBatchFields] = {batch, current_batch, t, 0, 0, 0, 0};
+    int64 rec[kBatchFields] = {batch, prev_batch, t, 0, 0, 0, 0};
     s.batches.insert(s.batches.end(), rec, rec + kBatchFields);
     current_batch = batch;
 }
 
 void StepTraceBatchScope::mark(int phase) {
-    if (batch < 0) return;
+    if (batch < 0 || gen != trace_generation.load(std::memory_order_acquire)) return;
     auto& s = state();
     int64 t = now_ns();
     std::lock_guard<std::mutex> guard(s.mutex);
@@ -479,36 +879,50 @@ void StepTraceBatchScope::mark(int phase) {
 
 StepTraceBatchScope::~StepTraceBatchScope() {
     if (batch < 0) return;
+    current_batch = prev_batch;
+    if (gen != trace_generation.load(std::memory_order_acquire)) return;
     auto& s = state();
     int64 t = now_ns();
     std::lock_guard<std::mutex> guard(s.mutex);
     size_t at = (size_t)batch * kBatchFields;
     if (at + kBatchFields <= s.batches.size() && s.batches[at] == batch) {
         s.batches[at + 6] = t;
-        current_batch = s.batches[at + 1];
-    } else {
-        current_batch = -1;
     }
 }
 
 void step_trace_wait_begin() {
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops)) wait_started = now_ns();
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops)) return;
+    uint64 cur_gen = trace_generation.load(std::memory_order_acquire);
+    if (wait_depth == 0 || wait_gen != cur_gen) {
+        wait_depth = 1;
+        wait_started = now_ns();
+        wait_gen = cur_gen;
+    } else {
+        wait_depth++;
+    }
 }
 
 void step_trace_wait_end() {
-    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops) || !wait_started) return;
+    if (wait_depth <= 0) return;
+    wait_depth--;
+    if (wait_depth > 0) return;
+    uint64 cur_gen = trace_generation.load(std::memory_order_acquire);
+    int64 started = wait_started;
+    wait_started = 0;
+    if (!started || wait_gen != cur_gen
+            || !PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops))
+        return;
     int64 t = now_ns();
     auto& s = state();
     std::lock_guard<std::mutex> guard(s.mutex);
     if (s.room(s.waits, kWaitFields)) {
-        int64 rec[kWaitFields] = {wait_started, t, current_batch};
+        int64 rec[kWaitFields] = {started, t, current_batch};
         s.waits.insert(s.waits.end(), rec, rec + kWaitFields);
     }
-    wait_started = 0;
 }
 
 void step_trace_mem(int kind, int device, int64 bytes, const void* allocator, int64 allocation) {
-    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_memory)) return;
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_memory)) return;
     int64 t = now_ns();
     auto& s = state();
     Var* v = (kind == stm_pool && bytes > 0) ? current_var : nullptr;
@@ -529,8 +943,8 @@ void step_trace_mem(int kind, int device, int64 bytes, const void* allocator, in
 }
 
 void note_graph_launch_begin() {
-    graph_launches++;
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops)) {
+    graph_launches.fetch_add(1, std::memory_order_relaxed);
+    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops)) {
         int64 sid, site;
         // The Python line that asked for the launch, by the same rule as an
         // operator's `launch_origin`.
@@ -547,7 +961,7 @@ void note_graph_launch_begin() {
 }
 
 void note_graph_launch_end() {
-    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode & st_ops)) return;
+    if (!PREDICT_BRANCH_NOT_TAKEN(step_trace_mode.load(std::memory_order_relaxed) & st_ops)) return;
     for (auto it = pending_ops.rbegin(); it != pending_ops.rend(); ++it)
         if (it->kind == ok_graph_launch) { end_record(it->seq); return; }
 }
@@ -555,8 +969,9 @@ void note_graph_launch_end() {
 Var* step_trace_current_var() { return current_var; }
 
 void step_trace_note_op_built(Op* op) {
+    uint64 cur_gen = trace_generation.load(std::memory_order_acquire);
     for (auto it = pending_ops.rbegin(); it != pending_ops.rend(); ++it) {
-        if (it->kind != ok_range) continue;
+        if (it->kind != ok_range || it->gen != cur_gen) continue;
         auto& s = state();
         std::lock_guard<std::mutex> guard(s.mutex);
         if (s.built_in_range.size() < kMaxRecords) s.built_in_range[op->id] = it->seq;
@@ -565,7 +980,8 @@ void step_trace_note_op_built(Op* op) {
 }
 
 StepTraceVarScope::StepTraceVarScope(Var* v) {
-    if (PREDICT_BRANCH_NOT_TAKEN((step_trace_mode & st_memory) | memory_history_mode)) {
+    if (PREDICT_BRANCH_NOT_TAKEN((step_trace_mode.load(std::memory_order_relaxed) & st_memory)
+                                 | memory_history_mode.load(std::memory_order_relaxed))) {
         on = true;
         saved = current_var;
         current_var = v;

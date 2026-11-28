@@ -25,7 +25,27 @@ _COUNTERS = ("num_alloc_retries", "num_ooms", "num_device_alloc", "num_device_fr
 
 
 def _device(device):
-    return int(_core.current_device()) if device is None else int(device)
+    if device is None:
+        import jittor as jt
+        return int(_core.current_device()) if jt.flags.use_cuda else -1
+    if isinstance(device, int):
+        return device
+    if isinstance(device, str):
+        text = device.strip().lower()
+        if text == "cpu":
+            return -1
+        if text == "cuda":
+            return int(_core.current_device())
+        if text.startswith("cuda:"):
+            return int(text.split(":", 1)[1])
+        return int(text)
+    dev_type = getattr(device, "type", None)
+    if dev_type is not None:
+        if str(dev_type).lower() == "cpu":
+            return -1
+        index = getattr(device, "index", None)
+        return int(_core.current_device()) if index is None else int(index)
+    return int(device)
 
 
 def memory_stats(device=None):
