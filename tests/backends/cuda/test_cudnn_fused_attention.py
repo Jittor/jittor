@@ -120,6 +120,31 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def test_seq_major_inputs_are_read_in_place(self):
         self._check_seq_major("qkv")
 
+    def test_capture_reads_pending_contiguous_inputs_with_dense_output(self):
+        rng = np.random.default_rng(42)
+        values = [rng.normal(size=(1, 272, 3, 64)).astype("float16") for _ in range(3)]
+        q, k, v = (value.transpose(0, 2, 1, 3) for value in values)
+        mask = np.ones((1, 1, 272, 272), dtype=bool)
+        mask[..., -1] = False
+        expected = _reference(q, k, v, mask, False, np.zeros_like(q))[0]
+        with jt.no_grad(), forbid_backend_fallbacks(), jt.flag_scope(
+                transpose_storage_view=1, auto_flush_ops=0, async_flush_ops=0):
+            sources = [jt.array(value) for value in values]
+            mask = jt.array(mask)
+            jt.sync([*sources, mask], device_sync=True)
+            with jt.flag_scope(keep_graph=2):
+                arguments = [jt.contiguous(value.transpose(1, 2)) for value in sources]
+                self.assertTrue(all(value._is_pending_contiguous() for value in arguments))
+                output = self.kernel._cudnn_fused_attention(*arguments, attn_mask=mask)
+                self.assertIsNotNone(output)
+                self.assertTrue(output._storage_is_contiguous())
+                self.assertTrue(any(
+                    admitted and key[-1] & self.kernel._DENSE_OUTPUT
+                    for key, admitted in self.kernel._supported_shapes.items()))
+                jt.sync([output], device_sync=True)
+            self.assertEqual(output.location(), "device")
+            np.testing.assert_allclose(output.float32().numpy(), expected, rtol=2e-3, atol=8e-4)
+
     def test_a_seq_major_query_with_dense_keys(self):
         self._check_seq_major("q")
 
