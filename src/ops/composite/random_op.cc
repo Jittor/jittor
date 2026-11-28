@@ -21,12 +21,24 @@ namespace jittor {
 RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type,
                    RandomGenerator* generator, bool torch_normal) : torch_normal(torch_normal) {
     const auto backend = construction_target_backend();
+    if (generator && (backend == BackendId::Acl || generator->state->backend == BackendId::Acl)) {
+        USER_CHECK(backend == BackendId::Acl && generator->state->backend == BackendId::Acl)
+            << "random: generator backend must match the ACL output backend";
+        USER_CHECK(dtype == ns_float32 && type == ns_uniform && !torch_normal)
+            << "Private ACL generators support float32 uniform draws only";
+        #ifdef HAS_ACCELERATOR
+        USER_CHECK(backend_runs_op_natively(BackendId::Acl, "random"))
+            << "Private ACL random requires the native ACL random launcher";
+        #else
+        USER_CHECK(false) << "Private ACL random requires an ACL-enabled runtime";
+        #endif
+    }
     if (torch_normal)
         USER_CHECK(backend == BackendId::Cpu && type == ns_normal
                    && (dtype == ns_float32 || dtype == ns_float64))
             << "Torch CPU normal generation requires a CPU float32 or float64 output";
     #ifdef HAS_ACCELERATOR
-    if (backend != BackendId::Cpu) {
+    if (backend != BackendId::Cpu && !(generator && backend == BackendId::Acl)) {
         auto accelerated_random = find_op_capability<VarPtr, NanoVector, NanoString, NanoString, RandomGenerator*>(
             backend, OpCapability::Random, shape, dtype, type, generator);
         if (accelerated_random) {
@@ -41,6 +53,15 @@ RandomOp::RandomOp(NanoVector shape, NanoString dtype, NanoString type,
     if (generator) this->gen = generator->state;
     else rematerialization_preserve_rng = rematerialization_preserves_rng();
     USER_CHECK(type == ns_normal || type == ns_uniform);
+    if (gen && backend == BackendId::Acl) {
+        USER_CHECK(output->device_id == gen->device_id)
+            << "random: private ACL generator device must match the output device";
+        const auto span = gen->reserve_acl(output->num);
+        from_acl_generator = true;
+        acl_seed = span.seed;
+        acl_offset = span.offset;
+        acl_span = output->num;
+    }
     #ifdef HAS_ACCELERATOR
     // No capability op, but the backend may run `random` itself -- ACL does,
     // through its own launcher. Without this flag the executor treats the op
@@ -59,6 +80,8 @@ void RandomOp::jit_prepare(JK& jk) {
 #else // JIT
 #ifdef JIT_cpu
 void RandomOp::jit_run() {
+    USER_CHECK(!gen || gen->backend != BackendId::Acl)
+        << "Private ACL random cannot execute through a CPU fallback";
     if (torch_normal) {
         if (!output->num) return;
         auto& owner = runtime_rng_state();

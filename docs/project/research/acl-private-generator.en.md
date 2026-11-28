@@ -2,122 +2,105 @@
 
 [Research proposals](index.en.md) · [中文](acl-private-generator.md)
 
-Status: **proposal, not implemented**. Maintainer discussion is tracked in
-[#18162](https://github.com/Jittor/jittor/issues/18162). This document does not
-declare private ACL Generators, seeded sampling or offset/discard support.
-Runtime and compat maintainers must review the state representation, algorithm
-and consumption units before implementation.
+Status: **initial implementation, limited to the contract below**. Review is
+tracked in [#18162](https://github.com/Jittor/jittor/issues/18162). Actual hardware
+results, matching Core identity and remaining acceptance gaps belong in the
+implementation PR. This is not acceptance of downstream seeded/discard workflows.
 
-## Problem and scope
+## Supported stream
 
-The default device RNG and a private Generator have separate contracts. Passing
-seed replay and global state restoration does not establish that
-`tensor.exponential_(generator=g)` consumes the independent state of `g`.
-Successful construction and `manual_seed` do not establish it either.
+`jt.Generator("acl:N")` is a native private owner on ACL user ordinal `N`.
+With the Jittor Torch frontend active, `torch.Generator("npu:N")` and the native
+`acl:N` spelling select that owner. Logical `cuda:N` resolves through the existing
+frontend backend resolver; it identifies an ACL owner only in an ACL runtime.
+Owner and output backend/ordinal must match. A matching rebuilt Core is required;
+a Python-only upgrade cannot add this native interface to an old binary.
 
-Legal inference paths without request seeds already exist. This gap must not be
-described as all Engines or all ACL random operations being unusable. Affected
-callers include explicitly seeded requests, interleaved request owners, and some
-warmup/discard paths. Each requires its own acceptance; greedy output is not
-private RNG acceptance.
+The first native distribution is dense **float32 uniform**, generated on the NPU
+by an AscendC Philox4x32-10 kernel. It uses neither host random values nor the
+process-default CANN RNG. The existing compat inverse-CDF implementation consumes
+this uniform through the supplied owner for `exponential_(generator=g)`.
+Unsupported native distributions/dtypes fail before reservation; this is not a
+claim that all Torch random factories or all exponential output dtypes work.
+`generator=None` retains the existing CANN implementation and its state format.
+CPU/CUDA algorithms and state frames remain unchanged.
 
-### Reviewed source boundary
+## Exact seed, position and consumption contract
 
-These source findings are pinned to
-`f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb`, without claiming device revalidation
-of that commit. Historical hardware results, commands, outputs and matching Core
-identity belong in the linked PR.
+- The seed is a uint64 bit pattern, carried by the native signed-int64 API.
+- A position is one **raw 32-bit word**, in `[0, 2**63 - 1]`, rather than a draw,
+  a CANN/SIMT offset or a CUDA launch offset.
+- For position `p`, the counter is `(low32(p//4), high32(p//4), 0, 0)`, the key
+  is `(low32(seed), high32(seed))`, and the selected lane is `p % 4`.
+- A float32 uniform is `(word >> 8) * 2**-24`, exactly in `[0, 1)`.
+  Each output element reserves one word. Empty draws reserve zero; shape splitting
+  does not change the concatenated sequence. This mapping is not promised to
+  match PyTorch, torch-npu or CANN distribution output bit for bit.
+- `manual_seed` resets the position to zero. `get_offset`/`set_offset` expose this
+  raw32 position on ACL only. Invalid, negative and overflowing positions fail
+  without mutation. CPU/CUDA offset methods remain explicitly unsupported here.
 
-1. The [compat Generator](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/compat/torch/generator.py#L19)
-   exposes CPU/CUDA private-owner semantics and no `get_offset` / `set_offset`.
-2. [Factory owner validation](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/compat/torch/installers/factories.py#L761)
-   maps backend 2 to `unsupported`, rejecting the explicit draw before allocation
-   and submission.
-3. [RandomOp](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/src/ops/composite/random_op.cc#L39)
-   retains a supplied Generator state, but the
-   [ACL launcher](https://github.com/Jittor/jittor/blob/f01650afa2c83d4a4fb49f1c6bee78c7a603e4cb/backends/acl/src/acl_op_exec.cc#L714)
-   obtains seed/offset from `reserve_acl_random(device, numel)`, without consuming
-   `op.gen`.
+The algorithm is described by the original
+[Random123 paper](https://thesalmons.org/john/random123/papers/random123sc11.pdf).
+The tests include the published zero-key/zero-counter
+[Philox known-answer vector](https://github.com/DEShawResearch/random123/blob/main/tests/kat_vectors)
+and an independent integer reference for nonzero seeds and high positions.
 
-Removing the compat refusal or renaming ACL to CUDA cannot provide isolation.
-The default launcher's element-based advancement does not establish the counter
-units of every CANN distribution.
+## State and lazy execution
 
-## Minimum implementation boundary
+The native owner holds a mutex-protected seed and position. State frames encode
+version `JITTOR_ACL_RNG_1`, algorithm `philox4x32-10-raw32-v1`, backend, user ordinal,
+seed and position. Restore validates all fields, including trailing bytes, before
+changing either field. Foreign algorithm/backend/device frames are refused.
+Compat exposes the frame as a CPU ByteTensor rather than interpreting its fields.
 
-| Layer | Capability requiring review |
-| --- | --- |
-| Native runtime | Explicit backend/device owner; isolated retained state; validated atomic restoration; immutable draw reservation |
-| ACL random launch | Explicit owner supplies its own seed/counter; only `generator=None` uses default state; unsupported distributions fail before consumption |
-| compat | Official backend-2 device resolution; owner/output-ordinal validation; seed/state and explicitly defined offset APIs |
-| Downstream Adapter | Capability/version admission, request binding and actual consumption acceptance; no private C++ ABI, fake Generator or global-stream swapping |
+A RandomOp atomically reserves and captures immutable seed/base/span when it is
+constructed. Later reseeding/restoration, reversed execution, Python-wrapper
+deletion or rematerialization cannot change an issued draw or consume its span a
+second time. Independent owners and default draws do not advance one another.
+Validation failures consume no state. Once a draw is published, a compile/launch
+failure does not silently rewind or reuse its reserved span; the operation fails.
+Private draws cannot fall back to CPU or to the default device RNG.
 
-Existing CPU/CUDA algorithms, state formats and placement checks must remain.
-Native state tags and launcher changes require a matching Core: upgrading Python
-alone cannot authorize reuse of a binary with unknown provenance or ABI.
+The initial kernel uses one logical block and UB-to-GM copies with explicit
+scalar/DMA synchronization, including partial tiles. It does not infer a physical
+core count. It requires the installed CANN AscendC compiler and the actual SoC's
+platform configuration. This is a correctness implementation with no throughput
+or asynchronous/graph-capture support claim.
 
-### State and lazy execution
+## Acceptance boundary
 
-- Interleaving private owners, default draws and requests must not perturb other
-  owners' streams.
-- Reseeding affects only the selected owner. State frames identify version,
-  algorithm, backend, device and position. Invalid frames, cross-device restore
-  and overflow fail before mutation.
-- A draw retains immutable seed/base/span and required lifetimes. Wrapper
-  deletion, subsequent reseeding, completion ordering and rematerialization may
-  not change an issued draw or consume its state twice.
-- Validation failure consumes no state. Failures after publication need explicit
-  semantics, without silently reusing an issued range.
+The native tests in `tests/backends/acl/test_acl_private_generator.py` cover
+algorithm vectors, lane/tile boundaries, high positions, reservations, owner
+lifetime and atomic refusal. The compat tests in
+`compat/tests/torch/test_acl_private_generator_compat.py` cover real owner routing,
+isolation, state/offset replay, in-place exponential consumption and invalid
+inputs. Both require a real admitted ACL device and zero fallback. CPU checks,
+import success and default RNG checks cannot replace those device tests.
 
-### Offset is not an arbitrary Python counter
+The proposed N0–N5 categories concern these native/compat semantics. **A0**
+(original warmup/request use and shutdown) and **A1** (original discard restoration,
+request binding and stale-snapshot refusal) remain downstream acceptance tasks.
+In particular, `set_offset(get_offset() - 4)` rewinds exactly four raw32 words;
+it does not undo a draw containing an arbitrary number of vocabulary elements.
+Adding methods must not be treated as validation of that vLLM assumption.
+Graph capture, speculative sampling and cross-process state sharing are outside
+this initial contract. Downstream adapters must use reviewed public state APIs
+and preserve their existing CUDA branches.
 
-Define the algorithm, offset unit and consumption rule for each supported
-distribution/dtype/shape first. vLLM's use of
-`set_offset(get_offset() - 4)` is a caller assumption, not evidence of identical
-ACL units or consumption. Ordinary and SIMT exponential advancement cannot be
-interchanged; adding two methods does not establish correct discard behavior.
-
-If the chosen algorithm differs, separately review request-level restoration
-through public full-state snapshots, bound to request, owner and sampling step.
-Reject stale snapshots and outstanding later draws; preserve CUDA's existing
-branch. Graph capture, asynchronous/speculative sampling and cross-process
-sharing are not implicitly covered by the first implementation.
-
-## Staged acceptance
-
-N0–N5 and A0–A1 below are proposed acceptance cases, not passed results.
-
-- **N0**: real ACL owner, backend/ordinal validation, fake-handle and cross-device refusal.
-- **N1**: same-seed replay; isolation under interleaved owners and default draws.
-- **N2**: seed/reset/initial_seed and high-bit seed round trips.
-- **N3**: algorithm reference vectors, boundary lengths, split draws, empty draws,
-  overflow and exact consumed spans.
-- **N4**: state/offset restoration, atomic invalid-state refusal, lazy-op lifetime,
-  and unchanged issued draws after reseeding.
-- **N5**: actual in-place `exponential_(generator=g)`, preserving object/storage,
-  consuming the selected owner on ACL with zero fallback.
-- **A0**: an original warmup/request path that really needs a private Generator,
-  including natural shutdown.
-- **A1**: original discard restoration, request isolation and stale-snapshot refusal.
-
-CPU checks, import success, default RNG or one random operator execution do not
-replace these cases. Cross-backend floating-point bitwise identity is not required.
-
-## Manual minimal reproducer
+## Manual reproducer
 
 The [reproducer](https://github.com/Jittor/jittor/blob/2.0-refactor/tools/probes/acl/private_generator_repro.py)
-compares small default/explicit draws and records whether offset methods exist.
-The operator must arrange device admission and isolated caches first. This tool
-does not authorize resource use or build a Core.
+records small default/private draws, interface provenance, original failures and
+fallback counts. Arrange resource admission and an isolated, matching Core first;
+the tool neither grants device permission nor builds a Core.
 
 ```bash
-# Complete resource admission and use a Core matching the selected framework.
 JT_BACKEND=acl JITTOR_NO_BUILD=1 python tools/probes/acl/private_generator_repro.py \
   --run --ordinal "$ACL_USER_ORDINAL"
 ```
 
-The input API spelling is logical `cuda:<user ordinal>`; Jittor-owned Torch and
-actual backend 2 must establish ACL ownership. It does not mean CUDA hardware.
-The report retains interface provenance, original errors and fallback counters.
-Nonzero exit preserves failure; catching an exception or passing the default
-stream does not count as private Generator PASS.
+Its logical `cuda:<user ordinal>` input does not identify CUDA hardware: actual
+backend 2, Tensor placement and SDK mapping establish the physical ACL device.
+A caught exception, a passing default stream or exit zero alone is not private
+Generator acceptance.

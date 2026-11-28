@@ -19,4 +19,4 @@ acl-private-generator.en
 | Proposal | Status |
 | --- | --- |
 | [Framework optimisation operable by an agent](agentic-optimization.en.md) | Research proposal, not implemented |
-| [Private ACL Generator](acl-private-generator.en.md) | Interface and consumption proposal, not implemented |
+| [Private ACL Generator](acl-private-generator.en.md) | Initial float32 private stream, state/offset contract and downstream acceptance boundary |

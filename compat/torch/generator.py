@@ -1,6 +1,6 @@
-"""Torch generator handles over the native CPU and CUDA stream owners."""
+"""Torch generator handles over native CPU, CUDA and ACL stream owners."""
 
-import builtins as _builtins
+import operator as _operator
 
 import jittor as jt
 import numpy as np
@@ -10,27 +10,30 @@ from .types import device as _device
 
 
 class Generator:
-    """Torch API over the existing native CPU engine or CUDA Philox stream.
+    """Torch API over native CPU, CUDA and ACL private stream owners.
 
     State bytes identify this native implementation, not PyTorch or the former
     NumPy-backed shim. A foreign snapshot is refused rather than reseeded.
     """
 
     def __init__(self, device=None):
+        # The common frontend resolver calls Ascend "npu". Accept the native
+        # ACL spelling here too, without adding aliases to Torch's device API.
+        if isinstance(device, str) and device.split(":", 1)[0] == "acl":
+            device = "npu" + device[3:]
         selected = _device(device or "cpu")
-        if selected.type not in ("cpu", "cuda"):
-            raise NotImplementedError("Generator supports native CPU and CUDA streams only")
+        if selected.type not in ("cpu", "cuda", "npu"):
+            raise NotImplementedError("Generator supports native CPU, CUDA and ACL streams only")
         if selected.type == "cpu":
             self.device = _device("cpu")
             native_device = "cpu"
         else:
-            index = selected.index
-            if index is None:
-                index = _builtins.max(int(jt.current_device()), 0)
-            if not jt.has_cuda or not 0 <= index < int(jt.get_device_count()):
-                raise RuntimeError("Generator requires an available CUDA device")
-            self.device = selected
-            native_device = "cuda:%d" % index
+            from .frontend import _placement_request
+            backend, index = _placement_request(jt, selected)
+            if backend not in (1, 2):
+                raise NotImplementedError("Generator requires a native CUDA or ACL stream owner")
+            self.device = _device("npu", index) if backend == 2 else selected
+            native_device = ("acl" if backend == 2 else "cuda") + ":%d" % index
         self._native = jt.Generator(native_device)
         self.manual_seed(67280421310721)
 
@@ -99,6 +102,26 @@ class Generator:
             return int(jt.core.rng_initial_seed("cpu"))
         return int(self._native.initial_seed()) & ((1 << 64) - 1)
 
+    def get_offset(self):
+        """Private ACL raw32 position; not a SIMT draw/discard count."""
+        if self._native is None or self.device.type != "npu":
+            raise NotImplementedError("%s Generator does not expose an offset" % self.device.type.upper())
+        jt.sync_all(True)
+        return int(self._native.get_offset())
+
+    def set_offset(self, offset):
+        """Restore a nonnegative int64 raw32 position without reseeding."""
+        if self._native is None or self.device.type != "npu":
+            raise NotImplementedError("%s Generator does not expose an offset" % self.device.type.upper())
+        if isinstance(offset, (bool, np.bool_)):
+            raise TypeError("Generator offset must be an integer, not bool")
+        offset = _operator.index(offset)
+        if not 0 <= offset <= (1 << 63) - 1:
+            raise ValueError("Generator offset must be in [0, 2**63 - 1]")
+        jt.sync_all(True)
+        self._native.set_offset(offset)
+        return self
+
     def __getstate__(self):
         return self.get_state()
 
@@ -107,4 +130,3 @@ class Generator:
 
     def __reduce__(self):
         return type(self), (str(self.device),), self.get_state()
-

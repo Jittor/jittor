@@ -31,27 +31,45 @@
 #pragma once
 #include "core/common.h"
 #include "core/types.h"
+#include "runtime/backend.h"
+#include <mutex>
 #include <random>
 
 namespace jittor {
 
 struct TorchCpuNormal;
 
+struct AclPrivateRngSpan {
+    uint64 seed;
+    int64 offset;
+};
+
 struct RandomGeneratorState {
     int64 seed_;
-    int device_id; // -1 = cpu, >=0 = cuda device ordinal
+    int device_id; // -1 = cpu, otherwise an ordinal on backend
+    BackendId backend;
     std::default_random_engine cpu_engine;
     shared_ptr<TorchCpuNormal> cpu_torch_normal;
     // Next unreserved position in this generator's CUDA Philox stream, in
     // 32-bit raw values. Advanced by reserve_cuda() at op construction.
     int64 cuda_offset = 0;
+    // ACL's private stream is independent of the default CANN stream and of
+    // CUDA's distribution transforms. Its position counts raw 32-bit values
+    // in Philox4x32-10, including individual lanes of a four-value block.
+    int64 acl_offset = 0;
+    std::mutex mutex;
 
-    RandomGeneratorState(int64 seed, int device_id);
+    RandomGeneratorState(int64 seed, int device_id, BackendId backend);
     void set_seed(int64 seed);
     // Reserves `raw_count` positions for one draw and returns its first
     // position. Called when the draw is built, so get_state() already covers
     // every draw issued before it, executed or not.
     int64 reserve_cuda(int64 raw_count);
+    // Capture both seed and position under the same lock, at op construction.
+    AclPrivateRngSpan reserve_acl(int64 raw_count);
+    int64 get_offset();
+    void set_offset(int64 offset);
+    int64 get_seed();
 
     // Serializes cpu_engine's full state (via the standard <random> stream
     // operators) plus seed/device_id/cuda_offset into an opaque byte string.
@@ -93,6 +111,14 @@ struct RandomGenerator {
     // @pyjt(set_state)
     // @attrs(return_self)
     RandomGenerator* set_state(const string& s);
+
+    // Private ACL positions are raw32 units, not draw counts. Seeking back
+    // four positions does not undo an arbitrary-size draw.
+    // @pyjt(get_offset)
+    int64 get_offset();
+    // @pyjt(set_offset)
+    // @attrs(return_self)
+    RandomGenerator* set_offset(int64 offset);
 
     // @pyjt(__get__device)
     string get_device();

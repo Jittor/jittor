@@ -765,19 +765,21 @@ def _native_generator(generator):
     context = get_install_context(jt)
     default = getattr(context.target_namespace, "default_generator", None)
     native = getattr(generator, "_native", None)
-    if generator is not default and not isinstance(native, jt.Generator):
+    from ..generator import Generator
+    if generator is not default and (not isinstance(generator, Generator)
+                                     or not isinstance(native, jt.Generator)):
         raise TypeError("generator must be a torch.Generator")
     placement = jt.core._current_tensor_placement()
     backend, ordinal = placement if placement is not None else (0, 0)
     selected = str(getattr(native, "device", "cpu"))
     kind = selected.split(":", 1)[0]
-    expected = "cpu" if backend == 0 else "cuda" if backend == 1 else "unsupported"
+    expected = {0: "cpu", 1: "cuda", 2: "acl"}.get(backend, "unsupported")
     if kind != expected:
         raise RuntimeError("Expected a '%s' device type for generator but found '%s'" % (expected, kind))
-    if kind == "cuda":
+    if kind in ("cuda", "acl"):
         index = int(selected.split(":", 1)[1])
         if index != ordinal:
-            raise RuntimeError("Generator and output must use the same CUDA device")
+            raise RuntimeError("Generator and output must use the same %s device" % kind.upper())
     return native
 
 
@@ -832,6 +834,12 @@ def _draw_from_generator(name, generator, args, kwargs):
         cast_to = _INTEGER_DRAWS[name]
     else:
         cast_to = _dtype_to_str(get_install_context(jt).target_namespace.get_default_dtype())
+    # Initial ACL private-stream contract: native float32 uniform only. Reject
+    # before creating any draw; transforms such as exponential_ explicitly
+    # request this uniform dtype through their existing implementation.
+    if str(native.device).split(":", 1)[0] == "acl" and (
+            name not in ("rand", "rand_like") or cast_to != "float32"):
+        raise NotImplementedError("ACL private Generator supports float32 uniform draws only")
     if name in ("randn", "randn_like", "rand", "rand_like"):
         if cast_to in _COMPLEX_COMPONENTS:
             t = _complex_random(name, shape, cast_to, generator=native)
@@ -894,6 +902,10 @@ def _bernoulli_adapter(original, *args, generator=None, **kwargs):
     """
     p = kwargs.pop("p", None)
     if p is not None:
+        if generator is not None:
+            native = _native_generator(generator)
+            if native is not None and str(native.device).split(":", 1)[0] == "acl":
+                raise NotImplementedError("ACL private Generator supports float32 uniform draws only")
         reference = args[0] if args else kwargs.pop("input", None)
         if reference is None:
             raise TypeError("bernoulli() missing required argument: 'input'")
