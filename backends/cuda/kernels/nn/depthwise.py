@@ -5,21 +5,29 @@ from jittor._core.dtypes import dtype_name
 from jittor._runtime.backend_libraries import library_resource
 
 
-def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, dilation):
+def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, dilation,
+                           *, affine=None, silu=False):
     """Channels-last (NHWC) depthwise conv2d kernel avoiding NCHW<->NHWC copies."""
     Kh, Kw = int(weight.shape[-2]), int(weight.shape[-1])
     sh, sw = int(stride[0]), int(stride[1])
     ph, pw = int(padding[0]), int(padding[1])
     dh, dw = int(dilation[0]), int(dilation[1])
+    inputs = [x_nhwc, weight]
+    if affine is not None:
+        inputs.extend(affine)
+    scale, shift = ("in2_p", "in3_p") if affine is not None else ("nullptr", "nullptr")
     return jt.code(
         output_shape_nhwc,
         x_nhwc.dtype,
-        [x_nhwc, weight],
+        inputs,
         cuda_header="""
-        template <typename T, int KH, int KW, int SH, int SW, int DH, int DW>
+        template <typename T, int KH, int KW, int SH, int SW, int DH, int DW,
+                  bool AFFINE, bool SILU>
         __global__ void KernelDepthwiseConvNHWC(
             const T* __restrict__ input_data,
             const T* __restrict__ filter_data,
+            const T* __restrict__ scale,
+            const T* __restrict__ shift,
             int N, int H, int W, int C,
             int OH, int OW, int PH, int PW,
             T* __restrict__ output_data) {
@@ -54,7 +62,17 @@ def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, d
                     }
                 }
             }
-            output_data[idx] = static_cast<T>(acc);
+            T result = static_cast<T>(acc);
+            if (AFFINE) {
+                // Retain the convolution, multiply and add dtype boundaries.
+                T scaled = static_cast<T>(static_cast<float>(result) * static_cast<float>(scale[c]));
+                result = static_cast<T>(static_cast<float>(scaled) + static_cast<float>(shift[c]));
+            }
+            if (SILU) {
+                float value = static_cast<float>(result);
+                result = static_cast<T>(value * (1.0f / (1.0f + expf(-value))));
+            }
+            output_data[idx] = result;
         }
         """,
         cuda_src=f"""
@@ -68,9 +86,10 @@ def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, d
             if (total > 0) {{
                 const int threads = 256;
                 const int blocks = (total + threads - 1) / threads;
-                KernelDepthwiseConvNHWC<in0_type, {Kh}, {Kw}, {sh}, {sw}, {dh}, {dw}>
+                KernelDepthwiseConvNHWC<in0_type, {Kh}, {Kw}, {sh}, {sw}, {dh}, {dw},
+                                         {str(affine is not None).lower()}, {str(silu).lower()}>
                     <<<blocks, threads>>>(
-                        in0_p, in1_p, N, H, W, C, OH, OW, {ph}, {pw}, out0_p);
+                        in0_p, in1_p, {scale}, {shift}, N, H, W, C, OH, OW, {ph}, {pw}, out0_p);
             }}
         """,
     )

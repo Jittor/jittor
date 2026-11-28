@@ -52,9 +52,23 @@ class DepthwiseConv(Function):
         if records_no_grad(x, weight):
             nhwc_x = channels_last_source(x)
             if nhwc_x is not None:
-                out_nhwc = depthwise_forward_nhwc(
-                    nhwc_x, weight, [N, oh, ow, C], self.stride, self.padding, self.dilation)
-                return channels_last_view(out_nhwc)
+                output_shape = [N, oh, ow, C]
+                geometry = self.stride, self.padding, self.dilation
+                out = channels_last_view(depthwise_forward_nhwc(
+                    nhwc_x, weight, output_shape, *geometry))
+                if jt.flags.no_grad and not jt.flags.amp_reg and dtype_name(x.dtype) in (
+                        "float16", "bfloat16"):
+                    operands = nhwc_x, weight
+                    stamps = tuple(value._saved_storage_version() for value in operands)
+
+                    def apply_affine(scale, shift, *, silu=False):
+                        if tuple(value._saved_storage_version() for value in operands) != stamps:
+                            return None
+                        return channels_last_view(depthwise_forward_nhwc(
+                            *operands, output_shape, *geometry, affine=(scale, shift), silu=silu))
+
+                    out._jt_depthwise_affine = (out.id, apply_affine)
+                return out
         return depthwise_forward(x, weight, shape, self.stride, self.padding, self.dilation)
 
     def grad(self, grad):
