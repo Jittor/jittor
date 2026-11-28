@@ -347,6 +347,22 @@ class TestRepeatTile(Base):
                     msg=f"constant repeat_interleave index {dev}")
         both_devices(body)
 
+    def test_repeat_interleave_scalar_tensor_only_reads_the_count(self):
+        def body(dev):
+            values = torch.tensor([2], dtype=torch.int64, device=dev)
+            repeats = torch.tensor([3], dtype=torch.int64, device=dev)
+            jt.sync([values, repeats])
+            before = jt.core._host_readback_count()
+            result = torch.repeat_interleave(values, repeats)
+            jt.sync([result])
+            self.assertEqual(jt.core._host_readback_count() - before, 1)
+            self.assertEqual(result.device.type, dev)
+            self.ac(result.numpy(), np.array([2, 2, 2], dtype="int64"))
+
+            empty = torch.repeat_interleave(values, repeats * 0)
+            self.assertEqual(empty.numel(), 0)
+        both_devices(body)
+
     def test_repeat_interleave_arange_one_index(self):
         x = np.arange(6).reshape(1, 6).astype("float32")
         repeats_np = np.array([7], dtype="int32")

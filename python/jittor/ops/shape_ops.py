@@ -70,6 +70,13 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     if dim < 0:
         dim += x.ndim
 
+    if isinstance(repeats, Var) and repeats.numel() == 1 and output_size is None:
+        # A scalar repeat count defines the shape. Keep the values being
+        # repeated live on their device, including integer index tensors.
+        repeats = int(repeats.item())
+        if repeats < 0:
+            raise RuntimeError("repeat_interleave: repeats must be nonnegative")
+
     if isinstance(repeats, int):
         # Built as expand + reshape rather than a `reindex` with a divided
         # index expression (``i{dim}/{repeats}``): that specific reindex
@@ -99,7 +106,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
 
     # per-element repeats: build a gather index along `dim` then index_select.
     if isinstance(repeats, Var):
-        rep_list = [int(c) for c in repeats.numpy().reshape(-1)]
+        rep_list = [int(c) for c in repeats.reshape(-1).tolist()]
     else:
         rep_list = [int(c) for c in repeats]
     n = x.shape[dim]
