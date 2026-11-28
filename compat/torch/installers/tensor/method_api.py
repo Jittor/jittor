@@ -2383,11 +2383,37 @@ def _tensor_rmod(self, other):
     return _promoting_binary(self, other, '__rmod__', True)
 
 
+class _ScalarCube(_owner.jt.Function):
+    def _run_call(self, value):
+        self.base = _owner.jt.ops.reshape(value, value.shape)
+        return super()._run_call(value)
+
+    def execute(self, value):
+        return (value * value) * value
+
+    def grad(self, upstream):
+        # Torch differentiates scalar pow using the ordinary power rule,
+        # independently of the rounded multiplications in the forward.
+        return upstream * (3 * self.base.pow(2))
+
+
 def _tensor_pow(self, other):
     if _preserve_autocast_arithmetic():
         self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__pow__', False)
+    if isinstance(other, (int, float, _owner.np.integer, _owner.np.floating)) and other == 3:
+        dtype = _jittor_dtype_name(self.dtype)
+        if dtype in ('float16', 'bfloat16'):
+            from jittor._runtime.dispatch import dispatch_context
+
+            backend = dispatch_context(self).backend
+            if backend == 'cuda' or (backend == 'cpu' and dtype == 'bfloat16'):
+                # ATen's scalar-cube specialization rounds the square and
+                # the final multiplication in the tensor's storage dtype.
+                if _owner.jt.flags.no_grad or not self.requires_grad:
+                    return (self * self) * self
+                return _ScalarCube.apply(self)
     return _promoting_binary(self, other, '__pow__', False)
 
 
