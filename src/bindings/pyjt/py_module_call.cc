@@ -43,6 +43,7 @@ PyObject* slow = nullptr;
 PyObject* prefer_forward_fn = nullptr;
 PyObject* standard_rms_norm = nullptr;
 PyObject* rms_selector_state = nullptr;
+thread_local bool parallel_linear_scope = false;
 PyObject* linear_execute = nullptr;
 PyObject* linear_training_state = nullptr;
 #if PY_VERSION_HEX < 0x030C0000
@@ -1227,7 +1228,7 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
             return call_with(forward, module, args, kwargs);
         }
     }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && linear_execute
+    if (!parallel_linear_scope && !kwargs && PyTuple_GET_SIZE(args) == 1 && linear_execute
             && _PyType_Lookup(type, name_execute()) == linear_execute
             && !(dict && PyDict_GetItem(dict, name_execute()))) {
         PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
@@ -1279,6 +1280,12 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
 }
 
 } // namespace
+
+bool set_parallel_linear_scope(bool enabled) {
+    const bool previous = parallel_linear_scope;
+    parallel_linear_scope = enabled;
+    return previous;
+}
 
 void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
                       PyObject* dispatch_module_call_, PyObject* published_,

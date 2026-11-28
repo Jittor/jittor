@@ -679,6 +679,7 @@ class StepCapture:
         self._capture = None
         self._refused = None
         self._seen = None
+        self._linear_groups = ()
         self._recaptures = 0
         self._cap_replays = 0
         self._cuda_graph = 0
@@ -759,6 +760,10 @@ class StepCapture:
         # Everything that exists now becomes a leaf of the graph: a replay
         # re-runs whatever is still pending, including a leaf's own producer.
         jt.sync_all()
+        from jittor.nn.functional._parallel_linear import PackedLinears, parallel_linear_scope
+
+        grouping = PackedLinears(self._linear_groups, self._max_retained_bytes) if self._linear_groups else None
+        self._linear_groups = ()
         scalar_epoch = _core._step_scalar_epoch() if jt.flags.no_grad else None
 
         def private_copy(value):
@@ -792,7 +797,7 @@ class StepCapture:
         template = None
         readbacks = _core._host_readback_count()
         try:
-            with _capture_barriers() as barriers, _no_auto():
+            with _capture_barriers() as barriers, _no_auto(), parallel_linear_scope(grouping):
                 result = self._fn(*private_args, **private_kwargs)
                 try:
                     template = _output_template(result, outputs, {}, _object_ids((args, kwargs)))
@@ -839,6 +844,12 @@ class StepCapture:
         # running it kept, then putting the state back and running it again --
         # took a step twice wherever an update writes storage the capture
         # cannot see: the fused SGD writes its velocities into its own inputs.
+        packed_leaves = grouping.guarded_leaves() if grouping is not None else []
+        if packed_leaves:
+            written = {old.var_ptr for _, old, _ in records}
+            if any(ptr in written or tensor.var_ptr != ptr or tensor._saved_storage_version() != version
+                   for tensor, ptr, version in packed_leaves):
+                cap.refused = cap.refused or "the step writes a packed projection parameter"
         if cap.refused is None and not roots:
             cap.refused = "the step computes nothing"
         # A host-generator draw left in the graph re-runs, and so draws again,
@@ -881,6 +892,8 @@ class StepCapture:
                     for v in guarded_leaves
                 ]
 
+        if packed_leaves:
+            cap.folded_leaves = (cap.folded_leaves or []) + packed_leaves
         # Finish pending outputs without repeating already executed updates.
         jt.flags.keep_graph = 2
         if rank_before > 4:
@@ -1270,6 +1283,13 @@ class StepCapture:
                 # whatever the step creates lazily, which must exist -- and
                 # be executed -- before a capture can treat it as a leaf.
                 self._seen = signature
+                if jt.flags.no_grad and jt.flags.use_cuda and self._graph_refused is None:
+                    from jittor.nn.functional._parallel_linear import LinearDiscovery, parallel_linear_scope
+                    discovery = LinearDiscovery(_input_vars((args, kwargs), []))
+                    with parallel_linear_scope(discovery):
+                        result = self._eager(args, kwargs)
+                    self._linear_groups = discovery.groups() if self._refused is None else ()
+                    return result
                 return self._eager(args, kwargs)
             cap, result = self._capture_now(args, kwargs)
             self.stats["captured"] += 1
@@ -1327,6 +1347,7 @@ class StepCapture:
         self._graph_has_dynamic_prefix = False
         self._graph_host_prefix_bytes = 0
         self._cap_replays = 0
+        self._linear_groups = ()
         cap, self._capture = self._capture, None
         if cap is None:
             self._pool = None
