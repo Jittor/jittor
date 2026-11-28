@@ -740,6 +740,9 @@ public:
     // @pyjt(_step_guarded_scalar)
     PyObject* step_guarded_scalar(int64 epoch);
 
+    // @pyjt(_step_guarded_predicate)
+    PyObject* step_guarded_predicate(int64 epoch);
+
     /**
      * return the number of dimensions.
      */

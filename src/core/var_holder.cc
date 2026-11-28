@@ -2472,6 +2472,57 @@ PyObject* VarHolder::step_guarded_scalar(int64 epoch) {
     return PyTuple_Pack(2, scalar.obj, guards.obj);
 }
 
+PyObject* VarHolder::step_guarded_predicate(int64 epoch) {
+    if (!no_grad || !state_capture || capture_saw_readback || keep_graph != 2
+            || var->num != 1 || !var->dtype().is_bool()) Py_RETURN_NONE;
+
+    ExecutorEntryScope entry;
+    std::unordered_set<Var*> seen;
+    vector<Var*> stack{var};
+    PyObjHolder guards(PyList_New(0));
+    if (!guards.obj) return nullptr;
+    static const std::unordered_set<string> pure_predicate_ops{
+        "array", "unary", "binary", "ternary", "broadcast_to", "reduce",
+        "reindex", "reshape", "transpose", "getitem", "index", "clone",
+        "copy", "where", "contiguous",
+    };
+    constexpr int64 kMaxElements = 4ll * 1024ll * 1024ll;
+    while (!stack.empty()) {
+        auto* value = stack.back();
+        stack.pop_back();
+        if (!seen.insert(value).second) continue;
+        if (seen.size() > 256 || value->num < 0 || value->num > kMaxElements) Py_RETURN_NONE;
+        if (value->id <= epoch) {
+            if (!value->is_finished() || !value->mem_ptr) Py_RETURN_NONE;
+            auto* owner = value->holder;
+            if (!owner || owner->var != value || !owner->python_owner) {
+                owner = nullptr;
+                for (auto* candidate : runtime_holder_state().holders())
+                    if (candidate->var == value && candidate->python_owner) {
+                        owner = candidate;
+                        break;
+                    }
+                if (!owner) Py_RETURN_NONE;
+            }
+            auto version = owner->step_guarded_storage_version();
+            if (version.empty()) Py_RETURN_NONE;
+            PyObjHolder version_obj(to_py_object(std::move(version)));
+            if (!version_obj.obj) return nullptr;
+            PyObjHolder guard(PyTuple_Pack(2, owner->python_owner, version_obj.obj));
+            if (!guard.obj || PyList_Append(guards.obj, guard.obj) < 0) return nullptr;
+            continue;
+        }
+        auto* op = value->input();
+        if (!op || value->is_finished() || op->flag(OpFlags::_manual_device)) Py_RETURN_NONE;
+        if (!op->is_storage_view() && !pure_predicate_ops.count(op->name()))
+            Py_RETURN_NONE;
+        for (auto* input : op->inputs()) stack.push_back(input);
+    }
+    PyObjHolder scalar(to_py_object(read_item(false)));
+    if (!scalar.obj) return nullptr;
+    return PyTuple_Pack(2, scalar.obj, guards.obj);
+}
+
 ItemData VarHolder::read_item(bool migrate) {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.

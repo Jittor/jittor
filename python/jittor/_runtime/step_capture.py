@@ -148,6 +148,21 @@ def guarded_scalar(value):
     return scalar
 
 
+def guarded_predicate(value):
+    """Read a pure boolean predicate over constants and pre-trace leaves."""
+    cap = _ACTIVE
+    if cap is None or cap.scalar_epoch is None:
+        return None
+    result = value._step_guarded_predicate(cap.scalar_epoch)
+    if result is None:
+        return None
+    scalar, guards = result
+    for source, version in guards:
+        cap.scalar_guards.setdefault(id(source), (source, version))
+    cap.used_guarded_scalar = True
+    return bool(scalar)
+
+
 def tracing():
     """Whether the code running now is being traced for a replay.
 

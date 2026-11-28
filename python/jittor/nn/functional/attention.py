@@ -79,18 +79,38 @@ def _exactly_causal(mask, query_length, source_length, batch=1):
     return verdict
 
 
+def _exactly_causal_traced(mask, query_length, source_length, batch=1):
+    """Check whether `mask` is literally causal using a guarded StepCapture predicate."""
+    if _jittor_dtype_name(mask.dtype) != "bool":
+        return False
+    if len(mask.shape) != 4 or query_length != source_length or query_length < 2:
+        return False
+    blocks = int(mask.shape[0])
+    if int(mask.shape[1]) != 1 or blocks not in (1, int(batch)):
+        return False
+    if int(mask.shape[-2]) != query_length or int(mask.shape[-1]) != source_length:
+        return False
+    from jittor._runtime.step_capture import guarded_predicate
+    with jt.no_grad():
+        expected = jt.tril(jt.ones((query_length, source_length), dtype="bool"))
+        blocks_value = mask.reshape((blocks, query_length, source_length))
+        if blocks == 1:
+            expr = (blocks_value.reshape((query_length, source_length)) == expected).all()
+        else:
+            expr = (blocks_value == expected.broadcast(blocks_value.shape)).all()
+    verdict = guarded_predicate(expr)
+    return bool(verdict) if verdict is not None else False
+
+
 def causal_mask_rewrite(query, key, attn_mask, is_causal):
     """Whether this call's mask should be handed on as ``is_causal``.
 
     The verdict costs one host read of a mask that a decoder rebuilds every
     step. Outside a capture that is cheap and buys a fused causal kernel.
-    Inside one it is fatal: a capture refuses a trace that read a value back,
-    because the next call's Python path could differ, so this read kept the
-    default-SDPA path from ever being replayed and rebuilt its graph on every
-    call. While tracing, leave the mask on the device and hand it to SDPA
-    unchanged -- the same attention math, and the captured graph stays
-    value-independent because the mask is one of its inputs, copied in on
-    every replay.
+    Inside an active no-grad StepCapture, evaluate it only through a guarded
+    predicate over constants and pre-trace leaves so any dynamic mask input
+    stays on the general path and any mutated pre-trace leaf invalidates the
+    capture cleanly.
     """
     if attn_mask is None or is_causal:
         return False
@@ -98,9 +118,19 @@ def causal_mask_rewrite(query, key, attn_mask, is_causal):
         return False
     if dispatch_context().backend not in ("cuda", "cpu"):
         return False
-    from jittor._runtime.step_capture import tracing
-    if tracing():
-        return False
+    from jittor._runtime import step_capture
+    if step_capture.tracing():
+        cap = step_capture._ACTIVE
+        if cap is None or cap.scalar_epoch is None:
+            return False
+        q_len, k_len, batch = int(query.shape[-2]), int(key.shape[-2]), int(query.shape[0])
+        cache_key = ("causal", attn_mask.var_ptr, q_len, k_len, batch)
+        cached = cap.mask_terms.get(cache_key)
+        if cached is not None:
+            return cached
+        verdict = _exactly_causal_traced(attn_mask, q_len, k_len, batch)
+        cap.mask_terms[cache_key] = verdict
+        return verdict
     return _exactly_causal(attn_mask, int(query.shape[-2]), int(key.shape[-2]),
                            int(query.shape[0]))
 
