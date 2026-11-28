@@ -64,3 +64,18 @@ def test_weight_tensors_passed_to_the_step_remain_live():
             np.testing.assert_allclose(actual.cpu().numpy(), expected.cpu().numpy(),
                                        rtol=1e-4, atol=2e-4)
         assert forward.stats["graph"] > 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_linear_discovery_limits_dense_output_copies():
+    from jittor.nn.functional._parallel_linear import LinearDiscovery
+
+    with torch.no_grad(), forbid_backend_fallbacks():
+        first = torch.ones(1024, 256, dtype=torch.float32, device="cuda")
+        second = torch.zeros_like(first)
+        for rows, should_group in ((512, True), (513, False)):
+            value = torch.ones(rows, 256, dtype=torch.float32, device="cuda")
+            plan = LinearDiscovery([value])
+            plan(value, first, None)
+            plan(value, second, None)
+            assert bool(plan.groups()) == should_group

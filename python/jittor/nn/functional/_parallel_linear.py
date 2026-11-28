@@ -10,6 +10,7 @@ from jittor._runtime.dispatch import dispatch_context
 
 _PLANNER = ContextVar("jittor_parallel_linear_planner", default=None)
 _MAX_PACK_BYTES = 192 << 20
+_MAX_PROJECTION_BYTES = 2 << 20
 
 
 @contextmanager
@@ -70,6 +71,11 @@ class LinearDiscovery:
             return
         dtype = dtype_name(value.dtype)
         if dtype not in ("float32", "float16", "bfloat16") or weight.dtype != value.dtype:
+            return
+        element_bytes = 4 if dtype == "float32" else 2
+        # The separate results need dense storage. Large output copies can
+        # cost more than grouping the GEMMs saves.
+        if value.numel() // cin * cout * element_bytes > _MAX_PROJECTION_BYTES:
             return
         operands = (weight,) if bias is None else (weight, bias)
         if any(t.var_ptr in self.inputs or not t._storage_is_contiguous() for t in operands):
