@@ -123,6 +123,27 @@ with jt.flag_scope(use_cuda=1, async_execution=1, auto_graph_replay=0,
         # graphs at all and would keep passing if recording never happened.
         self.assertGreater(replay.stats["graph"], 0)
 
+    def test_float32_linear_with_large_contraction_replays(self):
+        rng = np.random.default_rng(47)
+        matrix = rng.standard_normal((768, 3072), dtype=np.float32) / 8
+        inputs = [rng.standard_normal((2, 72, 3072), dtype=np.float32) / 8 for _ in range(2)]
+        weight64 = matrix.astype(np.float64)
+        reference = [x.astype(np.float64) @ weight64.T for x in inputs]
+        with jt.no_grad(), jt.runtime.scope(auto_graph_replay=0, float32_matmul_precision="highest",
+                                            use_tensorcore=0, cuda_allow_tf32=0):
+            weight = jt.array(matrix)
+            feed = [jt.array(x) for x in inputs]
+            jt.sync([weight, *feed], True)
+            replay = graph_replay(lambda x: nn.linear(x, weight))
+            for index in range(8):
+                slot = index % len(feed)
+                output = replay(feed[slot])
+                output.sync()
+                self.assertEqual(output.location(), "device")
+                self.assertEqual(output.dtype, "float32")
+                np.testing.assert_allclose(output.numpy(), reference[slot], atol=2e-5, rtol=3e-5)
+            self.assertGreater(replay.stats["graph"], 0)
+
     def test_each_input_gets_its_own_answer(self):
         # The failure this rules out is the loudest-looking and the most
         # silent: a recording re-issues fixed pointers, so if the input copy

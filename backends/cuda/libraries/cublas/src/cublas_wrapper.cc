@@ -31,9 +31,7 @@ static vector<cudaStream_t> cublas_bound_streams;
 // captured, and the device graph held 32 MiB more than the same graph without
 // its matmuls (BERT-base inference, automatically replayed: 944 MiB against
 // 912). Outside a recording the default pool costs nothing measurable, so a
-// process that never records does not pay for this one either. The size is
-// the one cuBLAS documents as enough for its algorithms: 32 MiB from Hopper
-// on, 4 MiB before.
+// process that never records does not pay for this one either.
 struct CublasWorkspace { void* ptr = nullptr; size_t bytes = 0; };
 static vector<CublasWorkspace> cublas_workspaces;
 
@@ -43,8 +41,24 @@ static void cublas_set_workspace(int device) {
     if (!ws.ptr) {
         int major = 0;
         checkCudaErrors(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
-        ws.bytes = (size_t)(major >= 9 ? 32 : 4) << 20;
-        checkCudaErrors(cudaMalloc(&ws.ptr, ws.bytes));
+        const size_t default_bytes = (size_t)(major >= 9 ? 32 : 4) << 20;
+        size_t bytes = default_bytes;
+        if (major == 8) {
+            int minor = 0;
+            checkCudaErrors(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device));
+            // With 4 MiB, some FP32 GEMMs on Ada use an in-kernel split-K
+            // reduction. More workspace lets cuBLAS reduce the partials in a
+            // separate kernel, roughly halving time on narrow, long-K GEMMs.
+            if (minor == 9) bytes = size_t{8} << 20;
+        }
+        auto status = cudaMalloc(&ws.ptr, bytes);
+        if (status == cudaErrorMemoryAllocation && bytes > default_bytes) {
+            cudaGetLastError();
+            bytes = default_bytes;
+            status = cudaMalloc(&ws.ptr, bytes);
+        }
+        checkCudaErrors(status);
+        ws.bytes = bytes;
     }
     checkCudaErrors(cublasSetWorkspace(cublas_handles[device], ws.ptr, ws.bytes));
 }
