@@ -267,6 +267,60 @@ with jt.flag_scope(use_cuda={use_cuda}):
 
 
 @_test_capability.accelerator_required("cuda")
+@pytest.mark.parametrize(
+    ("layout", "gate_dtype"),
+    [
+        ("channel", "float32"),
+        ("channel", "bfloat16"),
+        ("row", "float32"),
+        ("offset", "float32"),
+        ("row_pitch", "float32"),
+        ("inner_stride", "float32"),
+        ("odd_width", "float32"),
+    ],
+)
+def test_nvrtc_packed_broadcasts_and_strided_fallback(layout, gate_dtype):
+    rng = np.random.default_rng(91)
+    width = 65 if layout == "odd_width" else 64
+    shape = (2, 129, width)
+
+    def values(dims):
+        # These values round exactly to BF16, so the reference needs only the
+        # final narrowing of the expression.
+        return rng.integers(-64, 65, size=dims).astype(np.float32) / 32
+
+    left, right = values(shape), values(shape)
+    gate_shape = (2, 1, width)
+    key = (..., slice(None))
+    if layout == "row":
+        gate_shape = (2, 129, 1)
+    elif layout == "offset":
+        gate_shape = (2, 1, width + 8)
+        key = (..., slice(1, width + 1))
+    elif layout == "row_pitch":
+        gate_shape = (2, 1, width + 1)
+        key = (..., slice(width))
+    elif layout == "inner_stride":
+        gate_shape = (2, 1, width * 2)
+        key = (..., slice(None, None, 2))
+
+    gates = values(gate_shape)
+    with jt.flag_scope(use_cuda=1, use_nvrtc=1, jit_tier="1", cuda_kernel_math="strict",
+                       backend_fallback="error"), jt.no_grad():
+        a = jt.array(left).bfloat16()
+        b = jt.array(right).bfloat16()
+        g = jt.array(gates).cast(gate_dtype)[key]
+        jt.sync([a, b, g], True)
+        launches = jt.core._nvrtc_stats()[3]
+        out = (a.float32() + b.float32() * g.float32()).bfloat16()
+        out.sync(True)
+        assert out.location() == "device"
+        assert jt.core._nvrtc_stats()[3] > launches
+        expected = jt.array(left + right * gates[key]).bfloat16().float32()
+        np.testing.assert_array_equal(out.float32().numpy(), expected.numpy())
+
+
+@_test_capability.accelerator_required("cuda")
 def test_nvrtc_compile_disk_cache_math_and_graph_capture():
     # Child 1: cold NVRTC compile, comprehensive parity (vec4, tails, strided,
     # multi-output, reuse_dying_inputs, scalar-broadcast shape reuse [1]->[64],
