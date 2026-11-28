@@ -3,8 +3,9 @@
 from operator import index
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name
 from jittor.misc import _pair, _triple
-from jittor._runtime.dispatch import select_kernel
+from jittor._runtime.dispatch import dispatch_context, select_kernel
 
 from ._amp import bias_for_compute_dtype
 
@@ -310,6 +311,23 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return y
 
 
+def _capture_conv1d_width(input, weight, bias, stride, padding, dilation, groups):
+    # On replay, the device time of the convolution determines its cost. For
+    # undilated FP32 Conv1d, treating length as width enables cuDNN forward
+    # engines that use fewer kernel launches for long signals.
+    if (jt.flags.keep_graph != 2 or not jt.flags.no_grad or jt.flags.amp_reg
+            or dilation != 1 or groups != 1 or dtype_name(input.dtype) != "float32"
+            or dtype_name(weight.dtype) != "float32"):
+        return None
+    from jittor._runtime.step_capture import tracing
+
+    if not tracing() or dispatch_context(input, weight, bias).backend != "cuda":
+        return None
+    result = jt.nn.conv2d(input.unsqueeze(2), weight.unsqueeze(2), bias,
+                         (1, stride), (0, padding), (1, dilation), groups)
+    return result.squeeze(2)
+
+
 def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     ''' Applies a 1D convolution over an input signal composed of several input
     planes. Torch-compatible functional interface.
@@ -343,6 +361,10 @@ def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if isinstance(padding, str):
         input, (padding,) = _resolve_string_padding(
             input, padding, weight.shape[-1:], (stride,), (dilation,))
+    if jt.flags.keep_graph == 2:
+        result = _capture_conv1d_width(input, weight, bias, stride, padding, dilation, groups)
+        if result is not None:
+            return result
     # reuse the 2D conv by adding a singleton width dimension
     x = input.unsqueeze(-1)
     w = weight.unsqueeze(-1)

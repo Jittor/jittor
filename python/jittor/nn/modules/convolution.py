@@ -4,7 +4,7 @@ import math
 
 import jittor as jt
 from jittor.misc import _pair
-from jittor.nn.functional.convolution import same_padding_pairs
+from jittor.nn.functional.convolution import _capture_conv1d_width, same_padding_pairs
 
 #: torch's ``padding_mode`` values. ``'zeros'`` is the kernels' own padding;
 #: the others pad the input explicitly and convolve with none, as torch does.
@@ -258,7 +258,15 @@ class Conv1d(jt.Module):
             raise ValueError("Input shape must be `(N, C, L)`!")
         N,C,D = x.shape
         assert C==self.in_channels
-        self._conv[0].weight = self.weight.unsqueeze(-1)
+        conv = self._conv[0]
+        weight = self.weight
+        if (jt.flags.keep_graph == 2 and conv.padding_mode == 'zeros'
+                and not isinstance(conv.padding, str)):
+            result = _capture_conv1d_width(x, weight, self.bias, conv.stride[0],
+                                           conv.padding[0], conv.dilation[0], conv.groups)
+            if result is not None:
+                return result
+        conv.weight = weight.unsqueeze(-1)
         # The bias needs the same re-sync as the weight, and for the same
         # reason: the inner Conv is held in a list to escape module traversal,
         # so whatever replaces this module's parameters -- `load_state_dict`,
@@ -269,8 +277,8 @@ class Conv1d(jt.Module):
         # in distribution from run to run, and different in value every run
         # because it is drawn from the RNG. That is what made the audio VAE's
         # output move between processes while its weights checked out.
-        self._conv[0].bias = self.bias
+        conv.bias = self.bias
         x = x.unsqueeze(-1)
-        x = self._conv[0](x)
+        x = conv(x)
         y = x.squeeze(-1)
         return y
