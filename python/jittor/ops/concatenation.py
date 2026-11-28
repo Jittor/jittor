@@ -298,39 +298,7 @@ def _detect_rotate_half_source(arr, dim):
     """Return ``x`` when ``arr`` is ``(-x[..., half:], x[..., :half])`` along the last axis."""
     if len(arr) != 2:
         return None
-    a, b = arr[0], arr[1]
-    rank = len(a.shape)
-    if dim != rank - 1 or rank != 4:
-        return None
-    half = int(a.shape[dim])
-    if half <= 0 or int(b.shape[dim]) != half:
-        return None
-    if a._producer_unary() != "negative":
-        return None
-    x2 = a._input(0)
-    x1 = b
-    while x2._producer_name() == "clone":
-        x2 = x2._input(0)
-    while x1._producer_name() == "clone":
-        x1 = x1._input(0)
-    if x1._producer_name() != "getitem" or x2._producer_name() != "getitem":
-        return None
-    src1, src2 = x1._input(0), x2._input(0)
-    if src1.var_ptr != src2.var_ptr:
-        return None
-    if tuple(int(s) for s in src1.shape) != tuple(int(s) for s in a.shape[:-1]) + (2 * half,):
-        return None
-    src_strides = tuple(int(s) for s in src1._storage_strides())
-    if src_strides[-1] != 1:
-        return None
-    if (
-        tuple(int(s) for s in x1._storage_strides()) != src_strides
-        or tuple(int(s) for s in x2._storage_strides()) != src_strides
-        or int(x1._storage_offset()) != int(src1._storage_offset())
-        or int(x2._storage_offset()) != int(src1._storage_offset()) + half
-    ):
-        return None
-    return src1
+    return _jt().core._rotate_half_source(arr[0], arr[1], dim)
 
 
 _tracing = None

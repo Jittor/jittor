@@ -90,6 +90,16 @@ void compat_fast_bind(PyObject* tracing, PyObject* concat_fallback=nullptr,
 // @pyjt(_fast_cat)
 PyObject* fast_cat(PyObject* tensors, int64 dim);
 
+// Recognize the two complementary storage slices in rotate-half while the
+// graph is locked. Return their source or None.
+// @pyjt(_rotate_half_source)
+PyObject* rotate_half_source(PyObject* negative, PyObject* positive, int64 dim);
+
+// Read the other factor of a pending multiplication by source, including
+// the paired transpose form used by strided rotary embedding inputs.
+// @pyjt(_neox_rope_cosine)
+PyObject* neox_rope_cosine(PyObject* product, PyObject* source);
+
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency
 // hint and no `.data` ownership record. A registered provider is tried once

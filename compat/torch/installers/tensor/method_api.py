@@ -2126,51 +2126,8 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
 
 def _try_fused_neox_rope_add(cos_term, src, sin_tensor):
     """Fuse ``(x * cos) + (rotate_half(x) * sin)`` into one CUDA RoPE kernel."""
-    jt_mod = _owner.jt
-    if not isinstance(cos_term, jt_mod.Var) or not isinstance(src, jt_mod.Var):
-        return None
-    op = cos_term._producer_op()
-    if op == "binary.multiply":
-        in0, in1 = cos_term._input(0), cos_term._input(1)
-    elif op == "transpose":
-        outer_axes = tuple(cos_term._producer_transpose_axes())
-        inner = cos_term._input(0)
-        if (
-            not isinstance(inner, jt_mod.Var)
-            or inner._producer_op() != "binary.multiply"
-            or not outer_axes
-            or tuple(outer_axes[a] for a in outer_axes) != tuple(range(len(outer_axes)))
-        ):
-            return None
-        t0, t1 = inner._input(0), inner._input(1)
-        if (
-            not isinstance(t0, jt_mod.Var)
-            or not isinstance(t1, jt_mod.Var)
-            or tuple(t0._producer_transpose_axes()) != outer_axes
-            or tuple(t1._producer_transpose_axes()) != outer_axes
-        ):
-            return None
-        in0, in1 = t0._input(0), t1._input(0)
-    else:
-        return None
-    u0, u1 = in0, in1
-    while (
-        isinstance(u0, jt_mod.Var)
-        and u0.var_ptr != src.var_ptr
-        and u0._producer_name() in ("broadcast_to", "clone")
-    ):
-        u0 = u0._input(0)
-    while (
-        isinstance(u1, jt_mod.Var)
-        and u1.var_ptr != src.var_ptr
-        and u1._producer_name() in ("broadcast_to", "clone")
-    ):
-        u1 = u1._input(0)
-    if u0.var_ptr == src.var_ptr:
-        cos_tensor = u1
-    elif u1.var_ptr == src.var_ptr:
-        cos_tensor = u0
-    else:
+    cos_tensor = _owner.jt.core._neox_rope_cosine(cos_term, src)
+    if cos_tensor is None:
         return None
     from jittor._runtime.dispatch import try_dispatch
     fused = try_dispatch("nn.neox_rope.inference", src, cos_tensor, sin_tensor)

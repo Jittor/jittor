@@ -9,6 +9,8 @@
 #include "ops/op_register.h"
 #include "core/op.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/transpose_op.h"
+#include "ops/composite/fuse_transpose_op.h"
 #include "mem/allocator.h"
 #include <cstring>
 #include "runtime/device.h"
@@ -1073,6 +1075,129 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
     auto* out = new VarHolder(make_getitem(var, move(slices)));
     out->set_view_of(holder, move(recorded));
     return to_py_object<VarHolder*>(out);
+}
+
+namespace {
+Op* pending_producer(Var* var) {
+    return var->is_finished() ? nullptr : var->input();
+}
+
+Var* without_clones(Var* var) {
+    static const OpId clone = get_op_id("clone");
+    while (auto* op = pending_producer(var)) {
+        if (!op->is_op(clone) || op->_inputs.empty()) break;
+        var = op->input(0);
+    }
+    return var;
+}
+
+Var* rope_factor_source(Var* factor, Var* source) {
+    static const OpId clone = get_op_id("clone");
+    while (factor != source) {
+        auto* op = pending_producer(factor);
+        if (!op || op->_inputs.empty()
+                || (!op->is_op(clone) && !op->is_op(op_ids::broadcast_to())))
+            break;
+        factor = op->input(0);
+    }
+    return factor;
+}
+
+const NanoVector* transpose_axes(Op* op) {
+    if (auto* transpose = dynamic_cast<TransposeOp*>(op)) return &transpose->axes;
+    if (auto* transpose = dynamic_cast<FuseTransposeOp*>(op)) return &transpose->axes;
+    return nullptr;
+}
+
+Var* before_matching_transpose(Var* value, const NanoVector& axes) {
+    auto* op = pending_producer(value);
+    const auto* inner_axes = transpose_axes(op);
+    return inner_axes && *inner_axes == axes && !op->_inputs.empty() ? op->input(0) : nullptr;
+}
+
+Var* matching_rotate_half_source(Var* negative, Var* positive, int64 dim) {
+    constexpr int rank = 4;
+    if (dim != rank - 1 || negative->shape.size() != rank || positive->shape.size() != rank)
+        return nullptr;
+    const auto half = negative->shape[dim];
+    if (half <= 0 || positive->shape[dim] != half) return nullptr;
+    Op* negation = pending_producer(negative);
+    if (!negation || !negation->is_op(op_ids::unary()) || negation->ns != ns_negative
+            || negation->inputs().size() != 1 || negation->input(0)->shape != negative->shape)
+        return nullptr;
+    Var* upper = without_clones(negation->input(0));
+    Var* lower = without_clones(positive);
+    Op* upper_slice = pending_producer(upper);
+    Op* lower_slice = pending_producer(lower);
+    if (!upper_slice || !lower_slice || !upper_slice->is_op(op_ids::getitem())
+            || !lower_slice->is_op(op_ids::getitem()) || upper_slice->_inputs.empty()
+            || lower_slice->_inputs.empty())
+        return nullptr;
+    Var* source = lower_slice->input(0);
+    if (source != upper_slice->input(0) || source->shape.size() != rank
+            || source->shape[dim] != 2 * half || source->storage_stride(dim) != 1)
+        return nullptr;
+    for (int axis = 0; axis < rank; ++axis) {
+        if (axis != dim && source->shape[axis] != negative->shape[axis]) return nullptr;
+        const auto stride = source->storage_stride(axis);
+        if (lower->storage_stride(axis) != stride || upper->storage_stride(axis) != stride)
+            return nullptr;
+    }
+    const auto offset = source->storage_offset_bytes;
+    if (lower->storage_offset_bytes != offset || upper->storage_offset_bytes != offset + half * source->dsize())
+        return nullptr;
+    return source;
+}
+} // namespace
+
+PyObject* rotate_half_source(PyObject* negative, PyObject* positive, int64 dim) {
+    if (PyObject_TypeCheck(negative, &PyjtVarHolder.ht_type)
+            && PyObject_TypeCheck(positive, &PyjtVarHolder.ht_type)) {
+        auto* source = matching_rotate_half_source(GET_RAW_PTR(VarHolder, negative)->var,
+                                                   GET_RAW_PTR(VarHolder, positive)->var, dim);
+        if (source) {
+            PyTensorFrontendScope scope(positive);
+            return to_py_object<VarHolder*>(new VarHolder(source));
+        }
+    }
+    Py_RETURN_NONE;
+}
+
+PyObject* neox_rope_cosine(PyObject* product, PyObject* source) {
+    if (!PyObject_TypeCheck(product, &PyjtVarHolder.ht_type)
+            || !PyObject_TypeCheck(source, &PyjtVarHolder.ht_type))
+        Py_RETURN_NONE;
+    auto* original = GET_RAW_PTR(VarHolder, source)->var;
+    auto* multiply = pending_producer(GET_RAW_PTR(VarHolder, product)->var);
+    const auto* transpose = dynamic_cast<TransposeOp*>(multiply);
+    if (transpose) {
+        const auto& axes = transpose->axes;
+        const int rank = axes.size();
+        if (!rank || multiply->_inputs.empty()) Py_RETURN_NONE;
+        for (int i = 0; i < rank; ++i) {
+            const auto axis = axes[i];
+            if (axis < 0 || axis >= rank || axes[axis] != i) Py_RETURN_NONE;
+        }
+        multiply = pending_producer(multiply->input(0));
+    }
+    if (!multiply || !multiply->is_op(op_ids::binary()) || multiply->ns != ns_multiply
+            || multiply->inputs().size() < 2)
+        Py_RETURN_NONE;
+    Var* left = multiply->input(0);
+    Var* right = multiply->input(1);
+    if (transpose) {
+        left = before_matching_transpose(left, transpose->axes);
+        right = before_matching_transpose(right, transpose->axes);
+        if (!left || !right) Py_RETURN_NONE;
+    }
+    left = rope_factor_source(left, original);
+    right = rope_factor_source(right, original);
+    Var* other = left == original ? right : right == original ? left : nullptr;
+    if (other) {
+        PyTensorFrontendScope scope(product);
+        return to_py_object<VarHolder*>(new VarHolder(other));
+    }
+    Py_RETURN_NONE;
 }
 
 namespace {
