@@ -460,6 +460,190 @@ __global__ void __launch_bounds__(THREADS) forward(
     }
 }
 
+constexpr int SHORT_THREADS = 128;
+
+__device__ __forceinline__ float warp_sum(float v) {
+    v += __shfl_xor_sync(0xffffffff, v, 16);
+    v += __shfl_xor_sync(0xffffffff, v, 8);
+    v += __shfl_xor_sync(0xffffffff, v, 4);
+    v += __shfl_xor_sync(0xffffffff, v, 2);
+    return v + __shfl_xor_sync(0xffffffff, v, 1);
+}
+
+template <int D, int DPT>
+struct VecRow {
+    __device__ __forceinline__ static void load(
+            const float* __restrict__ p, int lane, bool, float (&out)[DPT]) {
+        #pragma unroll
+        for (int c = 0; c < DPT; ++c) {
+            const int idx = lane + c * 32;
+            out[c] = idx < D ? p[idx] : 0.f;
+        }
+    }
+    __device__ __forceinline__ static void store(
+            float* __restrict__ p, int lane, bool, const float (&in)[DPT], float inv) {
+        #pragma unroll
+        for (int c = 0; c < DPT; ++c) {
+            const int idx = lane + c * 32;
+            if (idx < D) p[idx] = in[c] * inv;
+        }
+    }
+};
+
+template <>
+struct VecRow<64, 2> {
+    __device__ __forceinline__ static void load(
+            const float* __restrict__ p, int lane, bool aligned, float (&out)[2]) {
+        if (aligned) {
+            const float2 v = *reinterpret_cast<const float2*>(p + lane * 2);
+            out[0] = v.x; out[1] = v.y;
+        } else {
+            const int base = lane * 2;
+            out[0] = p[base]; out[1] = p[base + 1];
+        }
+    }
+    __device__ __forceinline__ static void store(
+            float* __restrict__ p, int lane, bool aligned, const float (&in)[2], float inv) {
+        if (aligned) {
+            *reinterpret_cast<float2*>(p + lane * 2) = make_float2(in[0] * inv, in[1] * inv);
+        } else {
+            const int base = lane * 2;
+            p[base] = in[0] * inv; p[base + 1] = in[1] * inv;
+        }
+    }
+};
+
+template <>
+struct VecRow<128, 4> {
+    __device__ __forceinline__ static void load(
+            const float* __restrict__ p, int lane, bool aligned, float (&out)[4]) {
+        if (aligned) {
+            const float4 v = *reinterpret_cast<const float4*>(p + lane * 4);
+            out[0] = v.x; out[1] = v.y; out[2] = v.z; out[3] = v.w;
+        } else {
+            const int base = lane * 4;
+            out[0] = p[base]; out[1] = p[base + 1];
+            out[2] = p[base + 2]; out[3] = p[base + 3];
+        }
+    }
+    __device__ __forceinline__ static void store(
+            float* __restrict__ p, int lane, bool aligned, const float (&in)[4], float inv) {
+        if (aligned) {
+            *reinterpret_cast<float4*>(p + lane * 4) = make_float4(
+                in[0] * inv, in[1] * inv, in[2] * inv, in[3] * inv);
+        } else {
+            const int base = lane * 4;
+            p[base] = in[0] * inv; p[base + 1] = in[1] * inv;
+            p[base + 2] = in[2] * inv; p[base + 3] = in[3] * inv;
+        }
+    }
+};
+
+// Warp-per-query-row inference kernel for short sequences: zero shared memory,
+// zero block barriers, Q and output accumulator held in registers across 32
+// lanes with vectorized 64/128-bit loads for D=64/128.
+template <int D, bool CAUSAL, int MASK>
+__global__ void __launch_bounds__(SHORT_THREADS) forward_short(
+        const float* __restrict__ q, const float* __restrict__ k,
+        const float* __restrict__ v, float* __restrict__ o,
+        int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
+        mea::Rows vl, mea::Rows ol) {
+    constexpr int DPT = (D + 31) / 32;
+    const int bh = blockIdx.y;
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+    const int row = blockIdx.x * 4 + warp;
+    if (row >= lq) return;
+
+    const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh);
+    const mea::RowPtr<float> obase(o, ol, bh);
+    constexpr int ALIGN_BYTES = (D == 128) ? 16 : ((D == 64) ? 8 : 4);
+    constexpr int ALIGN_ELEMS = ALIGN_BYTES / 4;
+    const bool q_al = ((reinterpret_cast<size_t>(qb.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((qb.stride & (ALIGN_ELEMS - 1)) == 0);
+    const bool k_al = ((reinterpret_cast<size_t>(kb.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((kb.stride & (ALIGN_ELEMS - 1)) == 0);
+    const bool v_al = ((reinterpret_cast<size_t>(vb.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((vb.stride & (ALIGN_ELEMS - 1)) == 0);
+    const bool o_al = ((reinterpret_cast<size_t>(obase.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((obase.stride & (ALIGN_ELEMS - 1)) == 0);
+
+    float qv[DPT], acc[DPT];
+    VecRow<D, DPT>::load(qb[row], lane, q_al, qv);
+    #pragma unroll
+    for (int i = 0; i < DPT; ++i) {
+        qv[i] *= scale;
+        acc[i] = 0.f;
+    }
+
+    const int kend = CAUSAL ? min(lk, row + 1) : lk;
+    const long long mask_row = MASK ? (mask.base(bh) + (long long)row * mask.row_stride) : 0;
+    float m = -INFINITY, l = 0.f;
+
+    for (int k0 = 0; k0 < kend; k0 += 4) {
+        float s[4] = {-INFINITY, -INFINITY, -INFINITY, -INFINITY};
+        float bias[4] = {0.f, 0.f, 0.f, 0.f};
+        bool active[4];
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            const int col = k0 + c;
+            if (col >= kend) {
+                active[c] = false;
+            } else if (MASK == 1) {
+                active[c] = static_cast<const bool*>(mask.data)[mask_row + col * mask.col_stride];
+            } else if (MASK == 2) {
+                bias[c] = static_cast<const float*>(mask.data)[mask_row + col * mask.col_stride];
+                active[c] = (bias[c] != -INFINITY);
+            } else {
+                active[c] = true;
+            }
+        }
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            if (!active[c]) continue;
+            float kv[DPT];
+            VecRow<D, DPT>::load(kb[k0 + c], lane, k_al, kv);
+            float dot = 0.f;
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) dot += qv[i] * kv[i];
+            float sc = warp_sum(dot);
+            if (MASK == 2) sc += bias[c];
+            s[c] = sc;
+        }
+        const float tile_max = fmaxf(fmaxf(s[0], s[1]), fmaxf(s[2], s[3]));
+        if (tile_max == -INFINITY) continue;
+        const float next = fmaxf(m, tile_max);
+        const float keep = (m == -INFINITY) ? 0.f : __expf(m - next);
+        float p[4];
+        float psum = 0.f;
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            p[c] = (s[c] == -INFINITY) ? 0.f : __expf(s[c] - next);
+            psum += p[c];
+        }
+        l = l * keep + psum;
+        m = next;
+        if (keep == 0.f) {
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) acc[i] = 0.f;
+        } else if (keep != 1.f) {
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) acc[i] *= keep;
+        }
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            if (p[c] > 0.f) {
+                float vv[DPT];
+                VecRow<D, DPT>::load(vb[k0 + c], lane, v_al, vv);
+                #pragma unroll
+                for (int i = 0; i < DPT; ++i) acc[i] += p[c] * vv[i];
+            }
+        }
+    }
+    const float inv = l > 0.f ? 1.f / l : 0.f;
+    VecRow<D, DPT>::store(obase[row], lane, o_al, acc, inv);
+}
+
 } // namespace mea_fwd
 
 // The backward, register-tiled. A block owns 32 keys and walks the queries 32
@@ -885,6 +1069,11 @@ def _rows_args(t, seq, heads, group):
 #: calls attention with the same settings in every layer, and formatting it
 #: was half of what building the operator cost in Python.
 _FORWARD_SOURCES = {}
+_SHORT_FORWARD_SOURCES = {}
+
+
+def _use_short_forward(lq, lk):
+    return (lk <= 32) or (lq <= 64 and lk <= 128)
 
 
 def _dense_storage_layout(tensor):
@@ -936,6 +1125,18 @@ def _forward_view(query, key, value, scale, causal, mask):
     for index, (_, strides, offset) in enumerate(layouts):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
+    if _use_short_forward(lq, lk):
+        src = (
+            f"mea_fwd::forward_short<{d}, {str(bool(causal)).lower()}, {mask[0]}>"
+            f"<<<dim3({(lq + 3) // 4}, {b * h}), mea_fwd::SHORT_THREADS>>>("
+            f"{', '.join(pointers)}, out0_p, {lq}, {lk}, {scale!r}f, "
+            f"{_mask_args(mask, str(h), 3 if mask[0] else 0)}, {', '.join(rows)}, "
+            f"{_rows_args('out0', False, str(h), 1)});\n"
+        )
+        return jt.code(
+            query.shape, "float32",
+            [layout[0] for layout in layouts] + call.extras(),
+            cuda_header=_KERNELS, cuda_src=src)
     src = _launch(
         f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
         f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
@@ -1012,13 +1213,35 @@ def _native_forward(query, key, value, call):
     return output, None  # the native Op owns its saved normalizer
 
 
-def _forward(query, key, value, call, native_vjp=False):
+def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
     if native_vjp:
         return _native_forward(query, key, value, call)
     if call.seq[0]:
         b, lq, h, d = (int(size) for size in query.shape)
     else:
         b, h, lq, d = (int(size) for size in query.shape)
+    lk = int(key.shape[1] if call.seq[1] else key.shape[2])
+    if not need_normalizer and call.seed is None and _use_short_forward(lq, lk):
+        key_ = (d, call.causal, call.mask[0], call.mask[2], call.seq, call.group,
+                float(call.scale))
+        src = _SHORT_FORWARD_SOURCES.get(key_)
+        if src is None:
+            heads = call.heads_expr()
+            mask_arg = _mask_args(call.mask, heads, 3 if call.mask[0] else 0)
+            rows = [_rows_args(f"in{i}", seq, heads, 1 if i == 0 else call.group)
+                    for i, seq in enumerate(call.seq)]
+            lq_expr, lk_expr = call.lengths()
+            src = _SHORT_FORWARD_SOURCES[key_] = (
+                f"mea_fwd::forward_short<{d}, {str(bool(call.causal)).lower()}, {call.mask[0]}>"
+                f"<<<dim3(({lq_expr} + 3) / 4, in0->shape[0] * {heads}), mea_fwd::SHORT_THREADS>>>("
+                f"in0_p, in1_p, in2_p, out0_p, {lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
+                f"{mask_arg}, {', '.join(rows)}, "
+                f"{_rows_args('out0', call.seq[0], heads, 1)});\n"
+            )
+        out = jt.code(
+            query.shape, "float32", [query, key, value] + call.extras(),
+            cuda_header=_KERNELS, cuda_src=src)
+        return out, None
     # Four query rows a thread; one where that leaves the grid smaller than
     # the device, which is what BERT at batch 1 (24 tiles of 64) did.
     rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
@@ -1210,7 +1433,7 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
         else:
             out = _FusedAttentionF32.apply(query, key, value, call)
     else:
-        out = _forward(query, key, value, call)[0]
+        out = _forward(query, key, value, call, need_normalizer=False)[0]
     return out.transpose(0, 2, 1, 3) if q_seq else out
 
 

@@ -528,6 +528,61 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.assertIsNone(self.kernel._fused_attention_f32(
             q, q, q, attn_mask=jt.ones((3, 8), dtype="bool")))
 
+    def test_short_inference_fast_path(self):
+        rng = np.random.RandomState(42)
+        cases = [
+            ("chronos_time_add_mask", (4, 12, 35, 64), (4, 12, 35, 64), False, "add_b11k"),
+            ("chronos_group_add_mask", (35, 12, 4, 64), (35, 12, 4, 64), False, "add_b1qk"),
+            ("d128_causal", (2, 4, 19, 128), (2, 4, 19, 128), True, None),
+            ("odd_d_bool_mask", (2, 3, 13, 37), (2, 3, 29, 37), False, "bool_all_false_row"),
+            ("long_q_tiny_k", (2, 4, 128, 64), (2, 4, 7, 64), False, None),
+            ("sentinel_all_masked", (1, 2, 4, 64), (1, 2, 4, 64), False, "sentinel"),
+            ("gqa_short", (2, 8, 17, 64), (2, 2, 23, 64), True, None),
+        ]
+        with jt.no_grad():
+            for name, qshape, kshape, causal, mask_kind in cases:
+                with self.subTest(case=name):
+                    q = rng.randn(*qshape).astype("float32")
+                    k = rng.randn(*kshape).astype("float32")
+                    v = rng.randn(*kshape).astype("float32")
+                    b, h, lq, d = qshape
+                    hk, lk = kshape[1], kshape[2]
+                    mask_np = None
+                    if mask_kind == "add_b11k":
+                        mask_np = np.zeros((b, 1, 1, lk), dtype="float32")
+                        mask_np[:, :, :, -5:] = -np.inf
+                        mask_np[0, 0, 0, :3] = -3.4028235e+38
+                    elif mask_kind == "add_b1qk":
+                        mask_np = np.zeros((b, 1, lq, lk), dtype="float32")
+                        mask_np[:, :, 0, 2:] = -np.inf
+                        mask_np[1, 0, 3, :] = -np.inf
+                    elif mask_kind == "bool_all_false_row":
+                        mask_np = rng.rand(b, 1, lq, lk) > 0.3
+                        mask_np[0, 0, 0, :] = False
+                    elif mask_kind == "sentinel":
+                        mask_np = np.full((b, 1, lq, lk), -3.4028235e+38, dtype="float32")
+                        mask_np[0, 0, 1, 2] = 0.0
+                    k_ref = np.repeat(k, h // hk, axis=1) if hk != h else k
+                    v_ref = np.repeat(v, h // hk, axis=1) if hk != h else v
+                    expected = _reference(q, k_ref, v_ref, causal, np.zeros_like(q), mask_np)[0]
+
+                    jq, jk, jv = (jt.array(a).stop_grad() for a in (q, k, v))
+                    jm = jt.array(mask_np).stop_grad() if mask_np is not None else None
+                    # Contiguous [B,H,S,D]
+                    out = self.kernel._fused_attention_f32(
+                        jq, jk, jv, attn_mask=jm, is_causal=causal, enable_gqa=(hk != h))
+                    self.assertIsNotNone(out)
+                    np.testing.assert_allclose(out.numpy(), expected, rtol=1e-4, atol=1e-5)
+
+                    # Seq-major [B,S,H,D].transpose(0, 2, 1, 3) view
+                    jq_s = jt.array(np.ascontiguousarray(q.transpose(0, 2, 1, 3))).stop_grad().transpose(0, 2, 1, 3)
+                    jk_s = jt.array(np.ascontiguousarray(k.transpose(0, 2, 1, 3))).stop_grad().transpose(0, 2, 1, 3)
+                    jv_s = jt.array(np.ascontiguousarray(v.transpose(0, 2, 1, 3))).stop_grad().transpose(0, 2, 1, 3)
+                    out_s = self.kernel._fused_attention_f32(
+                        jq_s, jk_s, jv_s, attn_mask=jm, is_causal=causal, enable_gqa=(hk != h))
+                    self.assertIsNotNone(out_s)
+                    np.testing.assert_allclose(out_s.numpy(), expected, rtol=1e-4, atol=1e-5)
+
     def test_the_scores_are_never_built(self):
         heads, tokens, width = 8, 4096, 40
         scores = 2 * heads * tokens * tokens * 4          # 1 GiB
