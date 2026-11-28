@@ -673,14 +673,16 @@ vector<int64> fold_graph_constants(const vector<VarHolder*>& outputs,
                                    const vector<VarHolder*>& inputs,
                                    const vector<VarHolder*>& guarded_leaves,
                                    int64 max_total_bytes,
-                                   int64 max_var_bytes) {
+                                   int64 max_var_bytes,
+                                   const vector<VarHolder*>& pure_code) {
     ExecutorEntryScope entry;
     if (outputs.empty() || max_total_bytes <= 0 || max_var_bytes <= 0) return {};
 
-    std::unordered_set<Var*> output_set, input_set, guarded_set;
+    std::unordered_set<Var*> output_set, input_set, guarded_set, pure_code_set;
     for (auto* h : outputs) if (h && h->var) output_set.insert(h->var);
     for (auto* h : inputs) if (h && h->var) input_set.insert(h->var);
     for (auto* h : guarded_leaves) if (h && h->var) guarded_set.insert(h->var);
+    for (auto* h : pure_code) if (h && h->var) pure_code_set.insert(h->var);
 
     // Collect reachable pending Vars in topological order (inputs before outputs)
     // and track their in-subgraph consumers.
@@ -728,7 +730,9 @@ vector<int64> fold_graph_constants(const vector<VarHolder*>& outputs,
             continue;
         }
         Op* op = v->input();
-        bool pure = constant_fold_pure_op(op);
+        bool pure = constant_fold_pure_op(op)
+            || (op->is_op(op_ids::code()) && op->outputs().size() == 1
+                && !op->flag(OpFlags::_manual_device) && pure_code_set.count(v));
         bool work = !constant_fold_trivial_op(op);
         if (pure) {
             for (Var* in : op->inputs()) {

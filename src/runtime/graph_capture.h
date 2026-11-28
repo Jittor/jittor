@@ -207,7 +207,8 @@ vector<int64> fold_graph_constants(const vector<VarHolder*>& outputs,
                                    const vector<VarHolder*>& inputs,
                                    const vector<VarHolder*>& guarded_leaves,
                                    int64 max_total_bytes=67108864,
-                                   int64 max_var_bytes=16777216);
+                                   int64 max_var_bytes=16777216,
+                                   const vector<VarHolder*>& pure_code=vector<VarHolder*>());
 
 /**
     Release a graph handle. Launching a released graph is undefined, so the

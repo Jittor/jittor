@@ -128,3 +128,44 @@ def test_pool_scope_errors_restore_the_original_allocation_scope():
     jt.core._graph_pool_release(first)
     jt.core._graph_pool_release(second)
     np.testing.assert_array_equal(value.cpu().numpy(), np.full(128, 4.))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA graphs are required")
+@pytest.mark.parametrize("change", ["replace", "mutate", "export"])
+def test_folded_linear_input_is_revalidated_before_cuda_replay(change):
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    with torch.no_grad(), forbid_backend_fallbacks():
+        dtype = torch.bfloat16
+        weight = torch.ones((128, 64), device="cuda", dtype=dtype)
+        bias = torch.full((128,), 0.5, device="cuda", dtype=dtype)
+        context = torch.ones((64, 64), device="cuda", dtype=dtype)
+        torch.cuda.synchronize()
+
+        def forward(query, context):
+            return query + torch.nn.functional.linear(context, weight, bias)
+
+        run = torch.compile(forward, mode="reduce-overhead")
+
+        def step(index, tokens, expected):
+            query = torch.full((64, 128), float(index), device="cuda", dtype=dtype)
+            output = run(query, tokens)
+            assert output.device.type == "cuda" and output.dtype == dtype
+            np.testing.assert_array_equal(output.float().cpu().numpy(),
+                                          np.full((64, 128), expected))
+
+        for index in range(6):
+            step(index, context, 64.5 + index)
+        assert run.stats["graph"] > 0
+        assert [index for index, _ in run._capture.constant_inputs] == [1]
+        if change == "mutate":
+            context[:, :].fill_(0)
+        elif change == "export":
+            assert context.data_ptr()
+        else:
+            context = torch.zeros_like(context)
+        value = 64.5 if change == "export" else 0.5
+        for index in range(6):
+            step(index, context, value + index)
+        assert run.last_invalidated == "a folded input was replaced or mutated"
+        assert run.refused is None and run._capture.constant_inputs == ()

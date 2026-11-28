@@ -133,6 +133,19 @@ def active():
     return _ACTIVE is not None
 
 
+def _remember_pure_code(value):
+    """Offer a backend-owned, pure CodeOp result for constant folding."""
+    if _ACTIVE is not None and jt.flags.no_grad:
+        _ACTIVE.pure_code.append(value._alias())
+    return value
+
+
+def _input_storage_version(value):
+    if value.placement_backend == 1:
+        return tuple(value._step_guarded_storage_version())
+    return ()
+
+
 def _guarded_read(read):
     cap = _ACTIVE
     if cap is None or cap.scalar_epoch is None:
@@ -548,7 +561,8 @@ class _Capture:
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
                  "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
                  "shape_dependencies", "pending_roots", "folded_leaves", "scalar_epoch", "scalar_guards",
-                 "used_guarded_scalar", "short_attention", "mask_terms", "object_arguments")
+                 "used_guarded_scalar", "short_attention", "mask_terms",
+                 "object_arguments", "pure_code", "constant_inputs")
 
     def __init__(self):
         self.prologue = []
@@ -569,6 +583,8 @@ class _Capture:
         self.short_attention = {}
         self.mask_terms = {}
         self.object_arguments = None
+        self.pure_code = []
+        self.constant_inputs = ()
 
 
 def _finish_normally(roots):
@@ -680,6 +696,8 @@ class StepCapture:
         self._capture = None
         self._refused = None
         self._seen = None
+        self._input_versions = ()
+        self._specialize_inputs = True
         self._linear_groups = ()
         self._recaptures = 0
         self._cap_replays = 0
@@ -881,6 +899,7 @@ class StepCapture:
                 cap.dynamic_prefix = _ShapePrefix(prefix)
         if cap.refused is not None:
             self._refused = cap.refused
+            cap.pure_code.clear()
             _finish_normally(roots)
             _commit_captured_state(records)
             return None, result
@@ -895,13 +914,29 @@ class StepCapture:
             private_ptrs = {v.var_ptr for v in private_inputs}
             guarded_leaves = [v for v in _core._step_leaf_holders(roots)
                               if v.var_ptr not in private_ptrs]
-            folded_ids = set(_core._fold_graph_constants(roots, private_inputs, guarded_leaves))
+            # A stable, versioned argument can feed the same constant
+            # subgraphs as closure parameters. Use its private copy as the
+            # leaf, and validate the caller's version before every replay.
+            stable = {}
+            if self._input_versions:
+                original_inputs = _input_vars((args, kwargs), [])
+                for i, (source, version) in enumerate(zip(original_inputs, self._input_versions)):
+                    if version and version == _input_storage_version(source):
+                        stable[i] = (private_inputs[i], version)
+            changing_inputs = [v for i, v in enumerate(private_inputs) if i not in stable]
+            constant_copies = [v for v, _ in stable.values()]
+            folded_ids = set(_core._fold_graph_constants(
+                roots, changing_inputs, guarded_leaves + constant_copies, pure_code=cap.pure_code))
+            cap.constant_inputs = tuple((i, version) for i, (v, version) in stable.items()
+                                        if int(v.id) in folded_ids)
+            self._input_versions = ()
             if folded_ids:
                 cap.folded_leaves = [
                     (v, v.var_ptr, v._saved_storage_version())
                     for v in guarded_leaves if int(v.id) in folded_ids
                 ]
 
+        cap.pure_code.clear()
         if packed_leaves:
             cap.folded_leaves = (cap.folded_leaves or []) + packed_leaves
         # Finish pending outputs without repeating already executed updates.
@@ -1285,6 +1320,15 @@ class StepCapture:
         if self._refused is not None:
             return self._eager(args, kwargs)
         cap = self._capture
+        if cap is not None and cap.constant_inputs:
+            values = _input_vars((args, kwargs), [])
+            if any(i >= len(values) or _input_storage_version(values[i]) != version
+                   for i, version in cap.constant_inputs):
+                self.last_invalidated = "a folded input was replaced or mutated"
+                self.invalidate()
+                self._specialize_inputs = False
+                self._input_versions = ()
+                cap = None
         reason = self._stale(cap, args, kwargs) if cap is not None else None
         if reason is not None:
             reused = self._cap_replays
@@ -1307,10 +1351,13 @@ class StepCapture:
                 self._seen = signature
                 if jt.flags.no_grad and jt.flags.use_cuda and self._graph_refused is None:
                     from jittor.nn.functional._parallel_linear import LinearDiscovery, parallel_linear_scope
-                    discovery = LinearDiscovery(_input_vars((args, kwargs), []))
+                    inputs = _input_vars((args, kwargs), [])
+                    discovery = LinearDiscovery(inputs)
                     with parallel_linear_scope(discovery):
                         result = self._eager(args, kwargs)
                     self._linear_groups = discovery.groups() if self._refused is None else ()
+                    if self._specialize_inputs and self._guard_external_backward and self._refused is None:
+                        self._input_versions = tuple(map(_input_storage_version, inputs))
                     return result
                 return self._eager(args, kwargs)
             cap, result = self._capture_now(args, kwargs)
