@@ -349,8 +349,34 @@ __global__ void __launch_bounds__(THREADS) forward(
     bool skipped_sentinel = false;
     for (int pass = 0; pass < 2; ++pass) {
         for (int k0 = 0; k0 < kend; k0 += BK) {
-            const int shown = MASK ? tile_visibility<MASK, CAUSAL, BQ, BK>(
-                mask, mask_base, q0, k0, lq, lk) : 2;
+            float bias[RPT][4];
+            int shown = 2;
+            if (MASK == 2) {
+                bool any_non_neginf = false, any_non_sentinel = false;
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    const int row = q0 + ty * RPT + r;
+                    if (row < lq) {
+                        mea::bias4(mask, mask_base + row * mask.row_stride,
+                                   k0 + tx * 4, lk, bias[r]);
+                        #pragma unroll
+                        for (int c = 0; c < 4; c++) {
+                            const int col = k0 + tx * 4 + c;
+                            if (col < lk && (!CAUSAL || col <= row)) {
+                                const float bv = bias[r][c];
+                                any_non_neginf |= (bv != -INFINITY);
+                                any_non_sentinel |= !(bv <= -1e38f);
+                            }
+                        }
+                    }
+                }
+                if (!__syncthreads_or(any_non_neginf)) shown = 0;
+                else if (!__syncthreads_or(any_non_sentinel)) shown = -1;
+                else shown = 1;
+            } else if (MASK == 1) {
+                shown = tile_visibility<MASK, CAUSAL, BQ, BK>(
+                    mask, mask_base, q0, k0, lq, lk);
+            }
             if (pass == 0) {
                 if (shown == 0) continue;
                 if (shown < 0) { skipped_sentinel = true; continue; }
@@ -363,14 +389,11 @@ __global__ void __launch_bounds__(THREADS) forward(
                 skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
             }
             __syncthreads();
-            float s[RPT][4], bias[RPT][4];
+            float s[RPT][4];
             #pragma unroll
             for (int r = 0; r < RPT; r++) {
                 #pragma unroll
                 for (int c = 0; c < 4; c++) s[r][c] = 0.f;
-                if (MASK == 2 && shown != 2 && q0 + ty * RPT + r < lq)
-                    mea::bias4(mask, mask_base + (q0 + ty * RPT + r) * mask.row_stride,
-                               k0 + tx * 4, lk, bias[r]);
             }
             #pragma unroll 4
             for (int d = 0; d < D; d++) {
