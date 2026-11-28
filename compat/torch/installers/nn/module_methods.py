@@ -170,12 +170,20 @@ def _acl_bfloat16_rms_norm(value, weight, epsilon):
 def _standard_rms_norm(self, args, kwargs):
     """A fused RMS norm for the standard single-argument shape, or None."""
     cls_name = type(self).__name__
+    is_diffusers_rms = (
+        cls_name == "RMSNorm"
+        and type(self).__module__ == "diffusers.models.normalization"
+        and "eps" in self.__dict__
+        and getattr(self, "bias", None) is None
+        and getattr(self, "elementwise_affine", False) is True
+        and len(getattr(self, "dim", ())) == 1
+    )
     if (
         not cls_name.endswith("RMSNorm")
         or cls_name.endswith("RMSNormGated")
         or len(args) != 1
         or kwargs
-        or "variance_epsilon" not in self.__dict__
+        or ("variance_epsilon" not in self.__dict__ and not is_diffusers_rms)
         # Optional affine weights and partial variance are different public
         # forward contracts. Leave their computation with the module owner.
         or getattr(self, "has_weight", True) is False
@@ -193,7 +201,7 @@ def _standard_rms_norm(self, args, kwargs):
     # Mixed input/weight dtypes have promotion semantics owned by forward.
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
         return None
-    epsilon = self.__dict__["variance_epsilon"]
+    epsilon = self.__dict__["eps"] if is_diffusers_rms else self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
     if pytorch_order is not None:
         return pytorch_order

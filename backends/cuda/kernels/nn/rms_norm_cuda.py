@@ -418,7 +418,7 @@ _RMS_NORM_SOURCE = r"""
             constexpr bool kVecCache = kVecPer <= 4;
             const float4* x4 = reinterpret_cast<const float4*>(x + row_offset);
             float4* y4 = reinterpret_cast<float4*>(y + row_offset);
-            float4 cache[kVecCache ? kVecPer : 1];
+            float4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
             if (kVecCache) {
                 #pragma unroll
@@ -505,7 +505,7 @@ _RMS_NORM_SOURCE = r"""
             constexpr bool kVecCache = kVecPer <= 2;
             const uint4* x8 = reinterpret_cast<const uint4*>(x + row_offset);
             uint4* y8 = reinterpret_cast<uint4*>(y + row_offset);
-            uint4 cache[kVecCache ? kVecPer : 1];
+            uint4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
             if (kVecCache) {
                 #pragma unroll
@@ -934,7 +934,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
             const float4* r4 = reinterpret_cast<const float4*>(residual + row_offset);
             float4* y4 = reinterpret_cast<float4*>(y + row_offset);
             float4* t4 = reinterpret_cast<float4*>(residual_out + row_offset);
-            float4 cache[kVecCache ? kVecPer : 1];
+            float4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
             if (kVecCache) {
                 #pragma unroll
@@ -1043,7 +1043,7 @@ def _fused_add_rms_norm_cuda_code(x, residual, gamma, epsilon, *,
             const uint4* r8 = reinterpret_cast<const uint4*>(residual + row_offset);
             uint4* y8 = reinterpret_cast<uint4*>(y + row_offset);
             uint4* t8 = reinterpret_cast<uint4*>(residual_out + row_offset);
-            uint4 cache[kVecCache ? kVecPer : 1];
+            uint4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
             if (kVecCache) {
                 #pragma unroll
