@@ -1487,6 +1487,20 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
+    def test_nested_selector_arguments_beyond_inline_capacity(self):
+        from jittor._runtime.dispatch import override_kernel, select_kernel
+
+        def provider(*args, **kwargs):
+            return None
+
+        op = "test.selector_nested_placement"
+        operands = [torch.tensor(i, device="cpu", dtype=torch.float32) for i in range(10)]
+        with override_kernel(op, "cpu", provider, dtypes={"float32"}):
+            self.assertIs(select_kernel(op, operands[:5], extra={"tail": tuple(operands[5:])}), provider)
+            operands[-1] = operands[-1].to(torch.int32)
+            self.assertIsNone(select_kernel(op, operands[:5], extra={"tail": tuple(operands[5:])}))
+        self.assertIsNone(select_kernel(op, operands))
+
     @unittest.skipUnless(_CUDA_KERNELS, "the LayerNorm relay is CUDA's")
     def test_the_layer_norm_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel

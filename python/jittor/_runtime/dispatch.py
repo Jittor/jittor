@@ -448,6 +448,9 @@ def select_kernel(op, *args, **kwargs):
     return None
 
 
+_NATIVE_SELECT_OWNER = select_kernel
+
+
 def try_dispatch(op, *args, **kwargs):
     # Fast path: nothing is registered under this op on any backend, so no
     # argument walk or placement query can change the answer. This spares the
@@ -455,7 +458,11 @@ def try_dispatch(op, *args, **kwargs):
     # (`where`, `getitem`, `arg_reduce`, ...) in a pure-jittor run.
     if op not in _registered_ops:
         return None
-    implementation = select_kernel(op, *args, **kwargs)
+    native = _NATIVE_SELECT
+    if native and select_kernel is _NATIVE_SELECT_OWNER and dispatch_context is _NATIVE_DISPATCH_CONTEXT:
+        implementation = native(op, args, kwargs)
+    else:
+        implementation = select_kernel(op, *args, **kwargs)
     return None if implementation is None else implementation(*args, **kwargs)
 
 

@@ -12,6 +12,15 @@ import numpy as np
 from jittor import Function
 
 class TestCodeOp(unittest.TestCase):
+    def test_repeated_source_can_use_distinct_headers_and_inputs(self):
+        source = "for (int i=0; i<out_shape0; ++i) @out(i) = @in0(i) + OFFSET;"
+        with jt.flag_scope(use_cuda=0), jt.no_grad():
+            for base, offset in [(1, 2), (3, 4), (5, 2), (7, 4), (9, 2)]:
+                x = jt.full((3,), base, dtype="float32")
+                y = jt.code(x.shape, x.dtype, [x], cpu_src=source,
+                            cpu_header=f"#define OFFSET {offset}")
+                np.testing.assert_array_equal(y.numpy(), np.full(3, base + offset))
+
     def test_bound_output_orders_readers_in_a_large_alias_ring(self):
         with jt.flag_scope(use_cuda=0, lazy_execution=1), jt.no_grad():
             state = jt.full((8,), 2.0)

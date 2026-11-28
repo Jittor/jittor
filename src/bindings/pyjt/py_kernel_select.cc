@@ -34,6 +34,7 @@ struct Candidate {
 PyObject* candidates_fn = nullptr;
 PyObject* dtype_name_fn = nullptr;
 PyObject* registered_ops = nullptr;                       // frozenset of str
+std::unordered_map<string, bool> native_membership;
 std::unordered_map<string, vector<Candidate>> resolved;   // "op\0backend"
 std::unordered_map<string, PyObject*> dtype_names;        // raw -> canonical str
 std::unordered_map<PyObject*, NativeRule> native_rules;   // supports -> rule
@@ -55,13 +56,17 @@ void release(vector<Candidate>& entries) {
     entries.clear();
 }
 
-const vector<Candidate>& lookup(const string& op, const string& backend) {
-    string key = op;
-    key.push_back('\0');
-    key += backend;
-    auto found = resolved.find(key);
+const vector<Candidate>& lookup(const char* op, const string& backend) {
+    // The key buffer is needed only through the lookup. Own it on a miss,
+    // before the Python loader can reenter this selector.
+    static thread_local string query;
+    query.assign(op);
+    query.push_back('\0');
+    query += backend;
+    auto found = resolved.find(query);
     if (found != resolved.end()) return found->second;
-    PyObjHolder entries(PyObject_CallFunction(candidates_fn, "ss", op.c_str(), backend.c_str()));
+    string key = query;
+    PyObjHolder entries(PyObject_CallFunction(candidates_fn, "ss", op, backend.c_str()));
     PyObjHolder seq(PySequence_Fast(entries.obj, "candidates must be a sequence"));
     vector<Candidate> list;
     Py_ssize_t n = PySequence_Fast_GET_SIZE(seq.obj);
@@ -88,7 +93,7 @@ bool is_var(PyObject* value) {
 
 // The Vars among `values`, in argument order, through tuples, lists and
 // dicts, as `_collect_tensors` finds them.
-void collect(PyObject* value, vector<VarHolder*>& tensors, int depth) {
+void collect(PyObject* value, SmallVector<VarHolder*, 8>& tensors, int depth) {
     if (is_var(value)) {
         tensors.push_back(GET_RAW_PTR(VarHolder, value));
         return;
@@ -317,8 +322,14 @@ bool kernel_op_registered(const char* op) {
     // Not bound yet: nothing asked for a kernel, so say one may exist and
     // let the caller take the general path.
     if (!registered_ops) return true;
+    auto found = native_membership.find(op);
+    if (found != native_membership.end()) return found->second;
     PyObjHolder name(PyUnicode_FromString(op));
-    return PySet_Contains(registered_ops, name.obj) != 0;
+    if (!name.obj) throw std::runtime_error("cannot convert kernel operator name");
+    int present = PySet_Contains(registered_ops, name.obj);
+    if (present < 0) throw std::runtime_error("cannot test the registered operator set");
+    native_membership.emplace(op, present != 0);
+    return present != 0;
 }
 
 void kernel_select_bind(PyObject* candidates, PyObject* dtype_name) {
@@ -332,6 +343,7 @@ void kernel_select_bind(PyObject* candidates, PyObject* dtype_name) {
 
 void kernel_select_invalidate(PyObject* op_names) {
     for (auto& kv : resolved) release(kv.second);
+    native_membership.clear();
     resolved.clear();
     Py_XINCREF(op_names);
     Py_XDECREF(registered_ops);
@@ -344,14 +356,15 @@ PyObject* kernel_select(PyObject* op, PyObject* args, PyObject* kwargs) {
     int present = PySet_Contains(registered_ops, op);
     if (present < 0) throw std::runtime_error("cannot test the registered operator set");
     if (!present) { Py_INCREF(Py_None); return Py_None; }
-    vector<VarHolder*> tensors;
+    SmallVector<VarHolder*, 8> tensors;
     collect(args, tensors, 0);
     if (kwargs && kwargs != Py_None && PyDict_Check(kwargs)) collect(kwargs, tensors, 0);
-    vector<Var*> vars(tensors.size());
+    SmallVector<Var*, 8> vars;
     bool placed = false;
     for (size_t i = 0; i < tensors.size(); i++) {
-        vars[i] = tensors[i]->var;
-        placed = placed || vars[i]->placement.explicit_backend;
+        Var* var = tensors[i]->var;
+        vars.push_back(var);
+        placed = placed || var->placement.explicit_backend;
     }
     // With no placed input the answer is where the result is being built:
     // the frontend's request, which this binding (it takes no Var) does not
@@ -363,13 +376,13 @@ PyObject* kernel_select(PyObject* op, PyObject* args, PyObject* kwargs) {
         TensorPlacement wanted = frontend_placement_request();
         if (wanted.explicit_backend) requested.reset(new TensorPlacementScope(wanted));
     }
-    auto context = query_dispatch_context(vars);
+    auto context = query_dispatch_context(vars.begin(), vars.size());
     requested.reset();
     string backend = context.backend == "acl_legacy" ? "acl" : context.backend;
     const char* op_name = PyUnicode_AsUTF8(op);
     if (!op_name) throw std::runtime_error("kernel operator must be a str");
     const auto& entries = lookup(op_name, backend);
-    vector<PyObject*> names;
+    SmallVector<PyObject*, 8> names;
     for (auto& entry : entries) {
         if (entry.runtime_modes) {
             long mode = backend == "cpu" ? 0 : (runtime_use_cuda() ? runtime_use_cuda() : 1);

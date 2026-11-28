@@ -690,7 +690,7 @@ static void finish_unfused(Op* op, vector<Var*>& outputs_bk) {
         var->finish_pending_liveness();
 }
 
-DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them; they are otherwise applied whenever the lock is free. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
+DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
 
 namespace {
 // The async worker's graph bookkeeping, applied behind its launches.
@@ -704,7 +704,7 @@ namespace {
 // with no worker at all. A launch reads none of that bookkeeping (a segment is
 // loaded from the batch's own snapshot), so the worker launches without the
 // lock and queues the releases and finishes in their order. The queue is
-// applied whenever the lock happens to be free, before anything reads
+// applied in groups when the lock happens to be free, before anything reads
 // liveness again (the dying-input reuse), once the releases it holds back
 // pass `async_release_lag_bytes`, and when the loop is over -- on an
 // exception too.
@@ -768,12 +768,14 @@ struct DeferredGraphWork {
         std::lock_guard<GraphMutationMutex> graph(graph_mutation_mutex());
         apply();
     }
-    // Between operators: when the lock is free, or when waiting for it is
-    // cheaper than the memory the queued releases keep.
+    // Amortize handoffs of the graph lock across small operators. Large
+    // batches of bytes still drain immediately at the existing memory limit.
     void step() {
-        if (empty()) return;
-        if (try_apply_and_hold()) graph_mutation_mutex().unlock();
-        else if (lag_bytes > async_release_lag_bytes) apply_now();
+        if (lag_bytes > async_release_lag_bytes) {
+            apply_now();
+        } else if (items.size() - front >= 8 && try_apply_and_hold()) {
+            graph_mutation_mutex().unlock();
+        }
     }
     ~DeferredGraphWork() {
         if (empty()) return;

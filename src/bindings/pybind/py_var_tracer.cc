@@ -10,6 +10,12 @@
 #include <Python.h>
 #include <unordered_map>
 #include <frameobject.h>
+#if PY_VERSION_HEX >= 0x030B0000 && PY_VERSION_HEX < 0x030C0000 && defined(__has_include)
+#if __has_include(<internal/pycore_frame.h>)
+#include <internal/pycore_frame.h>
+#define JT_HAVE_CPYTHON_311_FRAME 1
+#endif
+#endif
 #include "bindings/pyjt/py_obj_holder.h"
 #include "bindings/pyjt/py_converter.h"
 #include "bindings/pybind/py_var_tracer.h"
@@ -183,6 +189,37 @@ CodeOrigin& code_origin(OriginCaches& caches, PyFrameObject* frame, PyObject* co
 // false -- at the first code object or instruction not seen before, which the
 // full walk then answers and records.
 bool known_launch_origin(OriginCaches& caches, uint64& result) {
+#ifdef JT_HAVE_CPYTHON_311_FRAME
+    // Reading a warmed code/instruction pair needs no Python frame object.
+    // The GIL keeps each interpreter frame and its code alive during the walk.
+    auto* frame = PyThreadState_Get()->cframe->current_frame;
+    result = 0;
+    for (int depth = 0; frame && depth < 64; frame = frame->previous) {
+        if (_PyFrame_IsIncomplete(frame)) continue;
+        auto* code = reinterpret_cast<PyObject*>(frame->f_code);
+        const int position = _PyInterpreterFrame_LASTI(frame);
+        const int lasti = position < 0 ? -1 : position * int(sizeof(_Py_CODEUNIT));
+        if (depth == 0 && code == caches.hot_code && lasti == caches.hot_lasti) {
+            result = caches.hot_result;
+            return true;
+        }
+        auto found = caches.codes.find(code);
+        if (found == caches.codes.end()) return false;
+        if (!found->second.internal) {
+            auto line = found->second.lines.find(lasti);
+            if (line == found->second.lines.end()) return false;
+            result = line->second;
+            if (depth == 0) {
+                caches.hot_code = code;
+                caches.hot_lasti = lasti;
+                caches.hot_result = result;
+            }
+            return true;
+        }
+        ++depth;
+    }
+    return true;
+#else
     PyFrameObject* frame = PyEval_GetFrame(); // borrowed
     Py_XINCREF(frame);
     bool known = true;
@@ -216,6 +253,7 @@ bool known_launch_origin(OriginCaches& caches, uint64& result) {
     }
     Py_XDECREF(frame);
     return known;
+#endif
 }
 } // namespace
 #endif
