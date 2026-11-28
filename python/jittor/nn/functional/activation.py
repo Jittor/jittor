@@ -294,7 +294,7 @@ def gelu(x, approximate='none'):
         return fast
     fast = try_dispatch("nn.gelu.inference", x, approximate=approximate)
     if fast is not None:
-        return fast
+        return _remember_gelu_operand(x, fast, approximate, materialized=True)
     if approximate == 'none' and _FAST_GELU is not None:
         # The body below, built natively when the frontend's binary operators
         # are bound and no "nn.gelu" kernel is registered; None otherwise.
@@ -327,7 +327,18 @@ def gelu(x, approximate='none'):
         result = half * compute_x * (one + jt.erf(compute_x * inv_sqrt2))
     else:
         raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
-    return result.cast(input_dtype) if low_precision else result
+    result = result.cast(input_dtype) if low_precision else result
+    return _remember_gelu_operand(x, result, approximate, materialized=False)
+
+
+def _remember_gelu_operand(x, output, approximate, *, materialized):
+    if (approximate == "tanh" and jt.flags.no_grad and int(x.placement_backend) == 1
+            and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")
+            and (materialized or not x._storage_is_contiguous() or x._is_pending_contiguous())):
+        output._jt_gelu_operand = (
+            x, x._saved_storage_version(), output._saved_storage_version(), materialized,
+        )
+    return output
 
 
 def sigmoid(x):

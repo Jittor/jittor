@@ -2378,8 +2378,32 @@ def _read_broadcast_add_slice(tensor, other):
     return a.float() + b.float()
 
 
+def _try_gelu_mul(activated, value, offer):
+    gate, gate_version, activation_version, materialized = offer
+    if (not _owner.jt.flags.no_grad or _autocast_state.order
+            or not isinstance(value, _NativeVar) or activated.is_finished
+            or gate._saved_storage_version() != gate_version
+            or activated._saved_storage_version() != activation_version):
+        return None
+    from jittor._runtime.dispatch import try_dispatch
+    from jittor.backends.cuda.kernels.nn import swiglu_cuda  # noqa: F401
+
+    return try_dispatch("nn.gelu_and_mul.inference", gate, value, materialized=materialized)
+
+
+def _gelu_mul(left, right):
+    offer = getattr(left, "_jt_gelu_operand", None)
+    if offer is not None:
+        return _try_gelu_mul(left, right, offer)
+    offer = getattr(right, "_jt_gelu_operand", None)
+    return None if offer is None else _try_gelu_mul(right, left, offer)
+
+
 def _tensor_mul(self, other):
     gated = _split_silu_mul(self, other)
+    if gated is not None:
+        return gated
+    gated = _gelu_mul(self, other)
     if gated is not None:
         return gated
     scalar = _cuda_scalar_multiply(self, other)
@@ -2401,6 +2425,9 @@ def _tensor_mul(self, other):
 
 def _tensor_rmul(self, other):
     gated = _split_silu_mul(other, self)
+    if gated is not None:
+        return gated
+    gated = _gelu_mul(other, self)
     if gated is not None:
         return gated
     scalar = _cuda_scalar_multiply(self, other)
