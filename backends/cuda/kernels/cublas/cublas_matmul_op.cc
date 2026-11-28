@@ -12,6 +12,9 @@
 #include "cublas_matmul_op.h"
 #include "cublas_wrapper.h"
 #include "cublas_compute_type.h"
+#if defined(JIT_cuda) && !defined(IS_ROCM) && !defined(IS_COREX)
+#include "cublas_row_product.h"
+#endif
 
 using namespace std;
 
@@ -164,13 +167,13 @@ void CublasMatmulOp::jit_prepare(JK& jk) {
 
 void CublasMatmulOp::jit_run() {
     if (!c->num) return;
-    cublasHandle_t handle_ = cublas_bind_stream();
     // An empty contraction has a nonempty zero result. cuBLAS still checks
     // leading dimensions for K=0, so our zero-width buffers are not legal
     // GEMM operands. Initialize the result on the same compute stream.
     if (!a->num || !b->num) {
+        auto handle = cublas_bind_stream();
         cudaStream_t stream;
-        checkCudaErrors(cublasGetStream(handle_, &stream));
+        checkCudaErrors(cublasGetStream(handle, &stream));
         checkCudaErrors(cudaMemsetAsync(c->ptr<T>(), 0, c->size, stream));
         return;
     }
@@ -200,6 +203,16 @@ void CublasMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bn;
     }
+#if defined(JIT_cuda) && !defined(IS_ROCM) && !defined(IS_COREX)
+    if ('@Trans_a' == 'N' && '@Trans_b' == 'T' && n == 1 && c->is_stop_grad()
+            && a->dtype() == ns_float32 && b->dtype() == ns_float32 && c->dtype() == ns_float32
+            && float32_matmul_tier() == F32_HIGHEST
+            && a->is_contiguous() && b->is_contiguous() && c->is_contiguous()
+            && row_product::launch<float>(a->ptr<float>(), b->ptr<float>(),
+                nullptr, c->ptr<float>(), m, k))
+        return;
+#endif
+    auto handle_ = cublas_bind_stream();
     bool has_fp16 = a->dtype() == ns_float16
         || b->dtype() == ns_float16 || c->dtype() == ns_float16;
     bool has_bf16 = a->dtype() == ns_bfloat16

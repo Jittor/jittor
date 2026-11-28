@@ -194,6 +194,7 @@ include backends/cpu/libraries/mkl/mkl_test_op.h
 include backends/cpu/libraries/mkl/onednn_runtime.cc
 include backends/cpu/libraries/mkl/onednn_runtime.h
 include backends/cuda/include/cache_device_scope.h
+include backends/cuda/include/cublas_row_product.h
 include backends/cuda/include/device_plan_cache.h
 include backends/cuda/include/fp16_dev.h
 include backends/cuda/include/fp16_emu.h

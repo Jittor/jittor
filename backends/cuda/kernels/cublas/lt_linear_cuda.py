@@ -98,6 +98,7 @@ _HEADER = r"""
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <cstring>
+#include "cublas_row_product.h"
 #include "core/executor.h"
 #include "mem/allocator.h"
 #include "runtime/float32_precision.h"
@@ -358,10 +359,16 @@ def _source(rows, cin, cout, dtype):
         int total = rows * cout;
         jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
 """
+    row_product = ""
+    if rows == 1 and dtype == "float32":
+        row_product = """
+    if (tier == jittor::F32_HIGHEST &&
+        jittor::row_product::launch<float, true>(in0_p, in1_p, in2_p, out0_p, cin, cout))
+        return;
+        """
     return f"""
     const int rows = {rows}, cin = {cin}, cout = {cout};
     const float alpha = 1.0f, beta = 0.0f;
-    cublasLtHandle_t lt = jt_lt_handle();
 
     // float32 follows the float32 matmul policy (`allow_tf32`,
     // `set_float32_matmul_precision`), as `cublas_gemm_mode` does for the
@@ -371,6 +378,8 @@ def _source(rows, cin, cout, dtype):
     // caller asked for. The tier is read when the op runs, so each tier keeps
     // its own measured algorithm.
     int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
+    {row_product}
+    cublasLtHandle_t lt = jt_lt_handle();
     cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
         : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
     int slot = tier < 0 || tier > 2 ? 0 : tier;
