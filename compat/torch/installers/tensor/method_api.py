@@ -1363,7 +1363,22 @@ def _var_cuda(self, device=None, *a, **k):
 
 
 def _cast_if_needed(tensor, dtype):
-    return tensor if _jittor_dtype_name(tensor.dtype) == dtype else tensor.cast(dtype)
+    if _jittor_dtype_name(tensor.dtype) == dtype:
+        return tensor
+    if dtype in ("float16", "bfloat16") and _owner.jt.flags.no_grad:
+        offer = getattr(tensor, "_jt_modulated_ln_cast", None)
+        if offer is not None and not tensor.is_finished:
+            out_stamp, operands, stamps, eps, one_plus = offer
+            if (dtype == _jittor_dtype_name(operands[0].dtype)
+                    and _modulated_ln_stamp(tensor) == out_stamp
+                    and tuple(map(_modulated_ln_stamp, operands)) == stamps):
+                from jittor._runtime.dispatch import try_dispatch
+
+                narrowed = try_dispatch("nn.layer_norm.modulated.mixed", *operands, eps,
+                                        one_plus=one_plus, output_dtype=dtype)
+                if narrowed is not None:
+                    return narrowed
+    return tensor.cast(dtype)
 
 
 def _var_type(self, dst_type=None, non_blocking=False, **kw):
@@ -2136,6 +2151,10 @@ def _try_fused_neox_rope_add(cos_term, src, sin_tensor):
     return _owner._mark_cpu_like(fused, src)
 
 
+def _modulated_ln_stamp(tensor):
+    return tensor.var_ptr, tensor._saved_storage_version()
+
+
 def _try_fused_mod_ln_add(mod_ln, shift):
     """Fuse ``layer_norm(x) * (1 + scale) + shift`` into one CUDA kernel."""
     jt_mod = _owner.jt
@@ -2152,6 +2171,19 @@ def _try_fused_mod_ln_add(mod_ln, shift):
         scale_tensor = scale_expr
         one_plus = False
     from jittor._runtime.dispatch import try_dispatch
+
+    if jt_mod.flags.no_grad and x._producer_unary() == "float32":
+        inputs = x._inputs()
+        if len(inputs) == 1 and _jittor_dtype_name(inputs[0].dtype) in ("float16", "bfloat16"):
+            operands = inputs[0], scale_tensor, shift
+            fused = try_dispatch("nn.layer_norm.modulated.mixed", *operands, eps,
+                                 one_plus=one_plus, output_dtype="float32")
+            if fused is not None:
+                fused._jt_modulated_ln_cast = (
+                    _modulated_ln_stamp(fused), operands,
+                    tuple(map(_modulated_ln_stamp, operands)), eps, one_plus,
+                )
+                return _owner._mark_cpu_like(fused, x)
     fused = try_dispatch(
         "nn.layer_norm.modulated", x, scale_tensor, shift, eps, one_plus=one_plus,
     )

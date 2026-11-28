@@ -8,6 +8,14 @@ from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.dispatch import optional_kernel
 
 
+_PACK_HEADER = """
+template <typename T>
+struct alignas(16) JtModulatedNormPack {
+    T values[8];
+};
+"""
+
+
 def _resolve_mod_layout(x_shape, mod_shape):
     """Return ``(mod_rows, rows_per_mod)`` or ``None`` if unsupported."""
     hidden = x_shape[-1]
@@ -63,7 +71,7 @@ def _strided_modulation_operand(value, hidden, rows):
     return root, pitch, offset
 
 
-def _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=True):
+def _modulated_layer_norm_contract(x, scale, shift, eps, output_dtype=None):
     import jittor as jt
     if not all(isinstance(value, jt.Var) for value in (x, scale, shift)):
         return None
@@ -72,7 +80,15 @@ def _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=True):
     dtype = _jittor_dtype_name(x.dtype)
     if dtype not in ("bfloat16", "float16", "float32"):
         return None
-    if _jittor_dtype_name(scale.dtype) != dtype or _jittor_dtype_name(shift.dtype) != dtype:
+    modulation_dtype = _jittor_dtype_name(scale.dtype)
+    if modulation_dtype != _jittor_dtype_name(shift.dtype):
+        return None
+    if output_dtype is None:
+        if modulation_dtype != dtype:
+            return None
+        output_dtype = dtype
+    elif (dtype not in ("bfloat16", "float16") or modulation_dtype != "float32"
+          or output_dtype not in (dtype, "float32") or jt.flags.amp_reg):
         return None
     try:
         x_shape = tuple(int(size) for size in x.shape)
@@ -90,11 +106,11 @@ def _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=True):
     if sc_layout is None or sh_layout is None or sc_layout != sh_layout:
         return None
     mod_rows, rows_per_mod = sc_layout
-    return x_shape, x_shape[-1], mod_rows, rows_per_mod, eps_value, bool(one_plus)
+    return x_shape[-1], mod_rows, rows_per_mod, eps_value, output_dtype
 
 
 def _supports_modulated_layer_norm(x, scale, shift, eps, one_plus=True):
-    return _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=one_plus) is not None
+    return _modulated_layer_norm_contract(x, scale, shift, eps) is not None
 
 
 @functools.lru_cache(maxsize=256)
@@ -160,13 +176,21 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
         __syncthreads();
         return buf[0];
     }}
+    __device__ __forceinline__ out0_type mln_modulate(float normalized, in1_type scale, in2_type shift) {{
+        // The scale and shift have the normalization's arithmetic dtype.
+        // In the mixed path all arithmetic stays FP32 up to the final store.
+        in1_type nv = in1_type(normalized);
+        in1_type ms = {one_plus_int} ? in1_type(1.0f + static_cast<float>(scale)) : scale;
+        in1_type product = in1_type(static_cast<float>(nv) * static_cast<float>(ms));
+        return out0_type(static_cast<float>(product) + static_cast<float>(shift));
+    }}
     __global__ __launch_bounds__({vec2_t}) static void mln_vec2b(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ scale,
             const in2_type* __restrict__ shift,
             out0_type* __restrict__ y,
             long long rows_per_mod, long long scale_pitch, long long shift_pitch, double eps) {{
-        if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0) {{
+        if (sizeof(in0_type) == 2 && {vec2_n} > 0) {{
             constexpr int kVecN = {vec2_n};
             constexpr int kThreads = {vec2_t};
             constexpr int kWarps = {vec2_w};
@@ -181,9 +205,9 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             __shared__ double dwbuf[kWarps];
             __shared__ double d_mean, d_inv;
             const uint4* x8 = reinterpret_cast<const uint4*>(x + row * {hidden}LL);
-            const uint4* sc8 = reinterpret_cast<const uint4*>(scale);
-            const uint4* sh8 = reinterpret_cast<const uint4*>(shift);
-            uint4* y8 = reinterpret_cast<uint4*>(y + row * {hidden}LL);
+            const auto* sc8 = reinterpret_cast<const JtModulatedNormPack<in1_type>*>(scale);
+            const auto* sh8 = reinterpret_cast<const JtModulatedNormPack<in2_type>*>(shift);
+            auto* y8 = reinterpret_cast<JtModulatedNormPack<out0_type>*>(y + row * {hidden}LL);
             uint4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
             if (kVecCache) {{
@@ -245,37 +269,28 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
                         int v = tid + i * kThreads;
                         if (v < kVecN) {{
                             const in0_type* xp = reinterpret_cast<const in0_type*>(&cache[i]);
-                            uint4 sc_raw = sc8[v], sh_raw = sh8[v], out_raw;
-                            const in1_type* scp = reinterpret_cast<const in1_type*>(&sc_raw);
-                            const in2_type* shp = reinterpret_cast<const in2_type*>(&sh_raw);
-                            out0_type* yp = reinterpret_cast<out0_type*>(&out_raw);
+                            auto sc = sc8[v];
+                            auto sh = sh8[v];
+                            JtModulatedNormPack<out0_type> out_raw;
                             #pragma unroll
                             for (int k = 0; k < 8; ++k) {{
-                                out0_type nv = out0_type((static_cast<float>(xp[k]) - mean) * inv);
-                                out0_type ms = {one_plus_int}
-                                    ? out0_type(1.0f + static_cast<float>(scp[k]))
-                                    : out0_type(static_cast<float>(scp[k]));
-                                out0_type pr = out0_type(static_cast<float>(nv) * static_cast<float>(ms));
-                                yp[k] = out0_type(static_cast<float>(pr) + static_cast<float>(shp[k]));
+                                out_raw.values[k] = mln_modulate(
+                                    (static_cast<float>(xp[k]) - mean) * inv, sc.values[k], sh.values[k]);
                             }}
                             y8[v] = out_raw;
                         }}
                     }}
                 }} else {{
                     for (int v = tid; v < kVecN; v += kThreads) {{
-                        uint4 x_raw = x8[v], sc_raw = sc8[v], sh_raw = sh8[v], out_raw;
+                        uint4 x_raw = x8[v];
                         const in0_type* xp = reinterpret_cast<const in0_type*>(&x_raw);
-                        const in1_type* scp = reinterpret_cast<const in1_type*>(&sc_raw);
-                        const in2_type* shp = reinterpret_cast<const in2_type*>(&sh_raw);
-                        out0_type* yp = reinterpret_cast<out0_type*>(&out_raw);
+                        auto sc = sc8[v];
+                        auto sh = sh8[v];
+                        JtModulatedNormPack<out0_type> out_raw;
                         #pragma unroll
                         for (int k = 0; k < 8; ++k) {{
-                            out0_type nv = out0_type((static_cast<float>(xp[k]) - mean) * inv);
-                            out0_type ms = {one_plus_int}
-                                ? out0_type(1.0f + static_cast<float>(scp[k]))
-                                : out0_type(static_cast<float>(scp[k]));
-                            out0_type pr = out0_type(static_cast<float>(nv) * static_cast<float>(ms));
-                            yp[k] = out0_type(static_cast<float>(pr) + static_cast<float>(shp[k]));
+                            out_raw.values[k] = mln_modulate(
+                                (static_cast<float>(xp[k]) - mean) * inv, sc.values[k], sh.values[k]);
                         }}
                         y8[v] = out_raw;
                     }}
@@ -297,12 +312,8 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             __syncthreads();
             double di = d_inv;
             for (int d = tid; d < {hidden}; d += kThreads) {{
-                out0_type nv = out0_type(static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - dm) * di));
-                out0_type ms = {one_plus_int}
-                    ? out0_type(1.0f + static_cast<float>(scale[d]))
-                    : out0_type(static_cast<float>(scale[d]));
-                out0_type pr = out0_type(static_cast<float>(nv) * static_cast<float>(ms));
-                y[row * {hidden}LL + d] = out0_type(static_cast<float>(pr) + static_cast<float>(shift[d]));
+                float nv = static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - dm) * di);
+                y[row * {hidden}LL + d] = mln_modulate(nv, scale[d], shift[d]);
             }}
         }}
     }}
@@ -495,17 +506,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
             float nf = use_d
                 ? static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - d_mean) * d_inv)
                 : (static_cast<float>(x[row * {hidden}LL + d]) - s_mean) * s_inv;
-            float sv = static_cast<float>(scale[d]);
-            float shv = static_cast<float>(shift[d]);
-            if (sizeof(out0_type) == 2) {{
-                out0_type nv = out0_type(nf);
-                out0_type ms = {one_plus_int} ? out0_type(1.0f + sv) : out0_type(sv);
-                out0_type pr = out0_type(static_cast<float>(nv) * static_cast<float>(ms));
-                y[row * {hidden}LL + d] = out0_type(static_cast<float>(pr) + shv);
-            }} else {{
-                float ms = {one_plus_int} ? (1.0f + sv) : sv;
-                y[row * {hidden}LL + d] = out0_type(nf * ms + shv);
-            }}
+            y[row * {hidden}LL + d] = mln_modulate(nf, scale[d], shift[d]);
         }}
     }}
     double eps = data["eps"];
@@ -519,7 +520,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
                         (size_t)scale_pitch * sizeof(in1_type) |
                         (size_t)shift_pitch * sizeof(in2_type)) & 15u) == 0);
     if (rows > 0) {{
-        if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0 && aligned16) {{
+        if (sizeof(in0_type) == 2 && {vec2_n} > 0 && aligned16) {{
             mln_vec2b<<<(unsigned)rows, {vec2_t}>>>(
                 in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }} else if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0 && aligned16) {{
@@ -539,11 +540,22 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
                  supports=_supports_modulated_layer_norm)
 def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps, one_plus=True):
     """Fuse inference LayerNorm with per-channel scale and shift."""
+    return _modulated_layer_norm_code(x, scale, shift, eps, one_plus)
+
+
+@optional_kernel("nn.layer_norm.modulated.mixed", "cuda")
+def _mixed_modulated_layer_norm(x, scale, shift, eps, one_plus=True, *, output_dtype):
+    """Normalize narrow inputs in FP32 and store in the requested dtype."""
+    return _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype)
+
+
+def _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype=None):
     import jittor as jt
-    contract = _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=one_plus)
+
+    contract = _modulated_layer_norm_contract(x, scale, shift, eps, output_dtype)
     if contract is None:
         return None
-    x_shape, hidden, mod_rows, rows_per_mod, eps_value, one_plus_flag = contract
+    hidden, mod_rows, rows_per_mod, eps_value, output_dtype = contract
     total_rows = int(x.numel()) // hidden
     if mod_rows == 1:
         mod_mode = 0
@@ -560,9 +572,10 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps, one_plus=True):
     shift, shift_pitch, shift_offset = shift_layout or (shift.reshape((mod_rows, hidden)), hidden, 0)
     return _stop_grad_outputs(jt.code(
         x.shape,
-        x.dtype,
+        output_dtype,
         [x, scale, shift],
-        cuda_src=_modulated_ln_source(hidden, one_plus_flag, mod_mode, many_rows),
+        cuda_header=_PACK_HEADER,
+        cuda_src=_modulated_ln_source(hidden, bool(one_plus), mod_mode, many_rows),
         data={
             "eps": eps_value,
             "rows_per_mod": float(rows_per_mod),
