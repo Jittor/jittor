@@ -117,3 +117,35 @@ def test_modulated_layer_norm_reads_broadcast_add_slices(width):
         assert sum("mln_" in name for name in kernels) == 1
         assert all(row["out_bytes"] < terms.nbytes for row in trace.result.op_records)
         np.testing.assert_array_equal(actual.float().cpu().numpy(), reference.float().cpu().numpy())
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_pending_modulation_views_survive_auto_flush(device):
+    import jittor as jt
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+
+    shape = (1, 16, 4, 128)
+    values = np.arange(np.prod(shape), dtype=np.float32).reshape(shape) % 5
+    offsets = np.arange(4, dtype=np.float32).reshape(1, 1, 4, 1)
+    with torch.no_grad(), forbid_backend_fallbacks(), jt.flag_scope(
+        auto_flush_ops=0, auto_flush_bytes=0, async_execution=0
+    ):
+        source = torch.tensor(values, dtype=torch.bfloat16, device=device)
+        table = torch.tensor(offsets, device=device)
+        x = torch.ones((1, 16, 128), dtype=source.dtype, device=device)
+        jt.sync([source, table, x], True, False)
+        jt.flags.auto_flush_ops = 1
+        combined = source.float() + table
+        gates = [part.squeeze(2) for part in combined.chunk(4, dim=2)]
+        results = [(x * gate).type_as(x) for gate in gates]
+        assert not combined.is_finished
+        jt.sync(results, True, False)
+        if device == "cuda":
+            assert not combined.is_finished
+        for i, result in enumerate(results):
+            assert result.device.type == device
+            np.testing.assert_array_equal(result.float().cpu().numpy(), (values + offsets)[:, :, i])
+        # Other consumers can still request the full value.
+        np.testing.assert_array_equal(combined.cpu().numpy(), values + offsets)

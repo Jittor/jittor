@@ -158,6 +158,13 @@ void Executor::auto_flush() {
         // `auto_flush_ops` 120 and 136. What such a var reads is launched
         // when something that must be written out -- a matmul, a
         // convolution, a reduction -- needs it.
+        // In inference a storage view can be consumed as a slice of a
+        // pending expression. Submitting the view early writes the entire
+        // expression even when all of its consumers read individual slices.
+        if (no_grad) {
+            while (op && op->is_storage_view() && op->inputs().size() == 1)
+                op = op->inputs().front()->input();
+        }
         if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
             return true;
         vars.push_back(var);
