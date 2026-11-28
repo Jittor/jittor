@@ -18,6 +18,20 @@ def _permutation_view(input, axes):
     return result
 
 
+def _torch_unbind(input, dim=0):
+    """Return one indexed storage view for each slice along the axis."""
+    from jittor._core.var import _transpose_axis
+
+    rank = input.ndim
+    if not rank:
+        raise IndexError("unbind requires a tensor with at least one dimension")
+    axis = _transpose_axis(dim, rank, 0)
+    prefix = (slice(None),) * axis
+    # The native CUDA unbind can copy several slices in one launch. Torch
+    # exposes a view even for large slices whose innermost stride is > 1.
+    return tuple(input[prefix + (index,)] for index in range(input.shape[axis]))
+
+
 def _torch_permute(input, *dims, **kwargs):
     if kwargs:
         if set(kwargs) != {'dims'} or dims:

@@ -1244,6 +1244,7 @@ from .shape_api import (
     _torch_reshape,
     _torch_permute,
     _torch_transpose,
+    _torch_unbind,
     _torch_t,
     _torch_view,
     _torch_view_base,
@@ -1268,6 +1269,11 @@ def install_methods(ctx):
     Var.transpose = g.transpose = _torch_transpose
     Var.t = g.t = _torch_t
     Var._base = property(_torch_view_base)
+    Var.unbind = g.unbind = _torch_unbind
+    register_api_bindings(g, "torch", ("unbind",), Fidelity.APPROXIMATE,
+                          "Return indexed storage views with a removed axis.")
+    register_api_bindings(Var, "torch.Tensor", ("unbind",), Fidelity.APPROXIMATE,
+                          "Return indexed storage views with a removed axis.")
 
     # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
     # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
