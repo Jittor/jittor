@@ -176,6 +176,19 @@ class _Case:
 @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
                  "no usable CUDA in this build")
 class TestCompileReplayCuda(_Case, unittest.TestCase):
+    def test_small_computed_host_concat_feeds_a_cuda_graph(self):
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            def apply(x):
+                return torch.cat((x + 2, x * 3)).cuda()
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for offset in range(6):
+                x = torch.tensor([offset, offset + 1], device="cpu")
+                out = compiled(x)
+                self.assertEqual(out.device.type, "cuda")
+                self.assertEqual(out.tolist(), [offset + 2, offset + 3, 3 * offset, 3 * (offset + 1)])
+            self.assertGreater(compiled.stats["graph"], 0, compiled.graph_refused)
+
     def test_step_guards_small_tensor_reads_used_by_python(self):
         with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
             sizes = torch.tensor([3, 1], device=self.device)

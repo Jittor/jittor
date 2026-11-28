@@ -144,6 +144,7 @@ def _concat_direct(arr, dim, dtype):
 
 #: Inputs `_concat_fused` takes on: one nested select per input boundary.
 _MAX_FUSED_INPUTS = 4
+_MAX_HOST_FUSED_ELEMENTS = 4096
 
 
 def _concat_fused(arr, dim, dtype):
@@ -168,6 +169,8 @@ def _concat_fused(arr, dim, dtype):
         jt = _jt()
         if not 2 <= len(arr) <= _MAX_FUSED_INPUTS:
             return None
+        small_host_prefix = (jt.flags.no_grad and int(arr[0].placement_backend) == 0
+                             and sum(value.numel() for value in arr) <= _MAX_HOST_FUSED_ELEMENTS)
         sources = []
         for value in arr:
             if not isinstance(value, jt.Var) or value.shape[dim] == 0:
@@ -180,7 +183,10 @@ def _concat_fused(arr, dim, dtype):
                     break
                 ops.append(name)
                 base = base._input(0)
-            if not base._producer_is_view():
+            # Host-prefix replay accepts value-producing operations and views.
+            # The direct concat instead starts with scratch storage and writes
+            # each slice. Bound extra work when the inputs themselves compute.
+            if not small_host_prefix and not base._producer_is_view():
                 return None
             sources.append((base, ops[::-1], int(value.shape[dim])))
         out_shape = list(arr[0].shape)
