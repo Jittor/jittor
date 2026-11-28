@@ -48,3 +48,21 @@ def test_rms_norm_view_replays_new_input_values():
             assert actual.device.type == "cuda"
             np.testing.assert_array_equal(actual.float().cpu().numpy(), expected.float().cpu().numpy())
         assert normalize.stats["graph"] > 0
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_weighted_rms_norm_keeps_a_dense_row_permutation(device, dtype):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    rng = np.random.default_rng(31)
+    with torch.no_grad(), forbid_backend_fallbacks():
+        packed = torch.tensor(rng.normal(size=(2, 7, 3, 64)), device=device, dtype=dtype)
+        weight = torch.tensor(rng.uniform(0.5, 1.5, size=64), device=device, dtype=dtype)
+        transposed = packed.transpose(1, 2)
+        actual = jt.nn.rms_norm(transposed, weight)
+        expected = jt.nn.rms_norm(packed, weight).transpose(1, 2)
+        assert actual.device.type == device
+        if device == "cuda":
+            assert actual.stride() == transposed.stride()
+        np.testing.assert_array_equal(actual.float().cpu().numpy(), expected.float().cpu().numpy())

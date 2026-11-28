@@ -6,7 +6,7 @@ from functools import lru_cache
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import native_rule, optional_kernel
+from jittor._runtime.dispatch import dispatch_context, native_rule, optional_kernel
 
 from ._inference import cached_source
 
@@ -760,7 +760,7 @@ def _rms_norm_supported(x, gamma, epsilon=1e-6):
                  supports=_rms_norm_supported)
 def _rms_norm_cuda(x, gamma, epsilon=1e-6):
     """Inference-only fused CUDA RMSNorm, or ``None`` when unsupported."""
-    if not _autocast_enabled():
+    if x._storage_is_contiguous() and not _autocast_enabled():
         result = jt.core._try_rms_norm_cuda(x, gamma, epsilon, _rms_norm_source)
         if result is not None:
             return result
@@ -866,6 +866,8 @@ def _rms_norm_view_cuda(x, gamma, epsilon):
     if (hidden > 256 or hidden % 8 or dtype not in ("bfloat16", "float16")
             or not gamma._storage_is_contiguous()):
         return None
+    if _physical_row_order(x) is not None:
+        return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=False)
     layout = _dense_storage_layout(x)
     if layout is None:
         return None
@@ -885,15 +887,36 @@ def _rms_norm_single_round_cuda(x, gamma, epsilon=1e-6):
     return _rms_norm_cuda_code(x, gamma, epsilon, round_before_weight=False)
 
 
+def _physical_row_order(x):
+    """A dense permutation of the row axes, plus its inverse, if one exists."""
+    strides = tuple(x._storage_strides())
+    last = len(strides) - 1
+    if strides[last] != 1 or any(s <= 0 for s in strides):
+        return None
+    axes = tuple(sorted(range(last), key=strides.__getitem__, reverse=True)) + (last,)
+    if axes == tuple(range(last + 1)):
+        return None
+    matrix = x._storage_permute(jt.NanoVector(axes))
+    if not matrix._storage_is_contiguous():
+        return None
+    inverse = jt.NanoVector(tuple(axes.index(axis) for axis in range(last + 1)))
+    return matrix, inverse
+
+
 def _rms_norm_cuda_code(x, gamma, epsilon, *, round_before_weight):
     contract = _rms_norm_contract(x, gamma, epsilon)
     if contract is None:
         return None
     hidden_size, threads, warps, epsilon_value = contract
     cuda_src = _rms_norm_source(hidden_size, threads, warps, epsilon_value, round_before_weight)
-    return _stop_grad_outputs(
-        jt.code(x.shape, x.dtype, [x, gamma], cuda_src=cuda_src,
+    layout = None
+    if not x._storage_is_contiguous() and dispatch_context(x, gamma).backend == "cuda":
+        layout = _physical_row_order(x)
+    matrix = x if layout is None else layout[0]
+    normalized = _stop_grad_outputs(
+        jt.code(matrix.shape, matrix.dtype, [matrix, gamma], cuda_src=cuda_src,
                 data={"eps": epsilon_value}))
+    return normalized if layout is None else normalized._storage_permute(layout[1])
 
 
 def _rms_norm_weightless_contract(x, epsilon):
