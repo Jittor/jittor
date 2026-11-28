@@ -563,6 +563,8 @@ class TestFusedAttentionF32(unittest.TestCase):
             ("chronos_group_add_mask", (35, 12, 4, 64), (35, 12, 4, 64), False, "add_b1qk"),
             ("d128_causal", (2, 4, 19, 128), (2, 4, 19, 128), True, None),
             ("odd_d_bool_mask", (2, 3, 13, 37), (2, 3, 29, 37), False, "bool_all_false_row"),
+            ("shared_tiles_causal_bool_mask", (2, 3, 19, 64), (2, 3, 39, 64), True, "bool_all_false_row"),
+            ("shared_tiles_rectangular", (2, 3, 17, 64), (2, 3, 64, 64), False, None),
             ("long_q_tiny_k", (2, 4, 128, 64), (2, 4, 7, 64), False, None),
             ("sentinel_all_masked", (1, 2, 4, 64), (1, 2, 4, 64), False, "sentinel"),
             ("gqa_short", (2, 8, 17, 64), (2, 2, 23, 64), True, None),

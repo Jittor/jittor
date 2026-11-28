@@ -945,6 +945,91 @@ __global__ void __launch_bounds__(THREADS) backward(
 """
 
 
+# Keep the base source for other sizes so their compiled kernels can be reused.
+_TILED_SHORT_KERNELS = _KERNELS + r"""
+namespace mea_fwd {
+template <bool CAUSAL, int MASK>
+__global__ void __launch_bounds__(128) forward_short_tile(
+        const float* __restrict__ q, const float* __restrict__ k,
+        const float* __restrict__ v, float* __restrict__ o,
+        int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
+        mea::Rows vl, mea::Rows ol) {
+    constexpr int D = 64, KeyPad = 64;
+    constexpr int Rows = 4;
+    constexpr int DPT = (D + 31) / 32;
+    const int bh = blockIdx.y;
+    const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+    const int row = blockIdx.x * Rows + warp;
+    const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh);
+    const mea::RowPtr<float> ob(o, ol, bh);
+    __shared__ float query[Rows][D];
+    // Store K transposed so each warp can score 32 keys in parallel.
+    // The extra column keeps the cooperative transpose free of bank conflicts.
+    __shared__ float keys[D][KeyPad + 1];
+    __shared__ float values[KeyPad][D];
+    __shared__ float probabilities[Rows][KeyPad];
+
+    for (int i = lane; i < D; i += 32)
+        query[warp][i] = row < lq ? qb[row][i] * scale : 0.f;
+    for (int i = tid; i < lk * D; i += 128) {
+        const int key = i / D, dim = i % D;
+        keys[dim][key] = kb[key][dim];
+        values[key][dim] = vb[key][dim];
+    }
+    __syncthreads();
+    if (row >= lq) return;
+
+    // One lane owns two keys during QK, then two channels during PV.
+    float logits[2] = {-INFINITY, -INFINITY};
+    const long long mask_row = MASK ? mask.base(bh) + (long long)row * mask.row_stride : 0;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const int col = lane + i * 32;
+        if (col >= lk || (CAUSAL && col > row)) continue;
+        const long long offset = MASK ? mask_row + col * mask.col_stride : 0;
+        if (MASK == 1 && !static_cast<const bool*>(mask.data)[offset]) continue;
+        const float bias = MASK == 2 ? static_cast<const float*>(mask.data)[offset] : 0.f;
+        if (bias == -INFINITY) continue;
+        float score = 0.f;
+        #pragma unroll 8
+        for (int dim = 0; dim < D; ++dim)
+            score = fmaf(query[warp][dim], keys[dim][col], score);
+        logits[i] = score + bias;
+    }
+    float top = fmaxf(logits[0], logits[1]);
+    #pragma unroll
+    for (int i = 16; i > 0; i >>= 1) top = fmaxf(top, __shfl_xor_sync(0xffffffffu, top, i));
+    float denom = 0.f;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const float p = top == -INFINITY ? 0.f : __expf(logits[i] - top);
+        probabilities[warp][lane + i * 32] = p;
+        denom += p;
+    }
+    denom = warp_sum(denom);
+    const float inv = denom > 0.f ? 1.f / denom : 0.f;
+    __syncwarp();
+    float out[DPT] = {};
+    for (int key = 0; key < lk; ++key) {
+        const float p = probabilities[warp][key];
+        if (p > 0.f) {
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) {
+                const int dim = i * 32 + lane;
+                if (dim < D) out[i] = fmaf(p, values[key][dim], out[i]);
+            }
+        }
+    }
+    #pragma unroll
+    for (int i = 0; i < DPT; ++i) {
+        const int dim = i * 32 + lane;
+        if (dim < D) ob[row][dim] = out[i] * inv;
+    }
+}
+} // namespace mea_fwd
+"""
+
+
 def _launch(kernel, grid, smem, args, threads):
     return f"""
     auto fn = {kernel};
@@ -1132,6 +1217,15 @@ def _use_short_forward(lq, lk):
     return (lk <= 32) or (lq <= 64 and lk <= 128)
 
 
+def _short_forward_kernel(d, lq, lk, causal, mask_kind):
+    # Short, nontrivial key sequences can share K and V across query rows.
+    # For very few keys the original register-only kernel avoids setup.
+    flags = f"{str(bool(causal)).lower()}, {mask_kind}"
+    if d == 64 and 16 <= lq <= 64 and 24 <= lk <= 64:
+        return f"mea_fwd::forward_short_tile<{flags}>", _TILED_SHORT_KERNELS
+    return f"mea_fwd::forward_short<{d}, {flags}>", _KERNELS
+
+
 def _dense_storage_layout(tensor):
     """A dense backing tensor, logical strides and its relative element offset.
 
@@ -1182,8 +1276,9 @@ def _forward_view(query, key, value, scale, causal, mask):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
     if _use_short_forward(lq, lk):
+        kernel, header = _short_forward_kernel(d, lq, lk, causal, mask[0])
         src = (
-            f"mea_fwd::forward_short<{d}, {str(bool(causal)).lower()}, {mask[0]}>"
+            kernel +
             f"<<<dim3({(lq + 3) // 4}, {b * h}), mea_fwd::SHORT_THREADS>>>("
             f"{', '.join(pointers)}, out0_p, {lq}, {lk}, {scale!r}f, "
             f"{_mask_args(mask, str(h), 3 if mask[0] else 0)}, {', '.join(rows)}, "
@@ -1192,7 +1287,7 @@ def _forward_view(query, key, value, scale, causal, mask):
         return jt.code(
             query.shape, "float32",
             [layout[0] for layout in layouts] + call.extras(),
-            cuda_header=_KERNELS, cuda_src=src)
+            cuda_header=header, cuda_src=src)
     src = _launch(
         f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
         f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
@@ -1274,8 +1369,8 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
         b, h, lq, d = (int(size) for size in query.shape)
     lk = int(key.shape[1] if call.seq[1] else key.shape[2])
     if not need_normalizer and call.seed is None and _use_short_forward(lq, lk):
-        key_ = (d, call.causal, call.mask[0], call.mask[2], call.seq, call.group,
-                float(call.scale))
+        kernel, header = _short_forward_kernel(d, lq, lk, call.causal, call.mask[0])
+        key_ = (kernel, call.mask[2], call.seq, call.group, float(call.scale))
         src = _SHORT_FORWARD_SOURCES.get(key_)
         if src is None:
             heads = call.heads_expr()
@@ -1284,7 +1379,7 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
                     for i, seq in enumerate(call.seq)]
             lq_expr, lk_expr = call.lengths()
             src = _SHORT_FORWARD_SOURCES[key_] = (
-                f"mea_fwd::forward_short<{d}, {str(bool(call.causal)).lower()}, {call.mask[0]}>"
+                kernel +
                 f"<<<dim3(({lq_expr} + 3) / 4, in0->shape[0] * {heads}), mea_fwd::SHORT_THREADS>>>("
                 f"in0_p, in1_p, in2_p, out0_p, {lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
                 f"{mask_arg}, {', '.join(rows)}, "
@@ -1292,7 +1387,7 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
             )
         out = jt.code(
             query.shape, "float32", [query, key, value] + call.extras(),
-            cuda_header=_KERNELS, cuda_src=src)
+            cuda_header=header, cuda_src=src)
         return out, None
     # Four query rows a thread; one where that leaves the grid smaller than
     # the device, which is what BERT at batch 1 (24 tiles of 64) did.
