@@ -21,15 +21,16 @@ class TestLayerNormNchwViewsCuda(unittest.TestCase):
         self.scope.enter_context(forbid_backend_fallbacks())
         self.addCleanup(self.scope.close)
 
-    def test_nchw_permute_tile_and_block_paths_match_contiguous(self):
-        # Covers both spatial >= 256 (32-spatial warp tile) and spatial < 256 (block per row),
-        # plus non-multiple-of-32 spatial sizes (49, 196, 784, 3136) and all ConvNeXt channels.
+    def test_nchw_permute_matches_contiguous(self):
+        # Cover small feature maps and a large FP32 map that uses a tiled
+        # copy before the dense affine kernel.
         shapes = [
-            (1, 96, 56, 56),   # spatial=3136 >= 256 (tile path)
-            (2, 192, 28, 28),  # spatial=784 >= 256 (tile path, batch=2)
-            (1, 384, 14, 14),  # spatial=196 < 256 (block-row path)
-            (2, 768, 7, 7),    # spatial=49 < 256 (block-row path, batch=2)
-            (1, 37, 17, 19),   # non-aligned channels & spatial >= 256
+            (1, 96, 56, 56),
+            (2, 192, 28, 28),
+            (1, 384, 14, 14),
+            (2, 768, 7, 7),
+            (1, 37, 17, 19),
+            (2, 512, 32, 35),
         ]
         for dtype, atol, rtol in (
             (torch.float32, 1e-5, 1e-5),

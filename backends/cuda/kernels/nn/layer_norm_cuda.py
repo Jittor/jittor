@@ -6,7 +6,7 @@ import os
 
 import jittor as jt
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
-from jittor._runtime.dispatch import native_rule, optional_kernel
+from jittor._runtime.dispatch import dispatch_context, native_rule, optional_kernel
 
 
 @native_rule("layer_norm_inference")
@@ -1266,7 +1266,16 @@ def _layer_norm_no_grad_cuda(
     nchw_src = _nchw_physical(x)
     if nchw_src is not None:
         spatial = int(nchw_src.shape[2]) * int(nchw_src.shape[3])
-        if spatial > 0:
+        # On large FP32 feature maps the block-row kernel gathers each
+        # channel from a different memory segment. A tiled contiguous copy
+        # and the vectorized dense kernel make coalesced accesses in both
+        # passes and consume less device time.
+        prefer_dense = (
+            spatial >= 32 and x.numel() >= (1 << 20)
+            and _jittor_dtype_name(x.dtype) == "float32"
+            and dispatch_context(x).backend == "cuda"
+        )
+        if spatial > 0 and not prefer_dense:
             y = jt.code(x.shape, x.dtype, [nchw_src, weight, bias],
                         cuda_src=_nchw_block_rows_source(hidden), data={"eps": eps_value})
             return _offer_narrow_layer_norm(
