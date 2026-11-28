@@ -659,21 +659,20 @@ bool constant_fold_pure_op(Op* op) {
 
 bool constant_fold_trivial_op(Op* op) {
     if (!op) return true;
-    const char* name = op->name();
-    return std::strcmp(name, "array") == 0
-        || std::strcmp(name, "broadcast_to") == 0
+    return op->is_op(op_ids::array())
+        || op->is_op(op_ids::broadcast_to())
         || op->is_storage_view()
-        || std::strcmp(name, "clone") == 0;
+        || op->is_op(get_op_id("clone"));
 }
 } // namespace
 
-int64 fold_graph_constants(const vector<VarHolder*>& outputs,
-                           const vector<VarHolder*>& inputs,
-                           const vector<VarHolder*>& guarded_leaves,
-                           int64 max_total_bytes,
-                           int64 max_var_bytes) {
+vector<int64> fold_graph_constants(const vector<VarHolder*>& outputs,
+                                   const vector<VarHolder*>& inputs,
+                                   const vector<VarHolder*>& guarded_leaves,
+                                   int64 max_total_bytes,
+                                   int64 max_var_bytes) {
     ExecutorEntryScope entry;
-    if (outputs.empty() || max_total_bytes <= 0 || max_var_bytes <= 0) return 0;
+    if (outputs.empty() || max_total_bytes <= 0 || max_var_bytes <= 0) return {};
 
     std::unordered_set<Var*> output_set, input_set, guarded_set;
     for (auto* h : outputs) if (h && h->var) output_set.insert(h->var);
@@ -714,7 +713,7 @@ int64 fold_graph_constants(const vector<VarHolder*>& outputs,
                 stack.emplace_back(in, false);
         }
     }
-    if (topo.empty()) return 0;
+    if (topo.empty()) return {};
 
     // Bottom-up purity and non-triviality analysis.
     std::unordered_map<Var*, bool> is_const;
@@ -786,7 +785,23 @@ int64 fold_graph_constants(const vector<VarHolder*>& outputs,
             total_bytes += target->size;
         }
     }
-    if (frontier.empty()) return 0;
+    if (frontier.empty()) return {};
+
+    // Only leaves read by the folded frontier need a version check on replay.
+    // Find them before execution releases the frontier's producer edges.
+    vector<int64> dependencies;
+    vector<Var*> pending(frontier);
+    visited.clear();
+    while (!pending.empty()) {
+        auto* value = pending.back();
+        pending.pop_back();
+        if (!visited.insert(value).second) continue;
+        if (value->is_finished() || !value->input()) {
+            if (guarded_set.count(value)) dependencies.push_back(value->id);
+        } else {
+            for (auto* source : value->input()->inputs()) pending.push_back(source);
+        }
+    }
 
     struct ClearKeepGraph {
         int previous;
@@ -794,7 +809,7 @@ int64 fold_graph_constants(const vector<VarHolder*>& outputs,
         ~ClearKeepGraph() { keep_graph = previous; }
     } clear_keep;
     runtime_executor().run_sync(frontier, false, false);
-    return (int64)frontier.size();
+    return dependencies;
 }
 
 void graph_release(int64 graph) {

@@ -1024,3 +1024,35 @@ def test_step_capture_folds_stateless_inference_constants_and_guards_mutation():
             assert step.stats["captured"] == 2
         finally:
             step.invalidate()
+
+
+def test_step_capture_checks_versions_only_for_folded_dependencies():
+    from jittor._runtime.step_capture import StepCapture
+
+    devices = [0]
+    if _test_capability.check_accelerator("cuda", backend=jt).enabled:
+        devices.append(1)
+    for use_cuda in devices:
+        with jt.flag_scope(use_cuda=use_cuda, use_acl=0, auto_graph_replay=0,
+                           backend_fallback="error"), jt.no_grad():
+            table = jt.full((4, 4), 2.0)
+            live = jt.full((4, 4), 3.0)
+            x = jt.full((4, 4), 1.0)
+            jt.sync([table, live, x], bool(use_cuda), False)
+
+            def forward(value):
+                return (value + table * table) * live
+
+            step = StepCapture(forward, record=bool(use_cuda))
+            try:
+                for _ in range(6):
+                    np.testing.assert_array_equal(step(x).numpy(), np.full((4, 4), 15.0))
+                assert {value.var_ptr for value, _, _ in step._capture.folded_leaves} == {table.var_ptr}
+                live._write_inplace(np.full((4, 4), 5.0, dtype="float32"))
+                np.testing.assert_array_equal(step(x).numpy(), np.full((4, 4), 25.0))
+                assert step.stats["captured"] == 1
+                table._write_inplace(np.full((4, 4), 4.0, dtype="float32"))
+                np.testing.assert_array_equal(step(x).numpy(), np.full((4, 4), 85.0))
+                assert step.stats["captured"] == 2
+            finally:
+                step.invalidate()

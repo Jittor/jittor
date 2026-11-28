@@ -886,10 +886,11 @@ class StepCapture:
             private_ptrs = {v.var_ptr for v in private_inputs}
             guarded_leaves = [v for v in _core._step_leaf_holders(roots)
                               if v.var_ptr not in private_ptrs]
-            if _core._fold_graph_constants(roots, private_inputs, guarded_leaves) > 0:
+            folded_ids = set(_core._fold_graph_constants(roots, private_inputs, guarded_leaves))
+            if folded_ids:
                 cap.folded_leaves = [
                     (v, v.var_ptr, v._saved_storage_version())
-                    for v in guarded_leaves
+                    for v in guarded_leaves if int(v.id) in folded_ids
                 ]
 
         if packed_leaves:
