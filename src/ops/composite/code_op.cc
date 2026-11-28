@@ -54,7 +54,7 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
 CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
                const string* cuda_token, DataMap&& data, string&& backend)
     : CodeOp(move(shape), dtype, move(inputs), "", {}, "", "", {}, "", move(data), move(backend)) {
-    USER_CHECK(cuda_token && is_code_source_token(*cuda_token))
+    CHECK(cuda_token && is_code_source_token(*cuda_token))
         << "prepared device code requires an interned source token";
     prepared_cuda_source = cuda_token;
     set_flag(OpFlags::_cuda);
