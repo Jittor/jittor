@@ -6,7 +6,7 @@
 # ***************************************************************
 """Allocator contracts that only break under non-default allocator flags.
 
-See ``https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-allocator-flag-matrix/SKILL.md`` for why each flag
+See ``https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-graph-and-memory/references/allocator-flag-matrix.md`` for why each flag
 combination below is needed and how to add a new one.
 """
 

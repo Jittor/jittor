@@ -26,8 +26,7 @@
 | 技能仓 `JittorEcosystem/jittor-dev-skills` | 跨仓可复用的工程技能与检查工具；本地克隆至 `$JITTOR_LAB_ROOT/jittor-dev-skills` | 在技能仓建 `task/<slug>` 分支向 `main` 提 PR；修改后运行 `python3 tools/check_skills.py` | 目标项目 `AGENTS.md` 优先于共享技能；工具与参数以各自源码仓为准 |
 
 跨仓问题分流与闭环按
-[downstream-library-adaptation](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/downstream-library-adaptation/SKILL.md)
-与 [ecosystem-repo-change-workflow](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/ecosystem-repo-change-workflow/SKILL.md) 执行：
+[jittor-ecosystem-workflow](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-ecosystem-workflow/SKILL.md) 执行：
 
 1. **核心能力缺失或计算错误** → 在主仓核心与后端修复，补不依赖下游大模型的最小回归测试；
 2. **公共 Torch 签名、对象身份或共享语义不兼容** → 在主仓 `compat/` 修复，补公共 API 行为/结构测试；
@@ -45,7 +44,7 @@
 - 公共行为变化需要定向回归测试；涉及共享语义时扩大到 CPU 与相关加速后端。
 - 性能结论必须先有同规格正确性证据，再在同一硬件与独立缓存上 1:1 复测（区分冷编译与稳态），不引入通用路径负优化。
 - 不使用宽泛异常捕获隐藏安装、注册、编译或后端错误。
-- 不在 `downstream-library-adaptation` 流程外新增 adapter；下游实现与专属测试在 `JittorEcosystem` 独立仓库维护，入口见根 README。
+- 不在 `jittor-ecosystem-workflow` 流程外新增 adapter；下游实现与专属测试在 `JittorEcosystem` 独立仓库维护，入口见根 README。
 
 ## Repository Boundary & Safety
 
