@@ -2069,6 +2069,29 @@ PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     return storage_view(self, target);
 }
 
+namespace {
+PyObject* storage_permute_by(PyObject* self, VarHolder* holder, const NanoVector& axes) {
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    unique_ptr<VarHolder> out(holder->storage_permute(axes));
+    out->set_transpose_view_of(holder, axes);
+    return to_py_object<VarHolder*>(out.release());
+}
+
+bool read_permutation(PyObject* axes, int ndim, NanoVector& order) {
+    if (ndim <= 0 || ndim > 64 || PySequence_Fast_GET_SIZE(axes) != ndim) return false;
+    PyObject** items = PySequence_Fast_ITEMS(axes);
+    uint64 seen = 0;
+    for (int i = 0; i < ndim; i++) {
+        int64 axis;
+        if (!exact_int(items[i], axis)) { PyErr_Clear(); return false; }
+        if (axis < 0 || axis >= ndim || (seen >> axis & 1)) return false;
+        seen |= uint64(1) << axis;
+        order.push_back(axis);
+    }
+    return true;
+}
+} // namespace
+
 PyObject* fast_storage_transpose(PyObject* self, PyObject* dims) {
     if (!is_var(self) || !PyTuple_Check(dims) || PyTuple_GET_SIZE(dims) != 2)
         return none();
@@ -2087,10 +2110,15 @@ PyObject* fast_storage_transpose(PyObject* self, PyObject* dims) {
     NanoVector axes;
     for (int i = 0; i < ndim; ++i)
         axes.push_back(i == first ? second : i == second ? first : i);
-    PyTensorFrontendScope scope(self, nullptr, 0, false);
-    unique_ptr<VarHolder> out(holder->storage_permute(axes));
-    out->set_transpose_view_of(holder, axes);
-    return to_py_object<VarHolder*>(out.release());
+    return storage_permute_by(self, holder, axes);
+}
+
+PyObject* fast_storage_permute(PyObject* self, PyObject* axes) {
+    if (!is_var(self) || !(PyTuple_CheckExact(axes) || PyList_CheckExact(axes))) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    NanoVector order;
+    if (!read_permutation(axes, holder->var->shape.size(), order)) return none();
+    return storage_permute_by(self, holder, order);
 }
 
 namespace {
@@ -2148,18 +2176,8 @@ PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1) {
 PyObject* fast_permute(PyObject* self, PyObject* axes) {
     if (!is_var(self) || !(PyTuple_Check(axes) || PyList_Check(axes))) return none();
     auto* holder = GET_RAW_PTR(VarHolder, self);
-    int ndim = holder->var->shape.size();
-    if (ndim == 0 || PySequence_Fast_GET_SIZE(axes) != ndim) return none();
-    PyObject** items = PySequence_Fast_ITEMS(axes);
     NanoVector order;
-    uint64 seen = 0;
-    for (int i = 0; i < ndim; i++) {
-        if (!PyLong_CheckExact(items[i])) return none();
-        long value = PyLong_AsLong(items[i]);
-        if (value < 0 || value >= ndim || (seen >> value & 1)) { PyErr_Clear(); return none(); }
-        seen |= uint64(1) << value;
-        order.push_back(value);
-    }
+    if (!read_permutation(axes, holder->var->shape.size(), order)) return none();
     return transpose_by(self, holder, order);
 }
 

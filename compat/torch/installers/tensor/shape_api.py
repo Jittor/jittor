@@ -19,13 +19,17 @@ def _permutation_view(input, axes):
 
 
 def _torch_permute(input, *dims, **kwargs):
-    from jittor._core.var import _transpose_permutation
     if kwargs:
         if set(kwargs) != {'dims'} or dims:
             raise TypeError('permute expects one dims sequence or positional dimensions')
         dims = kwargs['dims']
     elif len(dims) == 1 and isinstance(dims[0], (tuple, list, jt.NanoVector)):
         dims = dims[0]
+    if _FAST_STORAGE_PERMUTE is not None:
+        result = _FAST_STORAGE_PERMUTE(input, dims)
+        if result is not None:
+            return result
+    from jittor._core.var import _transpose_permutation
     axes = _transpose_permutation(dims, input.ndim, input.shape)
     return _permutation_view(input, axes)
 
@@ -120,6 +124,7 @@ def _bitcast(self, dt):
 #: the frames. None answers for everything else.
 _FAST_VIEW = None
 _FAST_STORAGE_TRANSPOSE = None
+_FAST_STORAGE_PERMUTE = None
 
 
 def _torch_reshape(self, *shape, **_kw):

@@ -154,6 +154,9 @@ PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type);
 // @pyjt(_fast_storage_transpose)
 PyObject* fast_storage_transpose(PyObject* self, PyObject* dims);
 
+// @pyjt(_fast_storage_permute)
+PyObject* fast_storage_permute(PyObject* self, PyObject* axes);
+
 // `tensor.unsqueeze(dim)` of a dense tensor, as the reshape above.
 // @pyjt(_fast_unsqueeze)
 PyObject* fast_unsqueeze(PyObject* self, int64 dim);

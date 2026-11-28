@@ -768,7 +768,10 @@ class TestFastViews(unittest.TestCase):
         # transposes above; anything else is `jittor.transpose`'s to report.
         a = torch.randn(2, 3, 4, 5, device=_cuda())
         n = a.numpy()
-        heads = a.permute(0, 2, 1, 3)
+        from jittor._core import var
+
+        with _refusing(var, "_transpose_permutation"):
+            heads = a.permute(0, 2, 1, 3)
         np.testing.assert_array_equal(heads.numpy(), n.transpose(0, 2, 1, 3))
         np.testing.assert_array_equal(a.permute((3, 0, 2, 1)).numpy(), n.transpose(3, 0, 2, 1))
         np.testing.assert_array_equal(a.permute([1, 0, 3, 2]).numpy(), n.transpose(1, 0, 3, 2))
