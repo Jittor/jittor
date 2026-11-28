@@ -185,6 +185,9 @@ def _gelu_and_mul_cuda(gate, value, *, dense_gate):
     if operands is not None:
         return _silu_and_mul_rows(*operands, gelu=True)
     if dense_gate and gate._storage_is_contiguous() and value._storage_is_contiguous():
+        from jittor.nn.functional._parallel_linear import observe_gated_projections
+
+        observe_gated_projections(gate, value)
         width = gate.shape[-1]
         return _silu_and_mul_rows(gate, gate.shape, width, width, 0, value=value, gelu=True)
     return None

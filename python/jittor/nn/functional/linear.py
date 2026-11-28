@@ -16,9 +16,13 @@ from .matrix import _bfloat16_matmul_accumulator, _check_matmul_shapes
 
 def linear(x, weight, bias=None):
     """Return ``x * weight.T`` with an optional bias."""
-    packed = try_parallel_linear(x, weight, bias)
+    packed = try_parallel_linear(x, weight, bias, _unpacked_linear)
     if packed is not None:
         return packed
+    return _unpacked_linear(x, weight, bias)
+
+
+def _unpacked_linear(x, weight, bias):
     if bias is not None:
         # cuBLASLt folds the bias into the GEMM's epilogue, which is the same
         # one-rounding order the bf16 accumulator below exists to preserve:

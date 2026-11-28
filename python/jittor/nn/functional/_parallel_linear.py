@@ -29,7 +29,7 @@ def parallel_linear_scope(planner):
         _PLANNER.reset(token)
 
 
-def try_parallel_linear(value, weight, bias):
+def try_parallel_linear(value, weight, bias, unpacked):
     planner = _PLANNER.get()
     if planner is None:
         return None
@@ -41,7 +41,13 @@ def try_parallel_linear(value, weight, bias):
         return None
     if bias is not None and not isinstance(bias, jt.Var):
         return None
-    return planner(value, weight, bias)
+    return planner(value, weight, bias, unpacked)
+
+
+def observe_gated_projections(gate, value):
+    planner = _PLANNER.get()
+    if isinstance(planner, LinearDiscovery):
+        planner.observe_gate(gate, value)
 
 
 def _version(tensor):
@@ -59,23 +65,26 @@ class LinearDiscovery:
         self.inputs = {value.var_ptr for value in inputs}
         self.projections = defaultdict(list)
         self.uses = Counter()
+        self.large_outputs = {}
+        self.gated_pairs = {}
 
-    def __call__(self, value, weight, bias):
+    def __call__(self, value, weight, bias, unpacked=None):
         key = _signature(weight, bias)
         self.uses[key] += 1
         if value.ndim < 2 or weight.ndim != 2 or not value.numel():
             return
         shape = tuple(value.shape)
         cout, cin = weight.shape
-        if cin != shape[-1] or cin < 256 or cout < 256 or value.numel() // cin < 32:
-            return
         dtype = dtype_name(value.dtype)
         if dtype not in ("float32", "float16", "bfloat16") or weight.dtype != value.dtype:
             return
+        # FP32 biased products also benefit from packing narrow projections.
+        min_width = 64 if dtype == "float32" and bias is not None else 256
+        if cin != shape[-1] or min(cin, cout) < min_width or value.numel() // cin < 32:
+            return
         element_bytes = 4 if dtype == "float32" else 2
-        # The separate results need dense storage. Large output copies can
-        # cost more than grouping the GEMMs saves.
-        if value.numel() // cin * cout * element_bytes > _MAX_PROJECTION_BYTES:
+        large = value.numel() // cin * cout * element_bytes > _MAX_PROJECTION_BYTES
+        if large and (unpacked is None or dtype == "float32"):
             return
         operands = (weight,) if bias is None else (weight, bias)
         if any(t.var_ptr in self.inputs or not t._storage_is_contiguous() for t in operands):
@@ -88,11 +97,35 @@ class LinearDiscovery:
         if context.backend != "cuda":
             return
         mark = (int(value.id), shape, dtype, bias is not None, context.device_id)
-        self.projections[mark].append((key, operands, tuple(_version(t) for t in operands)))
+        call = (key, operands, tuple(_version(t) for t in operands))
+        if large:
+            output = unpacked(value, weight, bias)
+            self.large_outputs[int(output.id)] = (mark, call, output._saved_storage_version())
+            return output
+        self.projections[mark].append(call)
+
+    def observe_gate(self, gate, value):
+        first = self.large_outputs.get(int(gate.id))
+        second = self.large_outputs.get(int(value.id))
+        if first is None or second is None:
+            return
+        mark, left, left_stamp = first
+        other_mark, right, right_stamp = second
+        if (mark == other_mark and left[0] != right[0]
+                and gate._saved_storage_version() == left_stamp
+                and value._saved_storage_version() == right_stamp):
+            self.gated_pairs.setdefault(left[0], (mark, (left, right)))
 
     def groups(self):
-        return [(mark, calls) for mark, calls in self.projections.items()
-                if 2 <= len(calls) <= 4 and all(self.uses[key] == 1 for key, _, _ in calls)]
+        groups = []
+        used = set()
+        for mark, calls in (*self.gated_pairs.values(), *self.projections.items()):
+            keys = {key for key, _, _ in calls}
+            if (2 <= len(calls) <= 4 and not keys & used
+                    and all(self.uses[key] == 1 for key in keys)):
+                groups.append((mark, calls))
+                used.update(keys)
+        return groups
 
 
 class PackedLinears:
@@ -122,7 +155,7 @@ class PackedLinears:
                 start = stop
             budget -= size
 
-    def __call__(self, value, weight, bias):
+    def __call__(self, value, weight, bias, unpacked=None):
         match = self.by_parameter.get(_signature(weight, bias))
         if match is None:
             return None
