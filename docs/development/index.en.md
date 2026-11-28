@@ -8,6 +8,7 @@ The topic pages define implementation contracts, not a checklist that every cont
 
 ## Start a change
 
+- [System architecture and execution overview](architecture-overview.en.md)
 - [Repository, packaging and resource boundaries](repository-layout.en.md)
 - [Find the source owner](source-architecture.en.md)
 - [Choose and run tests](testing/test-system.en.md)
@@ -17,6 +18,7 @@ The topic pages define implementation contracts, not a checklist that every cont
 :hidden:
 :maxdepth: 1
 
+architecture-overview.en
 repository-layout.en
 source-architecture.en
 testing/test-system.en

@@ -7,6 +7,7 @@
 
 ## 开始一次改动
 
+- [整体架构与运行原理](architecture-overview.md)
 - [仓库、打包与资源边界](repository-layout.md)
 - [查找源码归属](source-architecture.md)
 - [选择并运行测试](testing/test-system.md)
@@ -16,6 +17,7 @@
 :hidden:
 :maxdepth: 1
 
+architecture-overview
 repository-layout
 source-architecture
 testing/test-system

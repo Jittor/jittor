@@ -2,7 +2,7 @@
 
 [Section contents](index.en.md) · [中文](source-architecture.md)
 
-Use this page to decide where a change belongs, then follow the relevant implementation contract. For checkout and package boundaries, read [repository layout](repository-layout.en.md).
+Use this page to decide where a change belongs, then follow the relevant implementation contract. For system architecture diagrams and the C++/backend source map, read [system architecture overview](architecture-overview.en.md); for checkout and package boundaries, read [repository layout](repository-layout.en.md).
 
 | Change | Detailed contract |
 | --- | --- |
