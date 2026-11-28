@@ -112,6 +112,8 @@ struct Mask {
     const void* data;
     int heads;
     long long batch_stride, head_stride, row_stride, col_stride;
+    const float* column_bias = nullptr;
+    int key_height = 0;
     __device__ __forceinline__ long long base(int bh) const {
         return (long long)(bh / heads) * batch_stride + (long long)(bh % heads) * head_stride;
     }
@@ -139,6 +141,18 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
     }
     #pragma unroll
     for (int c = 0; c < 4; c++) out[c] = col + c < lk ? p[c * mask.col_stride] : 0.f;
+}
+
+template <int KEY_WIDTH>
+__device__ __forceinline__ void factorized_bias4(const Mask& mask, long long row,
+                                                 int col, int lk, float (&out)[4]) {
+    const float* height = static_cast<const float*>(mask.data) + row * mask.key_height;
+    const float* width = mask.column_bias + row * KEY_WIDTH;
+    #pragma unroll
+    for (int c = 0; c < 4; ++c) {
+        const int key = col + c;
+        out[c] = key < lk ? height[key / KEY_WIDTH] + width[key % KEY_WIDTH] : 0.f;
+    }
 }
 
 // The per-row softmax term of the query gradient: sum_k p_k * dP_k, which the
@@ -315,7 +329,7 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
     }
 }
 
-template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT>
+template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT, int KEY_WIDTH = 0>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
@@ -351,14 +365,18 @@ __global__ void __launch_bounds__(THREADS) forward(
         for (int k0 = 0; k0 < kend; k0 += BK) {
             float bias[RPT][4];
             int shown = 2;
-            if (MASK == 2) {
+            if constexpr (MASK >= 2) {
                 bool any_non_neginf = false, any_non_sentinel = false;
                 #pragma unroll
                 for (int r = 0; r < RPT; r++) {
                     const int row = q0 + ty * RPT + r;
                     if (row < lq) {
-                        mea::bias4(mask, mask_base + row * mask.row_stride,
-                                   k0 + tx * 4, lk, bias[r]);
+                        if constexpr (MASK == 3)
+                            mea::factorized_bias4<KEY_WIDTH>(mask, mask_base + row,
+                                                             k0 + tx * 4, lk, bias[r]);
+                        else
+                            mea::bias4(mask, mask_base + row * mask.row_stride,
+                                       k0 + tx * 4, lk, bias[r]);
                         #pragma unroll
                         for (int c = 0; c < 4; c++) {
                             const int col = k0 + tx * 4 + c;
@@ -416,7 +434,7 @@ __global__ void __launch_bounds__(THREADS) forward(
                 for (int c = 0; c < 4; c++) {
                     const int col = k0 + tx * 4 + c;
                     if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
-                    else if (MASK == 2 && shown != 2 && row < lq) s[r][c] += bias[r][c];
+                    else if (MASK >= 2 && shown != 2 && row < lq) s[r][c] += bias[r][c];
                     else if (MASK == 1 && shown == 1 && row < lq)
                         s[r][c] = mea::masked<MASK>(s[r][c], mask, mask_base
                             + row * mask.row_stride + col * mask.col_stride);
@@ -1120,8 +1138,51 @@ def _new_mask_layout(mask, shape):
     return kind, mask.reshape(dims).stop_grad(), tuple(reversed(strides))
 
 
+def _factorized_mask(mask, shape):
+    # The two axes of a spatial key can have independent FP32 biases. Read
+    # their sum in attention instead of materializing every pair of keys.
+    if (mask is None or tuple(mask.shape) != shape
+            or _jittor_dtype_name(mask.dtype) != "float32"
+            or _output_requires_grad(mask)):
+        return None
+    root = mask
+    for _ in range(4):
+        op = root._producer_name()
+        if op == "binary":
+            break
+        if op not in ("reshape", "clone") or not root._storage_is_contiguous():
+            return None
+        inputs = root._inputs()
+        if len(inputs) != 1 or not inputs[0]._storage_is_contiguous():
+            return None
+        root = inputs[0]
+    if root._producer_op() != "binary.add":
+        return None
+    batch, heads, queries, keys = shape
+    dims = tuple(root.shape)
+    if len(dims) < 3 or not root._storage_is_contiguous():
+        return None
+    height, width = dims[-2:]
+    if min(height, width) <= 1 or height * width != keys:
+        return None
+    inputs = root._inputs()
+    if len(inputs) != 2 or any(tuple(t.shape) != dims or t.dtype != mask.dtype for t in inputs):
+        return None
+    vertical, horizontal = inputs
+    if vertical._storage_strides()[-1] != 0 or horizontal._storage_strides()[-2] != 0:
+        return None
+    biases = (vertical[..., 0].reshape(batch * heads, queries, height).contiguous(),
+              horizontal[..., 0, :].reshape(batch * heads, queries, width).contiguous())
+    return 3, biases, (queries, height, width)
+
+
 def _mask_args(layout, heads, index):
-    kind, _, (sb, sh, sq, sk) = layout
+    kind, _, strides = layout
+    if kind == 3:
+        queries, height, _ = strides
+        return (f"mea::Mask{{in{index}_p, (int)({heads}), ({heads}) * {queries}LL, "
+                f"{queries}LL, 0LL, 0LL, in{index + 1}_p, {height}}}")
+    sb, sh, sq, sk = strides
     data = f"in{index}_p" if kind else "nullptr"
     return f"mea::Mask{{{data}, (int)({heads}), {sb}LL, {sh}LL, {sq}LL, {sk}LL}}"
 
@@ -1157,15 +1218,18 @@ class _Call:
                      if dropout_p > 0 else None)
 
     def extras(self):
-        return ([self.mask[1]] if self.mask[0] else []) + (
-            [self.seed] if self.seed is not None else [])
+        if self.mask[0] == 3:
+            biases = list(self.mask[1])
+        else:
+            biases = [self.mask[1]] if self.mask[0] else []
+        return biases + ([self.seed] if self.seed is not None else [])
 
     def args(self, first_extra, grads=False):
         index = first_extra
         mask = _mask_args(self.mask, self.heads_expr(), index) if self.mask[0] \
             else _mask_args(self.mask, self.heads_expr(), 0)
         if self.mask[0]:
-            index += 1
+            index += 2 if self.mask[0] == 3 else 1
         heads = self.heads_expr()
         rows = [_rows_args(f"in{i}", seq, heads, 1 if i == 0 else self.group)
                 for i, seq in enumerate(self.seq)]
@@ -1193,6 +1257,11 @@ class _Call:
     def template(self):
         return (f"{str(bool(self.causal)).lower()}, {self.mask[0]}, "
                 f"{str(self.seed is not None).lower()}")
+
+
+    def forward_template(self):
+        arguments = self.template()
+        return f"{arguments}, {self.mask[2][2]}" if self.mask[0] == 3 else arguments
 
 
 def _rows_args(t, seq, heads, group):
@@ -1289,7 +1358,7 @@ def _forward_view(query, key, value, scale, causal, mask):
             [layout[0] for layout in layouts] + call.extras(),
             cuda_header=header, cuda_src=src)
     src = _launch(
-        f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
+        f"mea_fwd::forward<{d}, {rpt}, {call.forward_template()}>",
         f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
         _smem_register_forward(d, rpt),
         f"{', '.join(pointers)}, out0_p, out1_p, {lq}, {lk}, {scale!r}f, "
@@ -1398,7 +1467,7 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
     if src is None:
         bq = 16 * rpt
         smem = _smem_register_forward(d, rpt)
-        kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
+        kernel = f"mea_fwd::forward<{d}, {rpt}, {call.forward_template()}>"
         lq_expr, lk_expr = call.lengths()
         src = _FORWARD_SOURCES[key_] = _launch(
             kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
@@ -1542,7 +1611,12 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
     b, h, lq, _ = (int(size) for size in query.shape)
     lk = int(key.shape[2])
     training = _output_requires_grad(query, key, value)
-    mask = _mask_layout(attn_mask, (b, h, lq, lk))
+    shape = (b, h, lq, lk)
+    mask = None
+    if not training and not dropout_p and not _use_short_forward(lq, lk):
+        mask = _factorized_mask(attn_mask, shape)
+    if mask is None:
+        mask = _mask_layout(attn_mask, shape)
     if mask is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5

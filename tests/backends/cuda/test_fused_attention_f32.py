@@ -337,6 +337,32 @@ class TestFusedAttentionF32(unittest.TestCase):
         mask[1, :, 7, :] = np.finfo(np.float32).min
         self._check(2, 3, 64, 64, 64, False, mask)
 
+    def test_factorized_additive_mask_matches_cpu_on_partial_tiles(self):
+        rng = np.random.default_rng(240)
+        batch, heads, qh, qw, kh, kw, depth = 2, 3, 3, 27, 7, 15, 24
+        shapes = [(batch, heads, length, depth) for length in (qh * qw, kh * kw, kh * kw)]
+        qkv = [rng.normal(size=shape).astype("float32") for shape in shapes]
+        vertical = rng.normal(size=(batch * heads, qw, qh, kh)).astype("float32")
+        horizontal = rng.normal(size=(batch * heads, qh, qw, kw)).astype("float32")
+        vertical[1, 2, 0, :] = -np.inf
+        shape = (batch, heads, qh * qw, kh * kw)
+
+        def attention(operands, height, width):
+            mask = (height.transpose(0, 2, 1, 3)[..., None] + width[..., None, :]).reshape(shape)
+            return scaled_dot_product_attention(*operands, attn_mask=mask)
+
+        with jt.no_grad(), jt.flag_scope(use_cuda=0):
+            expected = attention([jt.array(array) for array in qkv],
+                                 jt.array(vertical), jt.array(horizontal)).numpy()
+        with jt.no_grad(), jt.flag_scope(backend_fallback="error"), \
+                patch.object(self.kernel, "_mask_layout",
+                             side_effect=AssertionError("materialized additive mask")):
+            actual = attention([jt.array(array) for array in qkv],
+                               jt.array(vertical), jt.array(horizontal))
+            actual.sync()
+            self.assertEqual(actual.location(), "device")
+            np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-5, atol=3e-6)
+
     def test_a_sliding_window_additive_mask(self):
         # Sliding-window additive masks (as ModernBERT builds with finfo.min or
         # -inf) leave most 64x64 key tiles completely masked out. Include an
