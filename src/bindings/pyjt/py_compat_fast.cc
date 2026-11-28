@@ -839,6 +839,13 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
         vars[i] = GET_RAW_PTR(VarHolder, items[i])->var;
     }
     Var* first = vars[0];
+    if (first->placement.explicit_backend) {
+        const auto ambient = frontend_placement_request();
+        if (ambient.explicit_backend
+                && (ambient.device.backend != first->placement.device.backend
+                    || ambient.device.index != std::max(first->device_id, 0)))
+            return not_implemented();
+    }
     int ndim = first->shape.size();
     if (ndim == 0) return not_implemented();
     if (dim < 0) dim += ndim;

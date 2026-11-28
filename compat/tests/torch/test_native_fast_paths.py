@@ -47,6 +47,15 @@ _CUDA_KERNELS = torch.cuda.is_available() and bool(getattr(jt.compiler, "is_cuda
 
 
 class TestFastCat(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "requires CUDA")
+    def test_cuda_cat_checks_ambient_placement_natively(self):
+        a = torch.arange(3, device="cuda")
+        b = torch.arange(3, 6, device="cuda")
+        with torch.no_grad(), _refusing(jt.core, "_current_tensor_placement"):
+            joined = torch.cat((a, b))
+        self.assertTrue(joined.is_cuda)
+        np.testing.assert_array_equal(joined.cpu().numpy(), np.arange(6))
+
     def test_torch_autocast_cat_preserves_float32_values_and_gradients(self):
         values = np.array([1.00123, -3.14159, 0.12345, -2.71828], dtype=np.float32)
         for device in ("cpu", _cuda()):
