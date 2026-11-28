@@ -1286,7 +1286,7 @@ class TestNativeGelu(unittest.TestCase):
                 "CUDA BF16 GELU formula %s rel_l2=%g"
                 % (name, relative_l2))
 
-        x32 = jt.array(x_np)
+        x32 = jt.array(x_np).stop_grad()
         self.assertIsNone(select_kernel(
             "nn.gelu.training", x32, approximate="none"))
 
