@@ -63,6 +63,14 @@ PyObject* set_float32_precision_context(int matmul, int cudnn);
 // @pyjt(_reset_float32_precision)
 void reset_float32_precision_context(PyObject* token);
 
+// Enter and leave the Torch Python frontend's construction scope in two
+// binding calls. The resolver still owns Python device/default semantics.
+// @pyjt(_enter_tensor_frontend_scope)
+PyObject* enter_tensor_frontend_scope(PyObject* type, PyObject* resolve_placement,
+                                      PyObject* args, bool stop, bool preserve);
+// @pyjt(_leave_tensor_frontend_scope)
+void leave_tensor_frontend_scope(PyObject* token);
+
 // Generated binding scopes infer a frontend only when none is already active.
 // A plain native Var never overrides its caller's explicit frontend choice.
 class PyTensorFrontendScope {

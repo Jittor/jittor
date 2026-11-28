@@ -200,6 +200,74 @@ void reset_float32_precision_context(PyObject* token) {
     set_float32_precision_policy({matmul, cudnn});
 }
 
+PyObject* enter_tensor_frontend_scope(PyObject* type, PyObject* resolve_placement,
+                                      PyObject* args, bool stop, bool preserve) {
+    struct Setup {
+        PyObjHolder type, placement;
+        Float32PrecisionPolicy precision{};
+        bool precision_set = false;
+        int policy = -1;
+        bool committed = false;
+        ~Setup() {
+            if (committed) return;
+            PyObject *error_type, *error_value, *error_tb;
+            PyErr_Fetch(&error_type, &error_value, &error_tb);
+            if (policy >= 0) set_autograd_policy(policy & 1, policy & 2);
+            if (precision_set) set_float32_precision_policy(precision);
+            if (placement.obj) PyContextVar_Reset(placement_variable(), placement.obj);
+            if (type.obj) PyContextVar_Reset(context_variable(), type.obj);
+            PyErr_Restore(error_type, error_value, error_tb);
+        }
+    } setup;
+    setup.type.obj = set_tensor_frontend_type(type);
+    PyObjHolder tiers;
+    {
+        GraphLockSuspend python_call;
+        tiers.obj = PyObject_CallMethod(type, "_frontend_precision_policy", nullptr);
+    }
+    if (!tiers.obj) return nullptr;
+    int matmul, cudnn;
+    if (!PyArg_ParseTuple(tiers.obj, "ii", &matmul, &cudnn)) return nullptr;
+    USER_CHECK(matmul >= 0 && matmul <= 2 && cudnn >= 0 && cudnn <= 2)
+        << "frontend precision tiers must be in [0, 2]";
+    setup.precision = current_float32_precision_policy();
+    set_float32_precision_policy({matmul, cudnn});
+    setup.precision_set = true;
+
+    PyObjHolder placement;
+    {
+        GraphLockSuspend python_call;
+        placement.obj = PyObject_CallObject(resolve_placement, args);
+    }
+    if (!placement.obj) return nullptr;
+    if (placement.obj != Py_None) {
+        int backend, device;
+        if (!PyArg_ParseTuple(placement.obj, "ii", &backend, &device)) return nullptr;
+        setup.placement.obj = set_tensor_placement_context(backend, device);
+    }
+    setup.policy = get_autograd_policy();
+    set_autograd_policy(stop, preserve);
+    PyObject* token = Py_BuildValue("(OOiii)", setup.type.obj,
+        setup.placement.obj ? setup.placement.obj : Py_None,
+        setup.precision.matmul, setup.precision.cudnn, setup.policy);
+    setup.committed = token != nullptr;
+    return token;
+}
+
+void leave_tensor_frontend_scope(PyObject* token) {
+    PyObject *type, *placement;
+    int matmul, cudnn, policy;
+    if (!PyArg_ParseTuple(token, "OOiii", &type, &placement, &matmul, &cudnn, &policy))
+        throw std::runtime_error("invalid tensor frontend scope");
+    USER_CHECK(matmul >= -1 && matmul <= 2 && cudnn >= -1 && cudnn <= 2
+               && policy >= 0 && policy <= 3)
+        << "invalid saved tensor frontend policy";
+    set_autograd_policy(policy & 1, policy & 2);
+    set_float32_precision_policy({matmul, cudnn});
+    if (placement != Py_None) reset_tensor_placement_context(placement);
+    reset_tensor_frontend_type(type);
+}
+
 namespace {
 PyObject* frontend_result_type(PyObject* actual_type);
 } // namespace

@@ -9,6 +9,25 @@ import torch
 from _rng_init_support import require_rng_device
 
 
+def test_python_frontend_scope_restores_state_after_placement_error():
+    from jittor.compat.torch.frontend import tensor_frontend
+
+    class InvalidDevice:
+        @property
+        def type(self):
+            raise ValueError("invalid placement")
+
+    prior_placement = jt.core._current_tensor_placement()
+    prior_policy = jt.core._get_autograd_policy()
+    prior_type = type(jt.ones(1))
+    with pytest.raises(ValueError, match="invalid placement"):
+        with tensor_frontend(torch.Tensor, device=InvalidDevice()):
+            pytest.fail("placement failed before entering the body")
+    assert jt.core._current_tensor_placement() == prior_placement
+    assert jt.core._get_autograd_policy() == prior_policy
+    assert type(jt.ones(1)) is prior_type
+
+
 def test_same_placement_token_restores_changes_made_inside_the_scope():
     before = jt.core._current_tensor_placement()
     outer = jt.core._set_tensor_placement(0, 0)
