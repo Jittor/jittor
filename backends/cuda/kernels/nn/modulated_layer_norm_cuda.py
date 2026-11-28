@@ -98,7 +98,7 @@ def _supports_modulated_layer_norm(x, scale, shift, eps, one_plus=True):
 
 
 @functools.lru_cache(maxsize=256)
-def _modulated_ln_source(hidden, one_plus, mod_mode):
+def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False):
     """Build vectorized + register-cached CUDA kernel for modulated LayerNorm.
 
     ``mod_mode``: 0 = broadcast single row, 1 = per-batch (row / rows_per_mod),
@@ -106,11 +106,17 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
     """
     from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _ln_vec_threads
     vec2_n, vec2_t, vec2_w = _ln_vec_threads(hidden, 8)
+    if many_rows and 128 <= vec2_n <= 256:
+        # More blocks can share an SM when each row fits in four vectors
+        # per thread. Retain the wider block for latency-bound grids.
+        vec2_t, vec2_w = 64, 2
     vec4_n, vec4_t, vec4_w = _ln_vec_threads(hidden, 4)
     mod_idx_expr = (
         "0LL" if mod_mode == 0 else ("(row / rows_per_mod)" if mod_mode == 1 else "row")
     )
     one_plus_int = 1 if one_plus else 0
+    # Each warp reduces the same partial sums in the packed 16-bit kernel.
+    # Separate mean and variance buffers allow one block barrier per sum.
     return f"""
     __device__ __forceinline__ float mln_warp_sum(float v) {{
         for (int o = 16; o > 0; o >>= 1) v += __shfl_down_sync(0xffffffff, v, o);
@@ -132,6 +138,14 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
         }}
         __syncthreads();
         return buf[0];
+    }}
+    __device__ __forceinline__ float mln_row_sum(float v, float* partial, int tid, int warps) {{
+        const int lane = tid & 31;
+        v = mln_warp_sum(v);
+        if (lane == 0) partial[tid >> 5] = v;
+        __syncthreads();
+        float total = mln_warp_sum(lane < warps ? partial[lane] : 0.0f);
+        return __shfl_sync(0xffffffff, total, 0);
     }}
     __device__ __forceinline__ double mln_block_sum_d(double v, double* buf, int tid, int warps) {{
         int lane = tid & 31, warp = tid >> 5;
@@ -163,11 +177,9 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             scale += mrow * scale_pitch;
             shift += mrow * shift_pitch;
             int tid = threadIdx.x;
-            __shared__ float wbuf[kWarps];
+            __shared__ float means[kWarps], variances[kWarps];
             __shared__ double dwbuf[kWarps];
-            __shared__ float s_mean, s_inv;
             __shared__ double d_mean, d_inv;
-            __shared__ int use_d;
             const uint4* x8 = reinterpret_cast<const uint4*>(x + row * {hidden}LL);
             const uint4* sc8 = reinterpret_cast<const uint4*>(scale);
             const uint4* sh8 = reinterpret_cast<const uint4*>(shift);
@@ -194,14 +206,11 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
                     for (int k = 0; k < 8; ++k) sum += static_cast<float>(vp[k]);
                 }}
             }}
-            float total = mln_block_sum(sum, wbuf, tid, kWarps);
-            if (tid == 0) {{
-                use_d = !isfinite(total);
-                if (!use_d) s_mean = total / {hidden}.0f;
-            }}
-            __syncthreads();
-            if (!use_d) {{
-                float mean = s_mean, var = 0.0f;
+            const float total = mln_row_sum(sum, means, tid, kWarps);
+            const float mean = total / {hidden}.0f;
+            float vtot = INFINITY;
+            if (isfinite(total)) {{
+                float var = 0.0f;
                 if (kVecCache) {{
                     #pragma unroll
                     for (int i = 0; i < kVecPer; ++i) {{
@@ -226,15 +235,10 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
                         }}
                     }}
                 }}
-                float vtot = mln_block_sum(var, wbuf, tid, kWarps);
-                if (tid == 0) {{
-                    use_d = !isfinite(vtot);
-                    if (!use_d) s_inv = rsqrtf(vtot / {hidden}.0f + static_cast<float>(eps));
-                }}
-                __syncthreads();
+                vtot = mln_row_sum(var, variances, tid, kWarps);
             }}
-            if (!use_d) {{
-                float mean = s_mean, inv = s_inv;
+            if (isfinite(vtot)) {{
+                const float inv = rsqrtf(vtot / {hidden}.0f + static_cast<float>(eps));
                 if (kVecCache) {{
                     #pragma unroll
                     for (int i = 0; i < kVecPer; ++i) {{
@@ -547,6 +551,9 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps, one_plus=True):
         mod_mode = 2
     else:
         mod_mode = 1
+    from jittor._runtime.dispatch import dispatch_context
+
+    many_rows = total_rows >= 512 and dispatch_context(x, scale, shift).backend == "cuda"
     scale_layout = _strided_modulation_operand(scale, hidden, mod_rows)
     shift_layout = _strided_modulation_operand(shift, hidden, mod_rows)
     scale, scale_pitch, scale_offset = scale_layout or (scale.reshape((mod_rows, hidden)), hidden, 0)
@@ -555,7 +562,7 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps, one_plus=True):
         x.shape,
         x.dtype,
         [x, scale, shift],
-        cuda_src=_modulated_ln_source(hidden, one_plus_flag, mod_mode),
+        cuda_src=_modulated_ln_source(hidden, one_plus_flag, mod_mode, many_rows),
         data={
             "eps": eps_value,
             "rows_per_mod": float(rows_per_mod),
