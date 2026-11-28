@@ -1,6 +1,7 @@
 """cuDNN adapters shared by convolution functional implementations."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+import math
 import os
 
 import jittor as jt
@@ -228,8 +229,47 @@ def _supports_conv3d(x, weight, stride, padding, dilation, groups):
     return get_library_ops("cudnn") is not None
 
 
+def _conv3d_nonoverlapping_patches(x, weight, stride, padding, dilation, groups):
+    # With an exact non-overlapping tiling, each input is consumed once by
+    # the patch gather. A channels-last 1x1 convolution can then operate on
+    # whole patches with Tensor Cores and keep cuDNN's FP32 accumulation.
+    dtype = _jittor_dtype_name(x.dtype)
+    if (groups != 1 or dtype not in _HALF or dtype != _jittor_dtype_name(weight.dtype)
+            or jt.flags.amp_reg or _output_requires_grad(x, weight)
+            or os.environ.get("JITTOR_CUDNN3D_HALF_NATIVE", "1") == "0"
+            or len(x.shape) != 5 or len(weight.shape) != 5
+            or dispatch_context(x, weight).backend != "cuda"):
+        return None
+    batch, channels, *spatial = tuple(x.shape)
+    out_channels, weight_channels, *kernel = tuple(weight.shape)
+    if (channels != weight_channels or tuple(kernel) != stride or any(padding)
+            or dilation != (1, 1, 1)
+            or min(batch, channels, out_channels, *spatial, *kernel) <= 0
+            or any(size % tile for size, tile in zip(spatial, kernel))):
+        return None
+    patch_size = channels * math.prod(kernel)
+    if patch_size % 8 or out_channels % 8:
+        return None
+    depth, height, width = (size // tile for size, tile in zip(spatial, kernel))
+    kd, kh, kw = kernel
+    patches = x.reindex(
+        (batch, depth, height, width, patch_size),
+        ["i0", f"i4/{kd * kh * kw}", f"i1*{kd}+i4/{kh * kw}%{kd}",
+         f"i2*{kh}+i4/{kw}%{kh}", f"i3*{kw}+i4%{kw}"],
+    )
+    y = get_library_ops("cudnn").cudnn_conv(
+        patches.reshape((batch, depth * height, width, patch_size)),
+        weight.reshape((out_channels, 1, 1, patch_size)),
+        1, 1, 0, 0, 1, 1, 1, "acdb", "ohwi", "acdb",
+    )
+    return y.reshape((batch, depth, height, width, out_channels))._storage_permute((0, 4, 1, 2, 3))
+
+
 @optional_kernel("conv3d", "cuda", supports=_supports_conv3d)
 def _try_cudnn_conv3d(x, weight, stride, padding, dilation, groups):
+    y = _conv3d_nonoverlapping_patches(x, weight, stride, padding, dilation, groups)
+    if y is not None:
+        return y
     return _cudnn_conv3d_fp16_safe(get_library_ops("cudnn").cudnn_conv3d,
                                   x, weight, *stride, *padding, *dilation, groups)
 

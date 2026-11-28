@@ -40,3 +40,17 @@ def test_packed_contiguous_with_offset_and_broadcast():
             assert result.location() == "device"
             expected = data.transpose(0, 2, 1, 3)[..., start:start + 64]
             np.testing.assert_array_equal(result.numpy(), np.broadcast_to(expected, result.shape))
+
+
+@pytest.mark.cuda
+def test_batched_short_transpose_copy():
+    require_accelerator("cuda")
+    shape = (2, 17, 23, 2, 2, 24)
+    axes = (0, 5, 1, 3, 2, 4)
+    data = (np.arange(math.prod(shape), dtype=np.float32) % 127).reshape(shape)
+    with jt.flag_scope(use_cuda=1, transpose_storage_view=1, backend_fallback="error"), jt.no_grad():
+        source = jt.array(data).bfloat16().transpose(axes)
+        result = source.contiguous()
+        result.sync()
+        assert result.location() == "device" and result._storage_is_contiguous()
+        np.testing.assert_array_equal(result.float32().numpy(), data.transpose(axes))

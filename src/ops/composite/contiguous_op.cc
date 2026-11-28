@@ -49,12 +49,15 @@ static int tiled_cuda_transpose_axis(const Var* input) {
         if (stride == 1 && (unit_axis < 0 || input->shape[unit_axis] == 1))
             unit_axis = axis;
     }
-    // Large batches of narrow, densely packed matrices can leave most lanes
-    // idle on every load. The scalar JIT already vectorizes their stores.
-    if (unit_axis >= 0 && input->num >= (1 << 18) && input->storage_stride(last) < 16) {
+    if (unit_axis >= 0 && input->num >= (1 << 15)) {
         int64 columns;
         transpose_column_begin(input, unit_axis, columns);
-        if (input->storage_stride(last) == columns) return -1;
+        const int64 row_stride = input->storage_stride(last);
+        // Gather directly when densely packed matrices leave most of the
+        // shared tile empty. A single warp can store multiple short rows.
+        if (row_stride == columns && ((columns < 16 && input->num >= (1 << 18))
+                || (columns <= 32 && input->shape[last] <= 4)))
+            return -1;
     }
     return unit_axis;
 }
