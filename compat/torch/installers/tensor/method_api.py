@@ -2399,11 +2399,25 @@ def _gelu_mul(left, right):
     return None if offer is None else _try_gelu_mul(right, left, offer)
 
 
+def _pointwise_sigmoid_mul(left, right):
+    offer = getattr(right, "_jt_pointwise_sigmoid_mul", None)
+    if offer is None:
+        left, right = right, left
+        offer = getattr(right, "_jt_pointwise_sigmoid_mul", None)
+    if (offer is None or _autocast_state.order or right.is_finished
+            or not isinstance(left, _NativeVar) or right._saved_storage_version() != offer[0]):
+        return None
+    return offer[1](left)
+
+
 def _tensor_mul(self, other):
     gated = _split_silu_mul(self, other)
     if gated is not None:
         return gated
     gated = _gelu_mul(self, other)
+    if gated is not None:
+        return gated
+    gated = _pointwise_sigmoid_mul(self, other)
     if gated is not None:
         return gated
     scalar = _cuda_scalar_multiply(self, other)
@@ -2428,6 +2442,9 @@ def _tensor_rmul(self, other):
     if gated is not None:
         return gated
     gated = _gelu_mul(other, self)
+    if gated is not None:
+        return gated
+    gated = _pointwise_sigmoid_mul(other, self)
     if gated is not None:
         return gated
     scalar = _cuda_scalar_multiply(self, other)
