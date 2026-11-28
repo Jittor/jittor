@@ -199,6 +199,33 @@ class TestFusedAttentionF32(unittest.TestCase):
                     self.assertLess(float(error.max() / (np.abs(want).max() + 1e-30)), net_tol)
                     self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
 
+    def test_captured_batched_scores_match_forward_and_gradients(self):
+        from jittor.nn.functional import attention
+
+        rng = np.random.default_rng(43)
+        shape = (2, 8, 147, 48)
+        key_shape = (2, 8, 157, 48)
+        q, k, v, cotangent = [rng.standard_normal(s, dtype=np.float32)
+                              for s in (shape, key_shape, key_shape, shape)]
+        expected = _reference(q, k, v, False, cotangent)
+
+        def step(query, key, value, cot):
+            out = scaled_dot_product_attention(query, key, value)
+            return [out, *jt.grad((out * cot).sum(), [query, key, value])]
+
+        with jt.flag_scope(backend_fallback="error"), \
+                patch.object(attention, "_composite", wraps=attention._composite) as composite:
+            captured = jt.capture_step(step)
+            inputs = [jt.array(t) for t in (q, k, v, cotangent)]
+            for _ in range(5):
+                result = captured(*inputs)
+                jt.sync(result, device_sync=True)
+            composite.assert_called()
+            self.assertGreater(captured.stats["graph"], 0)
+            self.assertTrue(all(t.location() == "device" for t in result))
+            for got, want in zip(jt.fetch_sync(result), expected):
+                np.testing.assert_allclose(got, want, atol=2e-5, rtol=1e-4)
+
     def test_constant_values_have_zero_query_and_key_gradients(self):
         rng = np.random.RandomState(913)
         shape = (1, 1, 7, 6)

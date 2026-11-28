@@ -375,6 +375,25 @@ def _repeated_heads(tensor):
 LAST_FUSED_KERNEL = [None]
 
 
+def _capture_prefers_batched_fp32(query, key):
+    from jittor._runtime import step_capture
+
+    if (not step_capture.active() or query.ndim != 4 or key.ndim != 4
+            or tuple(query.shape[:2]) != tuple(key.shape[:2])):
+        return False
+    batch, heads, queries, width = (int(size) for size in query.shape)
+    keys = int(key.shape[-2])
+    scores = batch * heads * queries * keys
+    if not (0 < queries and 0 < keys and scores >= (1 << 18)):
+        return False
+    if max(queries, keys) <= 128 and scores <= (4 << 20):
+        return True
+    # Dense batched GEMMs can pay for storing the probabilities when the
+    # sequences are short relative to the projected features. Cap both that
+    # expansion and the absolute size of one FP32 score buffer (128 MiB).
+    return max(queries, keys) <= 4 * width and scores <= (32 << 20)
+
+
 def _scaled_dot_product_attention(
     query,
     key,
@@ -545,20 +564,14 @@ def _scaled_dot_product_attention(
         # Keep them on `_composite` so probabilities are computed once with
         # the fused CUB softmax forward and backward instead of recomputing
         # Q@K^T and scalar max/sum reductions inside `_MemoryEfficientAttention`.
-        scores_count = (int(query.shape[0]) * int(query.shape[1])
-                        * query_length * int(key.shape[-2]))
         if (use_fused and query_dtype == "float32"
                 and dispatch_context(query, key, value).backend == "cuda"
-                and len(query.shape) == len(key.shape) == 4
-                and query_length <= 128 and int(key.shape[-2]) <= 128
-                and scores_count <= (4 << 20)
+                and _capture_prefers_batched_fp32(query, key)
                 and (attn_mask is None or not _output_requires_grad(attn_mask))):
-            from jittor._runtime import step_capture
-            if step_capture.active():
-                return _composite(
-                    query, key, value, attn_mask, probability, is_causal,
-                    scale_factor, query_dtype
-                )
+            return _composite(
+                query, key, value, attn_mask, probability, is_causal,
+                scale_factor, query_dtype
+            )
         return _MemoryEfficientAttention.apply(
             query, key, value, attn_mask, bool(is_causal), float(scale_factor)
         )
