@@ -97,6 +97,7 @@ _HEADER = r"""
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cstring>
 #include "core/executor.h"
 #include "mem/allocator.h"
 #include "runtime/float32_precision.h"
@@ -142,6 +143,14 @@ __global__ static void jt_lt_add_bias(T* out, const T* bias,
                                       int total, int cout) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < total) out[i] = out[i] + bias[i % cout];
+}
+
+template <typename T>
+__global__ static void jt_lt_round_bias(
+        const float* product, const T* bias, T* out, int64_t total, int cout) {
+    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    for (; i < total; i += (int64_t)gridDim.x * blockDim.x)
+        out[i] = T(product[i] + float(bias[i % cout]));
 }
 
 struct JtLtChoice {
@@ -307,6 +316,48 @@ def _source(rows, cin, cout, dtype):
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha
     # and beta stay floats either way.
     ct, kt = _LT_TYPES[dtype]
+    # A single generous workspace limit can fill the heuristic shortlist with
+    # split-K variants and omit faster unsplit kernels. Check lower limits for
+    # large BF16 products where the search amortizes over repeated calls.
+    workspace_tiers = (
+        "add_candidates(1 << 20); add_candidates(0);"
+        if dtype == "bfloat16" and min(rows, cin, cout) >= 128
+        and rows * cin * cout >= (1 << 27)
+        else ""
+    )
+    candidate_count = 3 * _CANDIDATES if workspace_tiers else _CANDIDATES
+    reduction_policy = """
+        const uint32_t reduction = CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE;
+        CHECK(cublasLtMatmulPreferenceSetAttribute(
+            pref, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction,
+            sizeof(reduction)) == CUBLAS_STATUS_SUCCESS);
+""" if dtype == "bfloat16" else ""
+    if dtype == "bfloat16":
+        # Split-K may reduce partial sums into BF16. If no plan keeps the
+        # accumulator wide, preserve that rounding boundary with an FP32 GEMM
+        # result and a CUDA cast that adds the bias before rounding.
+        fallback = f"""
+        const int64_t total = (int64_t)rows * cout;
+        JtLtWorkspace product(total * sizeof(float));
+        const auto math = static_cast<cublasMath_t>(
+            CUBLAS_DEFAULT_MATH | CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
+        CHECK(cublasSetMathMode(h, math) == CUBLAS_STATUS_SUCCESS);
+        CHECK(cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
+                          in1_p, {ct}, cin, in0_p, {ct}, cin, &beta, product.ptr,
+                          CUDA_R_32F, cout, compute, CUBLAS_GEMM_DEFAULT)
+              == CUBLAS_STATUS_SUCCESS);
+        int blocks = std::min<int64_t>((total + 255) / 256, 65535);
+        jt_lt_round_bias<<<blocks, 256>>>(static_cast<const float*>(product.ptr),
+                                          in2_p, out0_p, total, cout);
+"""
+    else:
+        fallback = f"""
+        CHECK(cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
+                          in1_p, {ct}, cin, in0_p, {ct}, cin, &beta, out0_p,
+                          {ct}, cout, compute, CUBLAS_GEMM_DEFAULT) == CUBLAS_STATUS_SUCCESS);
+        int total = rows * cout;
+        jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
+"""
     return f"""
     const int rows = {rows}, cin = {cin}, cout = {cout};
     const float alpha = 1.0f, beta = 0.0f;
@@ -366,13 +417,37 @@ def _source(rows, cin, cout, dtype):
         void* ws = probe.ptr;
         size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
         cublasLtMatmulPreference_t pref = nullptr;
-        cublasLtMatmulPreferenceCreate(&pref);
-        cublasLtMatmulPreferenceSetAttribute(
-            pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
-        cublasLtMatmulHeuristicResult_t cand[{_CANDIDATES}];
+        CHECK(cublasLtMatmulPreferenceCreate(&pref) == CUBLAS_STATUS_SUCCESS);
+        {reduction_policy}
+        cublasLtMatmulHeuristicResult_t candidates[{candidate_count}];
         int found = 0;
-        cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
-                                       {_CANDIDATES}, cand, &found);
+        auto add_candidates = [&](size_t limit) {{
+            if (limit > wsize || cublasLtMatmulPreferenceSetAttribute(
+                    pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &limit, sizeof(limit))
+                    != CUBLAS_STATUS_SUCCESS)
+                return;
+            cublasLtMatmulHeuristicResult_t results[{_CANDIDATES}];
+            int count = 0;
+            if (cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
+                                              {_CANDIDATES}, results, &count)
+                    != CUBLAS_STATUS_SUCCESS)
+                return;
+            for (int i = 0; i < count; ++i) {{
+                const auto& result = results[i];
+                if (result.state != CUBLAS_STATUS_SUCCESS || result.workspaceSize > limit)
+                    continue;
+                bool seen = false;
+                for (int j = 0; j < found; ++j) {{
+                    if (std::memcmp(&result.algo, &candidates[j].algo, sizeof(result.algo)) == 0) {{
+                        seen = true;
+                        break;
+                    }}
+                }}
+                if (!seen) candidates[found++] = result;
+            }}
+        }};
+        add_candidates(wsize);
+        {workspace_tiers}
         cudaEvent_t beg, end;
         cudaEventCreate(&beg); cudaEventCreate(&end);
         float best = 1e30f;
@@ -381,8 +456,8 @@ def _source(rows, cin, cout, dtype):
                 // Explicit stream: jittor runs on `cudaStreamPerThread`, which
                 // does not synchronise with the legacy default stream.
                 return cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                                      out0_p, lc, out0_p, lc, &cand[c].algo,
-                                      ws, wsize, cudaStreamPerThread);
+                                      out0_p, lc, out0_p, lc, &candidates[c].algo,
+                                      ws, candidates[c].workspaceSize, cudaStreamPerThread);
             }};
             if (once() != CUBLAS_STATUS_SUCCESS) continue;
             cudaDeviceSynchronize();
@@ -394,8 +469,8 @@ def _source(rows, cin, cout, dtype):
             cudaEventElapsedTime(&ms, beg, end);
             if (ms > 0.0f && ms < best) {{
                 best = ms;
-                choice.algo = cand[c].algo;
-                choice.workspace = cand[c].workspaceSize;
+                choice.algo = candidates[c].algo;
+                choice.workspace = candidates[c].workspaceSize;
                 choice.usable = true;
             }}
         }}
@@ -403,25 +478,22 @@ def _source(rows, cin, cout, dtype):
         cublasLtMatmulPreferenceDestroy(pref);
     }}
 
+    bool launched = false;
     if (choice.usable) {{
         JtLtWorkspace workspace(choice.workspace);
-        cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                       out0_p, lc, out0_p, lc, &choice.algo,
-                       workspace.ptr, workspace.ptr ? choice.workspace : 0,
-                       cudaStreamPerThread);
-    }} else {{
-        // Nothing cuBLASLt offered was usable. The portable GEMM plus a bias
-        // add is still correct, so do that rather than answer with garbage.
+        launched = cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
+                                  out0_p, lc, out0_p, lc, &choice.algo,
+                                  workspace.ptr, workspace.ptr ? choice.workspace : 0,
+                                  cudaStreamPerThread) == CUBLAS_STATUS_SUCCESS;
+    }}
+    if (!launched) {{
+        // cuBLASLt may have no eligible plan for the operands' alignment.
         // The handle is hoisted: creating and destroying one per call here
         // turned a 17 s decode into a 48 s one, so a route that has fallen
         // back must at least not pay for that on every layer.
         cublasHandle_t h = jt_blas_handle();
-        cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
-                     in1_p, {ct}, cin, in0_p, {ct}, cin, &beta,
-                     out0_p, {ct}, cout,
-                     compute, CUBLAS_GEMM_DEFAULT);
-        int total = rows * cout;
-        jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
+        CHECK(cublasSetStream(h, cudaStreamPerThread) == CUBLAS_STATUS_SUCCESS);
+        {fallback}
     }}
     """
 
