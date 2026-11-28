@@ -1502,6 +1502,28 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "cuBLAS requires CUDA")
+    def test_frontend_batched_matmul_honors_live_provider_override(self):
+        from jittor._runtime.dispatch import override_kernel
+
+        a = torch.ones((2, 3, 4), device="cuda")
+        b = torch.ones((2, 5, 4), device="cuda").transpose(-1, -2)
+        overridden = torch.zeros((2, 3, 5), device="cuda")
+        calls = []
+
+        def provider(left, right, trans_a, trans_b):
+            calls.append((trans_a, trans_b))
+            return overridden
+
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            regular = torch.matmul(a, b)
+            regular.sync()
+            self.assertEqual(regular.location(), "device")
+            np.testing.assert_array_equal(regular.cpu().numpy(), np.full((2, 3, 5), 4.))
+            with override_kernel("batched_matmul", "cuda", provider):
+                self.assertIs(torch.matmul(a, b), overridden)
+            self.assertEqual(calls, [(False, True)])
+
     @unittest.skipUnless(_CUDA_KERNELS, "the batched cuBLAS relay needs CUDA")
     def test_batched_matmul_inference_with_transpose_and_broadcast(self):
         rng = np.random.default_rng(14)

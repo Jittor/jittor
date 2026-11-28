@@ -78,6 +78,7 @@ def test_nested_module_restores_placement_after_body_changes_it(device, fail):
             # A native caller can change its construction scope. The module's
             # own token must restore it on both return and exception paths.
             jt.core._set_tensor_placement(1 - expected[0], 0)
+            jt.core._set_tensor_frontend_type(jt.Var)
             if fail:
                 raise ValueError("changed placement")
             return result
@@ -95,6 +96,7 @@ def test_nested_module_restores_placement_after_body_changes_it(device, fail):
             else:
                 result = self.inner(value)
             assert jt.core._current_tensor_placement() == expected
+            assert type(jt.ones(1)) is torch.Tensor
             return result + 1
 
     with jt.flag_scope(auto_graph_replay=0):

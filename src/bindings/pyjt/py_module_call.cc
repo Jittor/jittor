@@ -1436,7 +1436,7 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
         // (the portable convolution under autocast).
         if (Var* placed = first_placed_module_var(module)) like_var = placed;
     }
-    PyObject* type_token = set_tensor_frontend_type(info.tensor_type);
+    PyObject* type_token = enter_module_tensor_type(info.tensor_type);
     PyObject* placement_token = nullptr;
     auto previous_precision = current_float32_precision_policy();
     int previous_policy = -1;
@@ -1450,7 +1450,7 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
         }
         set_float32_precision_policy({matmul, cudnn});
         if (like_var && like_var->placement.explicit_backend)
-            placement_token = set_tensor_placement_context(
+            placement_token = enter_module_tensor_placement(
                 int(like_var->placement.device.backend), std::max(like_var->device_id, 0));
         previous_policy = get_autograd_policy();
         set_autograd_policy(true, true);
@@ -1463,8 +1463,8 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     } catch (...) {
         if (previous_policy >= 0) set_autograd_policy(previous_policy & 1, previous_policy & 2);
         set_float32_precision_policy(previous_precision);
-        if (placement_token) { reset_tensor_placement_context(placement_token); Py_DECREF(placement_token); }
-        reset_tensor_frontend_type(type_token);
+        if (placement_token) { leave_module_tensor_placement(placement_token); Py_DECREF(placement_token); }
+        leave_module_tensor_type(type_token);
         Py_DECREF(type_token);
         throw;
     }
@@ -1474,8 +1474,8 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     // A module boundary: where a batch is cut for the worker thread.
     if (result && !error_type) runtime_executor().flush_at_module_boundary();
     set_float32_precision_policy(previous_precision);
-    if (placement_token) { reset_tensor_placement_context(placement_token); Py_DECREF(placement_token); }
-    reset_tensor_frontend_type(type_token);
+    if (placement_token) { leave_module_tensor_placement(placement_token); Py_DECREF(placement_token); }
+    leave_module_tensor_type(type_token);
     Py_DECREF(type_token);
     PyErr_Restore(error_type, error_value, error_tb);
     return result;

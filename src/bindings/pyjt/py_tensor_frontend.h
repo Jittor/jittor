@@ -25,6 +25,14 @@ void reset_tensor_frontend_type(PyObject* token);
 PyObject* set_tensor_placement_context(int backend, int device=0);
 // @pyjt(_reset_tensor_placement)
 void reset_tensor_placement_context(PyObject* token);
+
+// Nested module calls often already have the requested context. In that
+// case these return its value as the saved state and restore it only when
+// the module changed it.
+PyObject* enter_module_tensor_type(PyObject* type);
+void leave_module_tensor_type(PyObject* saved);
+PyObject* enter_module_tensor_placement(int backend, int device);
+void leave_module_tensor_placement(PyObject* saved);
 // The placement native constructors (`jt.empty`, `jt.array`, `jt.zeros`)
 // stamp on the Vars they build. `_set_tensor_placement` only reaches Vars
 // built by a binding inside a frontend scope; outside one -- a native

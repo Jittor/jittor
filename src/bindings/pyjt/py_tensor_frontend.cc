@@ -150,6 +150,45 @@ void reset_tensor_placement_context(PyObject* token) {
         throw std::runtime_error("cannot reset tensor placement context");
 }
 
+namespace {
+void restore_context_value(PyObject* variable, PyObject* saved) {
+    PyObjHolder current;
+    if (PyContextVar_Get(variable, nullptr, &current.obj) < 0)
+        throw std::runtime_error("cannot read the module's tensor context");
+    if (current.obj == saved) return;
+    PyObjHolder token(PyContextVar_Set(variable, saved));
+    if (!token.obj) throw std::runtime_error("cannot restore the module's tensor context");
+}
+} // namespace
+
+PyObject* enter_module_tensor_type(PyObject* type) {
+    PyObjHolder current;
+    current.obj = selected_type();
+    if (current.obj == type) return current.release();
+    return set_tensor_frontend_type(type);
+}
+
+void leave_module_tensor_type(PyObject* saved) {
+    if (PyType_Check(saved)) restore_context_value(context_variable(), saved);
+    else reset_tensor_frontend_type(saved);
+}
+
+PyObject* enter_module_tensor_placement(int backend, int device) {
+    if (device == 0 && placement_context_set && backend >= 0 && backend <= int(BackendId::Corex)
+            && device_zero_placements[backend]) {
+        PyObjHolder current;
+        if (PyContextVar_Get(placement_variable(), nullptr, &current.obj) < 0)
+            throw std::runtime_error("cannot read tensor placement context");
+        if (current.obj == device_zero_placements[backend]) return current.release();
+    }
+    return set_tensor_placement_context(backend, device);
+}
+
+void leave_module_tensor_placement(PyObject* saved) {
+    if (PyTuple_CheckExact(saved)) restore_context_value(placement_variable(), saved);
+    else reset_tensor_placement_context(saved);
+}
+
 PyObject* set_construction_placement(int backend, int device) {
     USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
         << "construction placement requires a registered backend id and a non-negative device index";

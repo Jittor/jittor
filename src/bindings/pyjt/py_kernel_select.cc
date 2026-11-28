@@ -332,6 +332,20 @@ bool kernel_op_registered(const char* op) {
     return present != 0;
 }
 
+bool kernel_selects_cublas_fp32(const char* op, PyObject* provider) {
+    if (!registered_ops || !kernel_op_registered(op)) return false;
+    const auto& entries = lookup(op, "cuda");
+    if (entries.size() != 1) return false;
+    const auto& entry = entries.front();
+    if (entry.implementation != provider || entry.runtime_modes
+            || entry.rule.kind != NativeRule::same_float_or_complex
+            || entry.rule.op != "cublas_matmul" || !has_op(entry.rule.op))
+        return false;
+    if (!entry.dtypes) return true;
+    static PyObject* float32 = PyUnicode_InternFromString("float32");
+    return float32 && PySet_Contains(entry.dtypes, float32) == 1;
+}
+
 void kernel_select_bind(PyObject* candidates, PyObject* dtype_name) {
     Py_XINCREF(candidates);
     Py_XINCREF(dtype_name);

@@ -5,6 +5,7 @@ from math import prod
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+from jittor._runtime import dispatch as _matrix_dispatch
 from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from ._amp import prefers_half as _amp_retypes_output_to_half
@@ -733,6 +734,21 @@ def _matmul_fallback(a, b):
             return a @ b
     with _contraction_scope(half_operands=_both_half(a, b)):
         return _matmul_impl(a, b)
+
+
+_BASE_SELECT_KERNEL = select_kernel
+
+
+def _frontend_batched_matmul(a, b, tensor_type):
+    if (select_kernel is _BASE_SELECT_KERNEL
+            and _matrix_dispatch.select_kernel is _BASE_SELECT_KERNEL
+            and _matrix_dispatch.dispatch_context is _matrix_dispatch._NATIVE_DISPATCH_CONTEXT
+            and _matrix_dispatch._NATIVE_SELECT is jt.core._kernel_select):
+        return jt.core._cublas_matmul_frontend(a, b, tensor_type, _cublas_batched_matmul)
+    return None
+
+
+matmul._frontend_batched_matmul = _frontend_batched_matmul
 
 
 def _matmul_impl(a, b):

@@ -19,4 +19,8 @@ PyObject* matmul_contraction_call(PyObject* body, PyObject* fallback,
 PyObject* cublas_matmul_matching_batch(PyObject* a, PyObject* b,
                                       bool trans_a, bool trans_b, float alpha);
 
+// @pyjt(_cublas_matmul_frontend)
+PyObject* cublas_matmul_frontend(PyObject* a, PyObject* b,
+                                PyObject* tensor_type, PyObject* provider);
+
 } // namespace jittor
