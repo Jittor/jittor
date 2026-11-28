@@ -173,7 +173,7 @@ def _adjacent_gate_slices(gate, value):
 
 
 @optional_kernel("nn.gelu_and_mul.inference", "cuda")
-def _gelu_and_mul_cuda(gate, value, *, materialized):
+def _gelu_and_mul_cuda(gate, value, *, dense_gate):
     if (_output_requires_grad(gate, value) or jt.flags.amp_reg
             or gate.dtype != value.dtype or tuple(gate.shape) != tuple(value.shape)
             or _jittor_dtype_name(gate.dtype) not in ("float16", "bfloat16")
@@ -184,7 +184,7 @@ def _gelu_and_mul_cuda(gate, value, *, materialized):
     operands = _adjacent_gate_slices(original_gate, original_value)
     if operands is not None:
         return _silu_and_mul_rows(*operands, gelu=True)
-    if materialized and gate._storage_is_contiguous() and value._storage_is_contiguous():
+    if dense_gate and gate._storage_is_contiguous() and value._storage_is_contiguous():
         width = gate.shape[-1]
         return _silu_and_mul_rows(gate, gate.shape, width, width, 0, value=value, gelu=True)
     return None

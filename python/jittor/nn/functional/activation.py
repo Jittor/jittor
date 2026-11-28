@@ -4,7 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 
 import jittor as jt
-from jittor._runtime.dispatch import try_dispatch
+from jittor._runtime.dispatch import dispatch_context, try_dispatch
 from jittor.nn.functional._layout import channels_last_source
 
 from ... import _arg_policy
@@ -332,11 +332,22 @@ def gelu(x, approximate='none'):
 
 
 def _remember_gelu_operand(x, output, approximate, *, materialized):
-    if (approximate == "tanh" and jt.flags.no_grad and int(x.placement_backend) == 1
-            and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16")
-            and (materialized or not x._storage_is_contiguous() or x._is_pending_contiguous())):
+    if (approximate != "tanh" or not jt.flags.no_grad or jt.flags.amp_reg
+            or _jittor_dtype_name(x.dtype) not in ("float16", "bfloat16")):
+        return output
+    placement = int(x.placement_backend)
+    if placement != 1 and (placement >= 0 or dispatch_context(x).backend != "cuda"):
+        return output
+    dense_gate = materialized
+    if not dense_gate and x._storage_is_contiguous() and x.numel() >= 4096:
+        from jittor.backends.cuda.kernels.nn.gelu_training_cuda import _has_gelu_input_boundary
+
+        # A GEMM already writes its output to memory. The gated kernel can
+        # consume it directly, leaving other pointwise producers to the fuser.
+        dense_gate = _has_gelu_input_boundary(x)
+    if dense_gate or not x._storage_is_contiguous() or x._is_pending_contiguous():
         output._jt_gelu_operand = (
-            x, x._saved_storage_version(), output._saved_storage_version(), materialized,
+            x, x._saved_storage_version(), output._saved_storage_version(), dense_gate,
         )
     return output
 

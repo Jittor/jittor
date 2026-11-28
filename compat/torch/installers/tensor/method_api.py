@@ -2385,7 +2385,7 @@ def _read_broadcast_add_slice(tensor, other):
 
 
 def _try_gelu_mul(activated, value, offer):
-    gate, gate_version, activation_version, materialized = offer
+    gate, gate_version, activation_version, dense_gate = offer
     if (not _owner.jt.flags.no_grad or _autocast_state.order
             or not isinstance(value, _NativeVar) or activated.is_finished
             or gate._saved_storage_version() != gate_version
@@ -2394,7 +2394,7 @@ def _try_gelu_mul(activated, value, offer):
     from jittor._runtime.dispatch import try_dispatch
     from jittor.backends.cuda.kernels.nn import swiglu_cuda  # noqa: F401
 
-    return try_dispatch("nn.gelu_and_mul.inference", gate, value, materialized=materialized)
+    return try_dispatch("nn.gelu_and_mul.inference", gate, value, dense_gate=dense_gate)
 
 
 def _gelu_mul(left, right):
