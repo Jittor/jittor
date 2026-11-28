@@ -178,8 +178,9 @@ __global__ void row_delta(const float* q, const float* k, const float* v,
         float score = 0.f, dp = 0.f;
         #pragma unroll 4
         for (int d = 0; d < D; d++) {
-            score += __fmul_rn(qb[row][d], scale) * kb[col][d];
-            dp += dob[row][d] * vb[col][d];
+            // Recompute the same FP32 dot products the tiled kernels use.
+            score = fmaf(__fmul_rn(qb[row][d], scale), kb[col][d], score);
+            dp = fmaf(dob[row][d], vb[col][d], dp);
         }
         if (MASK) score = masked<MASK>(score, mask, mask_base
             + row * mask.row_stride + col * mask.col_stride);
@@ -378,10 +379,10 @@ __global__ void __launch_bounds__(THREADS) forward(
                 const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
                 #pragma unroll
                 for (int r = 0; r < RPT; r++) {
-                    s[r][0] += qv[r] * kv.x;
-                    s[r][1] += qv[r] * kv.y;
-                    s[r][2] += qv[r] * kv.z;
-                    s[r][3] += qv[r] * kv.w;
+                    s[r][0] = fmaf(qv[r], kv.x, s[r][0]);
+                    s[r][1] = fmaf(qv[r], kv.y, s[r][1]);
+                    s[r][2] = fmaf(qv[r], kv.z, s[r][2]);
+                    s[r][3] = fmaf(qv[r], kv.w, s[r][3]);
                 }
             }
             #pragma unroll
@@ -441,7 +442,7 @@ __global__ void __launch_bounds__(THREADS) forward(
                     const int col = tx + c * 16;
                     const float vv = col < D ? skv[j * D + col] : 0.f;
                     #pragma unroll
-                    for (int r = 0; r < RPT; r++) acc[r][c] += p[r] * vv;
+                    for (int r = 0; r < RPT; r++) acc[r][c] = fmaf(p[r], vv, acc[r][c]);
                 }
             }
         }
@@ -818,8 +819,8 @@ __global__ void __launch_bounds__(THREADS) backward(
                 for (int c = 0; c < 4; c++) {
                     // Match forward's rounded Q scaling without changing the
                     // unscaled shared Q used by the key-gradient product.
-                    s[r][c] += __fmul_rn(qr[r], scale) * kc[c];
-                    dp[r][c] += orr[r] * vc[c];
+                    s[r][c] = fmaf(__fmul_rn(qr[r], scale), kc[c], s[r][c]);
+                    dp[r][c] = fmaf(orr[r], vc[c], dp[r][c]);
                 }
         }
         #pragma unroll
@@ -866,8 +867,8 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const float qv = col < D ? sq[col * QP + i] : 0.f;
                 #pragma unroll
                 for (int r = 0; r < 4; r++) {
-                    gv[r][c] += pk[r] * ov;
-                    gk[r][c] += dk4[r] * qv;
+                    gv[r][c] = fmaf(pk[r], ov, gv[r][c]);
+                    gk[r][c] = fmaf(dk4[r], qv, gk[r][c]);
                 }
             }
         }
@@ -887,7 +888,7 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const int col = lane + c * 16;
                 const float kv = col < D ? sk[col * KP + j] : 0.f;
                 #pragma unroll
-                for (int r = 0; r < 4; r++) gq[r][c] += dsr[r] * kv;
+                for (int r = 0; r < 4; r++) gq[r][c] = fmaf(dsr[r], kv, gq[r][c]);
             }
         }
         #pragma unroll
