@@ -916,6 +916,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         const auto requested_backend = placement.explicit_backend
             ? placement.device.backend : execution_target_backend();
         const auto execution_backend = op->execution_backend_for(requested_backend);
+        const bool storage_view = op->is_storage_view();
         ExecutionBackendScope operation_backend_scope(requested_backend);
         TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
@@ -1037,7 +1038,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             memory_profiler.check();
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->prepare_execution_on(jkl, execution_backend);
+        if (storage_view)
+            jkl.clear();
+        else
+            op->prepare_execution_on(jkl, execution_backend);
         if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1)))
             prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
         bool is_cuda = execution_backend != BackendId::Cpu;
@@ -1123,17 +1127,20 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         exe.last_is_cuda = is_cuda;
         // _JT_SEH_START2;
-        if (execution_backend != BackendId::Cpu)
-            record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
-        else
-            int_division_by_zero.store(0, std::memory_order_relaxed);
-        op->execute_prepared_on(jkl, execution_backend);
-        // An integer `//`, `%` or fmod by zero in a host kernel (see
-        // type/floor_divide_compute.h): torch's CPU kernels raise
-        // "RuntimeError: ZeroDivisionError" for it.
-        if (execution_backend == BackendId::Cpu
-                && PREDICT_BRANCH_NOT_TAKEN(int_division_by_zero.exchange(0, std::memory_order_relaxed)))
-            throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
+        // A storage view shares its allocation above. Transfers, if needed,
+        // keep the operation's attribution, but the view itself has no kernel.
+        if (!storage_view) {
+            if (is_cuda)
+                record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
+            else
+                int_division_by_zero.store(0, std::memory_order_relaxed);
+            op->execute_prepared_on(jkl, execution_backend);
+            // An integer `//`, `%` or fmod by zero in a host kernel (see
+            // type/floor_divide_compute.h) must surface at that operation.
+            if (!is_cuda && PREDICT_BRANCH_NOT_TAKEN(
+                    int_division_by_zero.exchange(0, std::memory_order_relaxed)))
+                throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
+        }
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu
