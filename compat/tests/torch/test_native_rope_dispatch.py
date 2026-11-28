@@ -5,6 +5,8 @@ import pytest
 import torch
 
 import jittor as jt
+from _helpers.capability import require_accelerator
+from jittor._runtime.step_capture import tracing
 from jittor.ops.concatenation import _detect_rotate_half_source
 
 
@@ -42,3 +44,40 @@ def test_rotary_operand_recognition():
         factor_t = jt.core._neox_rope_cosine(scaled_t, qt)
         assert factor_t is not None and factor_t.is_cuda
         np.testing.assert_array_equal(factor_t.cpu().numpy(), factors.reshape(1, 1, 1, 8))
+
+
+@pytest.mark.cuda
+def test_capture_rotary_concat_reads_live_strided_inputs():
+    require_accelerator("cuda")
+    rng = np.random.default_rng(137)
+    values = rng.normal(size=(2, 23, 5, 48)).astype("float32")
+    cosine = rng.normal(size=(2, 1, 20, 48)).astype("float32")
+    sine = rng.normal(size=(2, 1, 20, 48)).astype("float32")
+    producers = []
+
+    def forward(x, cos, sin):
+        prefix, tail = x.transpose(1, 2).split((3, 20), dim=2)
+        lower, upper = tail.chunk(2, dim=-1)
+        rotated = tail * cos + torch.cat((-upper, lower), dim=-1) * sin
+        output = torch.cat((prefix, rotated), dim=-2)
+        if tracing():
+            producers.append((output._producer_name(), len(output._inputs())))
+        return output
+
+    def inputs(device, scale):
+        return [torch.tensor(t, device=device) for t in (values * scale, cosine * scale, sine)]
+
+    with torch.no_grad(), jt.flag_scope(backend_fallback="error", auto_graph_replay=0):
+        step = torch.compile(forward, mode="reduce-overhead", dynamic=False)
+        for scale in (1, 2):
+            arguments = inputs("cuda", scale)
+            jt.sync(arguments, device_sync=True)
+            for _ in range(6):
+                actual = step(*arguments)
+                actual.sync()
+            expected = forward(*inputs("cpu", scale))
+            assert actual.is_cuda
+            assert actual.is_contiguous()
+            np.testing.assert_allclose(actual.cpu().numpy(), expected.numpy(), rtol=2e-6, atol=2e-6)
+        assert producers and all(item == ("code", 4) for item in producers)
+        assert step.stats["graph"] > 0

@@ -261,7 +261,88 @@ def _neox_rope_supported(x, cos, sin):
 @optional_kernel("nn.neox_rope.inference", "cuda", supports=_neox_rope_supported)
 def _neox_rope_cuda(x, cos, sin):
     """Fused vectorized CUDA NeoX RoPE: ``x * cos + rotate_half(x) * sin``."""
-    return jt.core._neox_rope(x, cos, sin, _neox_rope_source)
+    out = jt.core._neox_rope(x, cos, sin, _neox_rope_source)
+    if out is not None and jt.flags.keep_graph == 2 and _jittor_dtype_name(x.dtype) == "float32":
+        # The CodeOp inputs include the original broadcast factors. Keep the
+        # logical rotation input as well, so concatenation can read its view
+        # directly if the rotation has not executed.
+        _, cosine, sine = out._inputs()
+        operands = x, cosine, sine
+        versions = tuple(value._saved_storage_version() for value in operands)
+        out._jt_pending_neox_rope = (out.var_ptr, operands, versions)
+    return out
+
+
+@optional_kernel("nn.neox_rope_concat.inference", "cuda", dtypes=("float32",))
+def _neox_rope_concat(prefix, rotated):
+    tag = getattr(rotated, "_jt_pending_neox_rope", None)
+    if tag is None or rotated.is_finished or tag[0] != rotated.var_ptr:
+        return None
+    _, rope_operands, versions = tag
+    x, cosine, sine = rope_operands
+    if (prefix.ndim != 4 or prefix.dtype != rotated.dtype
+            or tuple(t._saved_storage_version() for t in rope_operands) != versions
+            or prefix.shape[:2] != x.shape[:2] or prefix.shape[3] != x.shape[3]
+            or _output_requires_grad(prefix, x, cosine, sine)):
+        return None
+    prefix_count, x_count, width = (int(prefix.shape[2]), int(x.shape[2]), int(x.shape[3]))
+    if not prefix_count or any(size <= 0 for size in prefix.shape):
+        return None
+    layouts = [_interleaved_rope_storage(t) for t in (prefix, x)]
+    if any(layout is None for layout in layouts):
+        return None
+    operands, strides, offsets = zip(*layouts)
+    prefix_strides, x_strides = (s or tuple(t._storage_strides())
+                                 for s, t in zip(strides, (prefix, x)))
+    factor_shape = (1,) * (4 - cosine.ndim) + tuple(cosine.shape)
+    result_shape = (*x.shape[:2], prefix_count + x_count, width)
+    header, launch = _neox_concat_source(result_shape, prefix_count, prefix_strides, x_strides,
+                                         offsets, factor_shape)
+    return jt.code(result_shape, x.dtype, [*operands, cosine, sine],
+                   cuda_header=header, cuda_src=launch, backend="cuda")
+
+
+@lru_cache(maxsize=128)
+def _neox_concat_source(shape, prefix_count, prefix_strides, x_strides, offsets, factors):
+    _, heads, length, width = shape
+    half = width // 2
+    header = f"""
+    __global__ static void neox_rope_concat(const float* prefix, const float* x,
+            const float* cos, const float* sin, float* out, int64_t count) {{
+        const int64_t stride = int64_t(blockDim.x) * gridDim.x;
+        for (int64_t i = int64_t(blockIdx.x) * blockDim.x + threadIdx.x; i < count; i += stride) {{
+            int j = i % {half};
+            int64_t row = i / {half};
+            int token = row % {length};
+            int head = row / {length} % {heads};
+            int64_t batch = row / {length * heads};
+            float* dst = out + row * {width} + j;
+            if (token < {prefix_count}) {{
+                const float* src = prefix + {offsets[0]} + batch * {prefix_strides[0]}LL
+                    + head * {prefix_strides[1]}LL + token * {prefix_strides[2]}LL + j;
+                dst[0] = src[0];
+                dst[{half}] = src[{half}];
+            }} else {{
+                token -= {prefix_count};
+                const float* src = x + {offsets[1]} + batch * {x_strides[0]}LL
+                    + head * {x_strides[1]}LL + token * {x_strides[2]}LL + j;
+                const int64_t factor = (batch * {int(factors[0] > 1)} * {factors[1] * factors[2]}LL
+                    + head * {int(factors[1] > 1)} * {factors[2]}LL
+                    + token * {int(factors[2] > 1)}) * {width} + j;
+                float lo = src[0], hi = src[{half}];
+                dst[0] = lo * cos[factor] + (-hi) * sin[factor];
+                dst[{half}] = hi * cos[factor + {half}] + lo * sin[factor + {half}];
+            }}
+        }}
+    }}
+    """
+    launch = """
+    int64_t count = out0->num / 2;
+    int blocks = (int)std::min<int64_t>((count + 127) / 128, 65535);
+    neox_rope_concat<<<blocks, 128>>>(in0_p, in1_p, in2_p, in3_p, out0_p, count);
+    CHECK(0 == cudaGetLastError());
+    """
+    return header, launch
 
 
 def _neox_rope_source(d, float32, seq_major, c0_gt1, c1_gt1, c2_gt1):

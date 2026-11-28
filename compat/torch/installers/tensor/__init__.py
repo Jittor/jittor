@@ -806,6 +806,15 @@ def cat(tensors, dim=0, out=None, axis=None):
 
 def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
+        if (dim in (2, -2) and jt.flags.keep_graph == 2 and jt.flags.no_grad
+                and not jt.flags.amp_reg and type(tensors) in (list, tuple) and len(tensors) == 2
+                and isinstance(tensors[1], jt.Var) and tensors[1].ndim == 4
+                and hasattr(tensors[1], "_jt_pending_neox_rope") and isinstance(tensors[0], jt.Var)):
+            from jittor._runtime.dispatch import try_dispatch
+
+            fused = try_dispatch("nn.neox_rope_concat.inference", *tensors)
+            if fused is not None:
+                return fused
         fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
             return _maybe_tag_rotate_half(_cat_grad_result(fast, tensors), tensors, dim)
