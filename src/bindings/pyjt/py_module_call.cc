@@ -277,7 +277,7 @@ const TypeInfo& info_of(PyTypeObject* type) {
             && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
     };
     info.rms_named = (ends_with("RMSNorm") && !ends_with("RMSNormGated"))
-        || ends_with("T5LayerNorm");
+        || (info.prefer_forward && ends_with("LayerNorm"));
     try {
         on_type_collected((PyObject*)type, forget_type_info);
     } catch (...) {
@@ -1077,6 +1077,9 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
+        return nullptr;
+    if (PyDict_GetItemString(dict, "bias") != nullptr
+            || PyDict_GetItemString(dict, "normalized_shape") != nullptr)
         return nullptr;
     double epsilon = PyFloat_AsDouble(eps);
     if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }

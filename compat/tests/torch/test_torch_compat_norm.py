@@ -347,10 +347,9 @@ class TestLayerNorm(Base):
             weight = t(weight_np, device="cuda")
             bias = t(bias_np, device="cuda")
             self.assertIsNone(_layer_norm_no_grad_cuda(
-                x, (1536,), weight, bias, 1e-6))
+                x, (1536,), weight, bias, 1e-6, allow_bfloat16=False))
             out = _layer_norm_no_grad_cuda(
-                x, (1536,), weight, bias, 1e-6,
-                allow_bfloat16=True)
+                x, (1536,), weight, bias, 1e-6)
             value = x.float32()
             mean = value.mean(dim=-1, keepdim=True)
             variance = ((value - mean) * (value - mean)).mean(

@@ -183,8 +183,10 @@ def _standard_rms_norm(self, args, kwargs):
         and len(getattr(self, "dim", ())) == 1
     )
     is_t5_rms = (
-        cls_name in ("T5LayerNorm", "MT5LayerNorm", "UMT5LayerNorm")
+        cls_name.endswith("LayerNorm")
         and "variance_epsilon" in self.__dict__
+        and "bias" not in self.__dict__
+        and "normalized_shape" not in self.__dict__
     )
     is_gemma4_rms = (
         cls_name == "Gemma4RMSNorm"
