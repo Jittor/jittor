@@ -28,7 +28,10 @@ def _silu_and_mul_cuda(x):
     """Return fused ``silu(x[..., :d]) * x[..., d:]`` for CUDA inference."""
     shape = tuple(int(size) for size in x.shape)
     gated_size = shape[-1] // 2
-    output_shape = shape[:-1] + (gated_size,)
+    return _silu_and_mul_rows(x, shape[:-1] + (gated_size,), gated_size, shape[-1], 0)
+
+
+def _silu_and_mul_rows(x, output_shape, gated_size, pitch, offset):
     cuda_src = cached_source(r"""
     __global__ static void silu_and_mul_vec16(
             const in0_type* __restrict__ x, out0_type* __restrict__ y,
@@ -43,7 +46,7 @@ def _silu_and_mul_cuda(x):
         for (; index < total_vecs; index += stride) {
             int64_t row = index / GATED_VECS;
             int col = (int)(index - row * GATED_VECS);
-            int64_t base = row * INPUT_VECS + col;
+            int64_t base = row * INPUT_VECS + col + %(offset)dLL / VEC;
             uint4 g_raw = xv[base];
             uint4 v_raw = xv[base + GATED_VECS];
             uint4 out_raw;
@@ -68,7 +71,7 @@ def _silu_and_mul_cuda(x):
         for (; index < total; index += stride) {
             int dim = (int)(index %% %(gated_size)d);
             int64_t row = index / %(gated_size)d;
-            int64_t input_base = row * %(input_size)d;
+            int64_t input_base = row * %(input_size)d + %(offset)dLL;
             float gate = static_cast<float>(x[input_base + dim]);
             float value = static_cast<float>(
                 x[input_base + %(gated_size)d + dim]);
@@ -83,6 +86,7 @@ def _silu_and_mul_cuda(x):
     int threads = 256;
     constexpr int VEC = 16 / sizeof(in0_type);
     if (total && VEC > 1 && (%(gated_size)d %% VEC == 0)
+            && (%(input_size)d %% VEC == 0) && (%(offset)d %% VEC == 0)
             && ((((size_t)in0_p | (size_t)out0_p) & 15) == 0)) {
         int64_t total_vecs = total / VEC;
         int blocks = (int)((total_vecs + threads - 1) / threads);
@@ -96,10 +100,57 @@ def _silu_and_mul_cuda(x):
     CHECK(0 == cudaGetLastError());
     """, {
         "gated_size": gated_size,
-        "input_size": shape[-1],
+        "input_size": pitch,
+        "offset": offset,
     })
     return _stop_grad_outputs(
         jt.code(output_shape, x.dtype, [x], cuda_src=cuda_src))
+
+
+@optional_kernel("nn.silu_and_mul.split", "cuda")
+def _silu_and_mul_split_cuda(gate, value):
+    """Consume two adjacent equal-width slices of a pitched CUDA matrix."""
+    if _output_requires_grad(gate, value) or jt.flags.amp_reg:
+        return None
+    shape = tuple(gate.shape)
+    if (len(shape) < 2 or shape != tuple(value.shape) or any(n <= 0 for n in shape)
+            or gate.dtype != value.dtype
+            or _jittor_dtype_name(gate.dtype) not in ("float16", "bfloat16")
+            or gate._storage_is_contiguous() or value._storage_is_contiguous()):
+        return None
+    # A common live view owner makes the offsets comparable.
+    owner = gate._view_base_object()
+    other = value._view_base_object()
+    if owner is None or other is None or owner.var_ptr != other.var_ptr:
+        return None
+    strides = tuple(gate._storage_strides())
+    if strides != tuple(value._storage_strides()) or strides[-1] != 1:
+        return None
+    width = shape[-1]
+    if value._storage_offset() - gate._storage_offset() != width:
+        return None
+
+    from .fused_attention_f32_cuda import _dense_storage_layout
+
+    layout = _dense_storage_layout(gate)
+    if layout is None:
+        return None
+    base, _, offset = layout
+    offset_end = offset + sum((n - 1) * s for n, s in zip(shape, strides)) + width
+    if offset_end >= int(base.numel()):
+        return None
+    pitch = None
+    rows = 1
+    for dim, stride in reversed(tuple(zip(shape[:-1], strides[:-1]))):
+        if dim > 1:
+            if pitch is None:
+                pitch = stride
+            if stride != pitch * rows:
+                return None
+        rows *= dim
+    if pitch is None or pitch < 2 * width:
+        return None
+    return _silu_and_mul_rows(base, shape, width, pitch, offset)
 
 
 __all__ = []

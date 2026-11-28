@@ -2308,7 +2308,33 @@ def _tag_rope_sin_mul(left, right, out):
     return out
 
 
+def _try_split_silu_mul(activated, value, tag):
+    gate, gate_ptr, gate_version, activation_ptr, activation_version = tag
+    if (not isinstance(value, _NativeVar) or _autocast_state.order
+            or gate.var_ptr != gate_ptr or gate._saved_storage_version() != gate_version
+            or activated.var_ptr != activation_ptr
+            or activated._saved_storage_version() != activation_version):
+        return None
+    from jittor._runtime.dispatch import try_dispatch
+    from jittor.backends.cuda.kernels.nn import swiglu_cuda  # noqa: F401
+
+    return try_dispatch("nn.silu_and_mul.split", gate, value)
+
+
+def _split_silu_mul(left, right):
+    tag = getattr(left, "_jt_silu_operand", None)
+    if tag is not None:
+        return _try_split_silu_mul(left, right, tag)
+    tag = getattr(right, "_jt_silu_operand", None)
+    if tag is not None:
+        return _try_split_silu_mul(right, left, tag)
+    return None
+
+
 def _tensor_mul(self, other):
+    gated = _split_silu_mul(self, other)
+    if gated is not None:
+        return gated
     scalar = _cuda_scalar_multiply(self, other)
     if scalar is not None:
         return scalar
@@ -2324,6 +2350,9 @@ def _tensor_mul(self, other):
 
 
 def _tensor_rmul(self, other):
+    gated = _split_silu_mul(other, self)
+    if gated is not None:
+        return gated
     scalar = _cuda_scalar_multiply(self, other)
     if scalar is not None:
         return scalar

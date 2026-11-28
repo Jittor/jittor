@@ -337,6 +337,18 @@ def sigmoid(x):
     return jt.sigmoid(x)
 
 
+def _remember_silu_operand(x, output):
+    if (jt.flags.no_grad and int(x.placement_backend) == 1
+            and not x._storage_is_contiguous()):
+        from jittor._runtime.step_capture import tracing
+        if tracing():
+            output._jt_silu_operand = (
+                x, x.var_ptr, x._saved_storage_version(),
+                output.var_ptr, output._saved_storage_version(),
+            )
+    return output
+
+
 def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
     r''' Applies the element-wise function:
 
@@ -365,7 +377,7 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     from jittor.backends.cuda.kernels.nn.silu_cuda import _silu_no_grad_cuda  # noqa: F401
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
-        return fast
+        return fast if inplace else _remember_silu_operand(x, fast)
     if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
         # SiLU rounds once at its public boundary. A narrow sigmoid followed
         # by a narrow multiply adds a rounding step absent from the opmath
@@ -373,7 +385,8 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         dtype = x.dtype
         with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
             wide = x.float32()
-            return (wide * wide.sigmoid()).cast(dtype)
+            result = (wide * wide.sigmoid()).cast(dtype)
+        return result if inplace else _remember_silu_operand(x, result)
     return x * x.sigmoid()
 
 
