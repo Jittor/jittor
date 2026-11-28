@@ -102,3 +102,48 @@ def roi_align(input, boxes, output_size, spatial_scale=1.0, sampling_ratio=-1, a
         if result is not None:
             return result
         return _roi_align_composite(input, rois, *args)
+
+
+def nms(boxes, scores, iou_threshold):
+    """Keep non-overlapping boxes in decreasing score order."""
+    return batched_nms(boxes, scores, None, iou_threshold)
+
+
+def batched_nms(boxes, scores, idxs, iou_threshold):
+    """Apply greedy NMS independently to each category."""
+    if boxes.ndim != 2 or boxes.shape[1] != 4 or tuple(scores.shape) != (boxes.shape[0],):
+        raise ValueError("NMS expects boxes with shape [N, 4] and scores with shape [N]")
+    if dtype_name(boxes.dtype) != dtype_name(scores.dtype):
+        raise TypeError("NMS boxes and scores must have the same dtype")
+    if idxs is not None and (tuple(idxs.shape) != tuple(scores.shape)
+                             or dtype_name(idxs.dtype) not in ("int32", "int64")):
+        raise ValueError("batched_nms expects integer categories with shape [N]")
+    with tensor_frontend(type(boxes), like=boxes), jt.no_grad():
+        if not boxes.shape[0]:
+            return boxes.new_empty((0,), dtype="int64")
+        if idxs is None:
+            idxs = jt.zeros_like(scores, dtype="int32")
+        threshold = float(iou_threshold)
+        from jittor.backends.cuda.kernels.misc import batched_nms_cuda  # noqa: F401
+
+        result = try_dispatch("vision.batched_nms", boxes, scores, idxs, threshold)
+        if result is not None:
+            return result
+        order, _ = jt.argsort(scores, descending=True, stable=True)
+        # Use a separate integer group key so large category IDs stay exact.
+        sorted_classes = idxs[order]
+        sorted_boxes = boxes[order]
+        width = "max((Tx)0, min(@x(i,2), @x(j,2)) - max(@x(i,0), @x(j,0)))"
+        height = "max((Tx)0, min(@x(i,3), @x(j,3)) - max(@x(i,1), @x(j,1)))"
+        area = "(@x({i},2)-@x({i},0))*(@x({i},3)-@x({i},1))"
+        inter = f"({width}*{height})"
+        overlap = f"{inter}/({area.format(i='i')}+{area.format(i='j')}-{inter})"
+        # Each category compacts in score order and the final sort restores the
+        # global score order, including stable ties.
+        keep_ranks = []
+        for category in jt.unique(sorted_classes):
+            rows = jt.where(sorted_classes == category)[0]
+            selected = jt.candidate(sorted_boxes[rows], f"{overlap}>{threshold!r}")
+            keep_ranks.append(rows[selected])
+        _, ranks = jt.argsort(jt.concat(keep_ranks), stable=True)
+        return order[ranks].int64()

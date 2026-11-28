@@ -599,10 +599,24 @@ def _roi_align(*args, **kwargs):
     return roi_align(*args, **kwargs)
 
 
+def _nms(*args, **kwargs):
+    from jittor.compat.torch.vision import nms
+
+    return nms(*args, **kwargs)
+
+
+def _batched_nms(*args, **kwargs):
+    from jittor.compat.torch.vision import batched_nms
+
+    return batched_nms(*args, **kwargs)
+
+
 class _OpsModule(types.ModuleType):
     __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     box_convert = staticmethod(_box_convert)
     roi_align = staticmethod(_roi_align)
+    nms = staticmethod(_nms)
+    batched_nms = staticmethod(_batched_nms)
 
 
 class _ModelsModule(types.ModuleType):
