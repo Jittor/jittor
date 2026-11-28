@@ -592,6 +592,18 @@ def _detached_values(data, Var, dtypes):
     return data
 
 
+def _cuda_scalar_sequence(data, Var, device):
+    if type(data) not in (list, tuple) or not data or not isinstance(data[0], Var):
+        return False
+    first = data[0]
+    source_device = first.device
+    if not _device_is_cuda(device) or source_device.type not in ("cpu", "cuda"):
+        return False
+    source_dtype = first.dtype
+    return all(isinstance(item, Var) and item.numel() == 1
+               and item.device == source_device and item.dtype == source_dtype for item in data)
+
+
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
@@ -618,6 +630,12 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         storage_dtype = ds if ds in numpy_dtypes else "float32" if ds == "bfloat16" else None
         if isinstance(data, jt.Var):
             v = jt.Var.copy(data).detach()
+        elif not kw and _cuda_scalar_sequence(data, Var, device):
+            # Concatenate one-element tensors without observing their device
+            # values on the host. The final constructor still detaches.
+            with jt.no_grad(), tensor_frontend(Var, device=data[0].device, like=data[0]):
+                parts = [item.reshape((1,)) for item in data]
+                v = parts[0].clone() if len(parts) == 1 else cat(parts)
         elif isinstance(data, (_np.ndarray, _np.generic)):
             # NumPy input carries its own dtype; explicit conversion happens
             # before the native array constructor can narrow it.
