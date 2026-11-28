@@ -30,6 +30,12 @@ def _norm_except_dim(value, dim):
 
 
 def _normalized_weight(direction, gain, dim):
+    if dim == 0:
+        from jittor.backends.cuda.kernels.nn.weight_norm_cuda import weight_norm_rows
+
+        result = weight_norm_rows(direction, gain)
+        if result is not None:
+            return result
     return direction * (gain / _norm_except_dim(direction, dim))
 
 

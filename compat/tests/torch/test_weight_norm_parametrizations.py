@@ -1,5 +1,6 @@
 """Checkpoint and gradient contracts for parametrized weight normalization."""
 
+import numpy as np
 import pytest
 import torch
 
@@ -54,6 +55,30 @@ class TestWeightNormParametrizations:
             layer.weight = torch.tensor([[4.0, 3.0]], device=device)
             originals.original0.copy_(torch.tensor(10.0, device=device))
         torch.testing.assert_close(layer.weight, torch.tensor([[8.0, 6.0]], device=device))
+
+    def test_fp32_inference_weight_rounding(self, device):
+        rng = np.random.default_rng(23)
+        direction = (rng.integers(-128, 129, size=(4, 37, 9)).astype(np.float32) / 32)
+        gain = np.array([0.7, -1.1, 1.9, 3.3], dtype=np.float32).reshape(4, 1, 1)
+        layer = torch.nn.Conv1d(37, 4, 9, bias=False)
+        torch.nn.utils.parametrizations.weight_norm(layer)
+        layer.to(device)
+        originals = layer.parametrizations.weight
+        with torch.no_grad():
+            originals.original0.copy_(torch.from_numpy(gain).to(device))
+            originals.original1.copy_(torch.from_numpy(direction).to(device))
+            actual = layer.weight
+            assert actual.device.type == torch.device(device).type
+            actual = actual.cpu().numpy()
+
+        # These dyadic squares and their sums fit exactly in FP32, so the
+        # reference is independent of reduction order.
+        norm = np.sqrt((direction * direction).sum(axis=(1, 2), keepdims=True))
+        if torch.device(device).type == "cuda":
+            expected = (gain * direction) * (np.float32(1) / norm)
+            np.testing.assert_array_equal(actual, expected)
+        else:
+            np.testing.assert_allclose(actual, direction * (gain / norm), rtol=2e-7, atol=0)
 
 
 instantiate_device_type_tests(TestWeightNormParametrizations, globals())
