@@ -151,6 +151,22 @@ Var* dynamic_where_condition(Op* op) {
     return nullptr;
 }
 
+bool include_dynamic_where(HostPrefix& prefix, Op* op, Var* condition) {
+    if (!op->executes_on_accelerator() || condition->num < 0) return false;
+    for (Var* output : op->outputs()) {
+        if (!prefix.boundaries.insert(output).second) continue;
+        // Compaction allocates for the capacity of the mask. Retain nested
+        // coordinate outputs too, so their extents are checked before replay
+        // even when the outer selection returns the same number of entries.
+        if (condition->num > (std::numeric_limits<int64>::max()
+                - prefix.bytes) / output->dsize()) return false;
+        prefix.bytes += condition->num * output->dsize();
+        prefix.roots.push_back(output);
+        prefix.dynamic_roots.push_back(output);
+    }
+    return true;
+}
+
 bool collect_dynamic_prefix(Var* root, HostPrefix& prefix,
                             std::unordered_set<Var*>& seen) {
     vector<Var*> stack{root};
@@ -169,10 +185,16 @@ bool collect_dynamic_prefix(Var* root, HostPrefix& prefix,
         }
         Op* op = value->input();
         if (value->is_finished() || !op) continue;
-        const bool storage_view = op->is_storage_view();
+        if (Var* condition = dynamic_where_condition(op)) {
+            if (!include_dynamic_where(prefix, op, condition)) return false;
+            stack.push_back(condition);
+            continue;
+        }
+        const bool read_only_optimizer = op->is_storage_view()
+            || (op->is_op(op_ids::getitem()) && !op->flag(OpFlags::_grads));
         if (!op->executes_on_accelerator() || op->flag(OpFlags::_manual_device)
-                || (op->flag(OpFlags::_has_gopt) && !storage_view) || !host_prefix_builtin(op)
-                || string(op->name()) == "setitem") {
+                || (op->flag(OpFlags::_has_gopt) && !read_only_optimizer) || !host_prefix_builtin(op)
+                || op->is_op(op_ids::setitem())) {
             LOGvv << "Dynamic-prefix operator declined" << op->name()
                   << "accelerator" << op->executes_on_accelerator()
                   << "manual" << op->flag(OpFlags::_manual_device)
@@ -196,20 +218,9 @@ unique_ptr<HostPrefix> find_host_prefix(const vector<VarHolder*>& roots, bool dy
         Op* op = value->input();
         if (value->is_finished() || !op) continue;
         if (Var* condition = dynamic_where_condition(op)) {
-            if (!dynamic) return nullptr;
-            if (!collect_dynamic_prefix(condition, *prefix, dynamic_seen))
+            if (!dynamic || !collect_dynamic_prefix(condition, *prefix, dynamic_seen)
+                    || !include_dynamic_where(*prefix, op, condition))
                 return nullptr;
-            // Where allocates for the maximum possible number of indices,
-            // rather than just the current number of true entries.
-            for (Var* output : op->outputs()) {
-                if (!prefix->boundaries.insert(output).second) continue;
-                const int64 count = condition->num;
-                if (count < 0 || count > (std::numeric_limits<int64>::max()
-                        - prefix->bytes) / output->dsize()) return nullptr;
-                prefix->bytes += count * output->dsize();
-                prefix->roots.push_back(output);
-                prefix->dynamic_roots.push_back(output);
-            }
             continue;
         }
         auto* copy = dynamic_cast<DeviceCopyOp*>(op);
@@ -325,10 +336,8 @@ int64 step_shape_prefix_create(const vector<VarHolder*>& roots) {
         Op* op = value->input();
         if (value->is_finished() || !op) continue;
         if (Var* condition = dynamic_where_condition(op)) {
-            if (!collect_dynamic_prefix(condition, *prefix, conditions)) return -1;
-            for (Var* output : op->outputs())
-                if (prefix->boundaries.insert(output).second)
-                    prefix->dynamic_roots.push_back(output);
+            if (!collect_dynamic_prefix(condition, *prefix, conditions)
+                    || !include_dynamic_where(*prefix, op, condition)) return -1;
             continue;
         }
         for (Var* input : op->inputs()) stack.push_back(input);

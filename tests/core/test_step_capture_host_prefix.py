@@ -150,6 +150,34 @@ def test_dynamic_index_prefix_requires_explicit_opt_in_and_read_only_dependencie
 
 
 @pytest.mark.cuda
+def test_step_replays_nested_dynamic_indices_and_checks_inner_extent():
+    require_accelerator('cuda')
+    with jt.no_grad(), jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback='error'):
+        def step(values, mask):
+            selected = values[jt.where(mask)[0]]
+            return selected[jt.where(selected > 0)[0]] * 3
+
+        compiled = jt.capture_step(step)
+        axis = np.arange(192)
+
+        def verify(values, mask):
+            selection = values[mask]
+            result = compiled(array(values, 1), array(mask, 1) > 0)
+            np.testing.assert_array_equal(result.numpy(), selection[selection > 0] * 3)
+
+        for offset in range(6):
+            verify((axis - 95.5) * (offset + 1), axis % 2 == offset % 2)
+        assert compiled.refused is None
+        assert compiled.stats['graph'] > 0, compiled._graph_refused
+
+        graphs = compiled.stats['graph']
+        # Both calls return 48 values. Only the first compaction changes size.
+        verify(axis - 95.5, (axis % 2 == 0) & (axis > 0))
+        assert compiled.stats['graph'] == graphs
+        assert 'dynamic prefix changed' in compiled.last_invalidated
+
+
+@pytest.mark.cuda
 def test_dynamic_indices_with_changing_cpu_scale_preserve_queued_training_steps():
     require_accelerator('cuda')
     with jt.flag_scope(use_cuda=1, auto_graph_replay=0, backend_fallback='error'):

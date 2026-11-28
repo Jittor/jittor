@@ -210,6 +210,41 @@ class TestCompileReplayCuda(_Case, unittest.TestCase):
             self.assertIn("read a value back", compiled.refused)
             self.assertEqual(compiled.stats["replayed"], 0)
 
+    def test_step_guards_a_read_from_compacted_constant_metadata(self):
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            indices = torch.arange(192, device=self.device)
+            mask = (indices % 2) == 0
+            values = torch.tensor([1], device=self.device)
+
+            def apply(x):
+                return x + sum(indices[mask].tolist())
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for _ in range(6):
+                self.assertEqual(compiled(values).item(), 9121)
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0)
+            mask.copy_(~mask)
+            self.assertEqual(compiled(values).item(), 9217)
+            self.assertEqual(compiled.stats["captured"], 2)
+
+    def apply(values, mask):
+                result = values + 1
+                result[mask, :] = update
+                return result
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for offset in range(6):
+                values = torch.full((4, 2), float(offset), device=self.device)
+                first_row = offset % 2 == 0
+                selection = np.array([first_row, True, not first_row, False])
+                mask = torch.tensor(selection, device=self.device)
+                expected = np.full((4, 2), offset + 1.)
+                expected[selection] = [[7., 8.], [9., 10.]]
+                np.testing.assert_array_equal(compiled(values, mask).cpu().numpy(), expected)
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0)
+
     device = "cuda"
 
     def test_the_step_is_recorded_as_one_launch(self):

@@ -2438,7 +2438,7 @@ static PyObject* collect_step_readback_guards(Var* var, int64 epoch,
     static const std::unordered_set<string> pure_ops{
         "array", "unary", "binary", "ternary", "broadcast_to", "reduce",
         "reindex", "reshape", "transpose", "getitem", "index", "clone",
-        "copy", "where", "contiguous", "cub_cumsum",
+        "copy", "where", "contiguous", "cub_cumsum", "cub_where",
     };
     while (!stack.empty()) {
         auto* value = stack.back();
