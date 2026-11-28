@@ -1707,6 +1707,7 @@ def _install_module_methods(nn, registry=None):
         "layer_norm_inference": _layer_norm_cuda._layer_norm_no_grad_cuda.__wrapped__,
         "layer_norm_source": _layer_norm_cuda._affine_source,
         "layer_norm_weight_only_source": _layer_norm_cuda._weight_only_source,
+        "residual_layer_norm_source": _layer_norm_cuda._residual_layer_norm_source,
         "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
     }
     jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,

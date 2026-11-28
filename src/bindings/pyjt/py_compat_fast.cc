@@ -15,6 +15,7 @@
 #include "ops/composite/fuse_transpose_op.h"
 #include "mem/allocator.h"
 #include <array>
+#include <cmath>
 #include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -1827,7 +1828,7 @@ PyObject* jt_concat(PyObject* tensors, int64 dim) {
 }
 
 PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
-    if (Py_TYPE(self) != &PyjtVarHolder.ht_type) return not_implemented();
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
     if (!clamp_scalar(min_v) || !clamp_scalar(max_v)) return not_implemented();
     if (min_v == Py_None && max_v == Py_None) return not_implemented();
     // Read as the bindings `_clamp_cpu` calls would read it.
@@ -1837,6 +1838,19 @@ PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
     bool is_float = clamp_float_dtype(dtype);
     if (!is_float && !clamp_int_dtype(dtype)) return not_implemented();
     if (kernel_op_registered("clamp.scalar")) return not_implemented();
+
+    // Preserve the original subclass dispatch unless the finite CUDA scalar
+    // lowering below can implement the whole call.
+    auto finite_bound = [](PyObject* bound) {
+        return bound == Py_None || PyLong_CheckExact(bound)
+            || std::isfinite(PyFloat_AS_DOUBLE(bound));
+    };
+    const bool finite_cuda = is_float && no_grad && !amp_reg
+        && construction_target_backend(x) == BackendId::Cuda
+        && binary_dtype_infer(ns_maximum, dtype, dtype) == dtype
+        && finite_bound(min_v) && finite_bound(max_v);
+    if (!finite_cuda && Py_TYPE(self) != &PyjtVarHolder.ht_type)
+        return not_implemented();
 
     PyTensorFrontendScope scope(self, nullptr, 0, false);
     if (!is_float && PyLong_CheckExact(min_v) && PyLong_CheckExact(max_v)) {
@@ -1853,6 +1867,20 @@ PyObject* fast_clamp(PyObject* self, PyObject* min_v, PyObject* max_v) {
     }
     VarPtr value(x);
     VarPtr low, high;
+    // Keep a finite scalar clamp in the elementwise CUDA group. The value
+    // is the second argument so equality, including signed zero, keeps it.
+    // A finite bound also lets minimum/maximum propagate a NaN from x.
+    if (finite_cuda) {
+        if (min_v != Py_None) {
+            low = clamp_bound(min_v, dtype);
+            value = make_clamp_binary(low.ptr, value.ptr, ns_maximum);
+        }
+        if (max_v != Py_None) {
+            high = clamp_bound(max_v, dtype);
+            value = make_clamp_binary(high.ptr, value.ptr, ns_minimum);
+        }
+        return to_py_object<VarHolder*>(new VarHolder(move(value)));
+    }
     if (min_v != Py_None) low = clamp_prepare(value, min_v);
     if (max_v != Py_None) high = clamp_prepare(value, max_v);
     if (low) value = clamp_select(value.ptr, low.ptr, true);
