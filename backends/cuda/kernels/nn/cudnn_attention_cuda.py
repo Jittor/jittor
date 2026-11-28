@@ -245,11 +245,15 @@ def _physical(t):
     if not isinstance(t, jt.Var):
         return t, False
     if tuple(t._transpose_view_axes()) == (0, 2, 1, 3):
-        return t._transpose_view_source(), True
+        source = t._transpose_view_source()
+        if source is not None:
+            return source, True
     # Whose view record went with its root's holder (see
     # `_producer_transpose_axes`): the graph still knows.
     if tuple(t._producer_transpose_axes()) == (0, 2, 1, 3):
-        return t._input(0), True
+        inputs = t._inputs()
+        if inputs:
+            return inputs[0], True
     return t, False
 
 

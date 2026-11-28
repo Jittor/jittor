@@ -117,6 +117,33 @@ def _acl_sdpa_kernel(implementation):
 
 
 class TestSDPA(Base):
+    def test_cudnn_layout_survives_execution_between_queries(self):
+        from types import SimpleNamespace
+        from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda as attention
+
+        def check(device):
+            value = torch.zeros((1, 9, 2, 32), device=device).transpose(1, 2)
+
+            class SubmittedTranspose:
+                def _transpose_view_axes(self):
+                    return ()
+
+                def _producer_transpose_axes(self):
+                    value.sync()
+                    return (0, 2, 1, 3)
+
+                def _inputs(self):
+                    return value._inputs()
+
+                def _input(self, index):
+                    return value._input(index)
+
+            tensor = SubmittedTranspose()
+            with mock.patch.object(attention, "jt", SimpleNamespace(Var=SubmittedTranspose)):
+                self.assertEqual(attention._physical(tensor), (tensor, False))
+
+        both_devices(check)
+
     @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled, "No CUDA found")
     def test_cudnn_attention_selects_a_plan_before_graph_replay(self):
         from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda as attention
