@@ -89,5 +89,24 @@ class TestNeoxRopeInference(unittest.TestCase):
         self.assertIsNone(try_dispatch("nn.neox_rope.inference", x, c, s))
 
 
+    def test_pending_broadcast_factors(self):
+        shape = (2, 3, 5, 16)
+        values = self.rs.randint(-4, 5, size=shape).astype(np.float32)
+        cosine = self.rs.randint(-4, 5, size=(1, 5, 16)).astype(np.float32)
+        sine = self.rs.randint(-4, 5, size=(1, 5, 16)).astype(np.float32)
+        with jt.flag_scope(backend_fallback="error", transpose_storage_view=1,
+                           auto_flush_ops=0, async_flush_ops=0), jt.no_grad():
+            x = jt.array(values.transpose(0, 2, 1, 3).copy()).bfloat16().transpose(0, 2, 1, 3)
+            cos = jt.array(cosine).bfloat16().broadcast(shape).clone()
+            sin = jt.array(sine).bfloat16().broadcast(shape).clone()
+            out = try_dispatch("nn.neox_rope.inference", x, cos, sin)
+            self.assertIsNotNone(out)
+            out.sync()
+            self.assertEqual(out.location(), "device")
+            self.assertFalse(out.requires_grad)
+            rotated = np.concatenate((-values[..., 8:], values[..., :8]), axis=-1)
+            np.testing.assert_array_equal(out.float32().numpy(), values * cosine + rotated * sine)
+
+
 if __name__ == "__main__":
     unittest.main()

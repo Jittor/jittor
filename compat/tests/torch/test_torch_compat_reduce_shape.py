@@ -418,6 +418,20 @@ class TestUnfold(Base):
 
 
 class TestSplitChunk(Base):
+    def test_split_nonleading_axis_of_transpose(self):
+        x = np.arange(48, dtype=np.float32).reshape(2, 4, 6)
+        expected = np.split(x.transpose(0, 2, 1), [3], axis=-1)
+
+        def body(dev):
+            parts = torch.tensor(x, device=dev).transpose(1, 2).split(3, dim=-1)
+            self.assertEqual(len(parts), len(expected))
+            for part, ref in zip(parts, expected):
+                self.assertIsInstance(part, torch.Tensor)
+                self.assertEqual(part.device.type, dev)
+                self.ac(part.cpu().numpy(), ref)
+
+        both_devices(body)
+
     def test_split_int(self):
         x = np.arange(10).astype("float32")
         def body(dev):

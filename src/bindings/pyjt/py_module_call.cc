@@ -1228,50 +1228,30 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
             return call_with(forward, module, args, kwargs);
         }
     }
-    if (!parallel_linear_scope && !kwargs && PyTuple_GET_SIZE(args) == 1 && linear_execute
-            && _PyType_Lookup(type, name_execute()) == linear_execute
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1
             && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-        fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-        fast = linear_with_bias_training(module, dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && conv_execute
-            && _PyType_Lookup(type, name_execute()) == conv_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && batch_norm_execute
-            && _PyType_Lookup(type, name_execute()) == batch_norm_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = batch_norm_eval_channels_last(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && layer_norm_execute
-            && _PyType_Lookup(type, name_execute()) == layer_norm_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
-            && _PyType_Lookup(type, name_execute()) == dropout_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* same = dropout_passthrough(dict, PyTuple_GET_ITEM(args, 0));
-        if (same) return same;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && function_module_execute
-            && _PyType_Lookup(type, name_execute()) == function_module_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = activation_module(type, dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && group_norm_execute
-            && _PyType_Lookup(type, name_execute()) == group_norm_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
+        PyObject* execute = _PyType_Lookup(type, name_execute());
+        PyObject* x = PyTuple_GET_ITEM(args, 0);
+        PyObject* fast = nullptr;
+        if (!parallel_linear_scope && execute && execute == linear_execute) {
+            fast = linear_without_bias(module, dict, x);
+            if (fast || PyErr_Occurred()) return fast;
+            fast = linear_with_bias_inference(dict, x);
+            if (fast || PyErr_Occurred()) return fast;
+            fast = linear_with_bias_training(module, dict, x);
+        } else if (execute && execute == conv_execute) {
+            fast = conv2d_inference(dict, x);
+        } else if (execute && execute == batch_norm_execute) {
+            fast = batch_norm_eval_channels_last(dict, x);
+        } else if (execute && execute == layer_norm_execute) {
+            fast = layer_norm_inference(dict, x);
+        } else if (execute && execute == dropout_execute) {
+            fast = dropout_passthrough(dict, x);
+        } else if (execute && execute == function_module_execute) {
+            fast = activation_module(type, dict, x);
+        } else if (execute && execute == group_norm_execute) {
+            fast = group_norm_inference(dict, x);
+        }
         if (fast || PyErr_Occurred()) return fast;
     }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));

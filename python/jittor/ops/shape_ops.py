@@ -4,6 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from collections.abc import Sequence, Iterable
 from jittor_core import Var
 from .._runtime.dispatch import select_kernel, try_dispatch
+from .indexing import var_getitem
 
 def _repeat_interleave_cpu_source():
     return ('''
@@ -385,6 +386,11 @@ def split(d, split_size, dim=0):
     s_last = len(split_size)-1
     gopt_disable = jt.flags.gopt_disable
     slice_kernel = select_kernel("misc.split_slice", d)
+    if (slice_kernel is _split_slice and isinstance(d, Var)
+            and type(d).__getattribute__ is Var.__getattribute__ and type(d).getitem is var_getitem):
+        result = jt.core._fast_split_slices(d, split_size, dim, gopt_disable)
+        if result is not None:
+            return result
     for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)

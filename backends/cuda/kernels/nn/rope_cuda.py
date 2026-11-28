@@ -254,102 +254,30 @@ def partial_rotary_embedding_cuda(q, k, cos, sin, *, prefix_tokens, rotary_dim=N
     ))
 
 
-def _is_seq_major_strides(x):
-    if int(x._storage_offset()) != 0:
-        return False
-    b, h, s, d = (int(v) for v in x.shape)
-    st = tuple(int(v) for v in x._storage_strides())
-    return (
-        len(st) == 4
-        and st[3] == 1
-        and (h == 1 or st[1] == d)
-        and (s == 1 or st[2] == h * d)
-        and (b == 1 or st[0] == s * h * d)
-    )
-
-
-def _neox_rope_physical(x):
-    """Return ``(dense_source, seq_major)`` for a 4D tensor or ``(0,2,1,3)`` transpose view."""
-    if not isinstance(x, jt.Var) or len(x.shape) != 4:
-        return None
-    if x._storage_is_contiguous():
-        return x, False
-    axes = getattr(x, "_transpose_view_axes", None)
-    if axes is not None and tuple(axes()) == (0, 2, 1, 3):
-        src = x._transpose_view_source()
-        if isinstance(src, jt.Var) and len(src.shape) == 4:
-            return src, True
-    if tuple(x._producer_transpose_axes()) == (0, 2, 1, 3):
-        src = x._input(0)
-        if isinstance(src, jt.Var) and len(src.shape) == 4:
-            return src, True
-    if _is_seq_major_strides(x):
-        src = x.transpose(0, 2, 1, 3)
-        if isinstance(src, jt.Var) and len(src.shape) == 4:
-            return src, True
-    if not x.is_finished and x._producer_name() not in ("transpose", "reindex"):
-        return x, False
-    return None
-
-
-def _unwrap_broadcast_clone(t):
-    while isinstance(t, jt.Var) and t._producer_name() in ("broadcast_to", "clone"):
-        t = t._input(0)
-    return t
-
-
-def _neox_rope_contract(x, cos, sin):
-    if not all(isinstance(v, jt.Var) for v in (x, cos, sin)):
-        return None
-    if _output_requires_grad((x, cos, sin)):
-        return None
-    phys = _neox_rope_physical(x)
-    if phys is None:
-        return None
-    x_dense, seq_major = phys
-    cos = _unwrap_broadcast_clone(cos)
-    sin = _unwrap_broadcast_clone(sin)
-    if not (isinstance(cos, jt.Var) and isinstance(sin, jt.Var)):
-        return None
-    dtype = _jittor_dtype_name(x.dtype)
-    if dtype not in ("float16", "bfloat16", "float32"):
-        return None
-    if _jittor_dtype_name(cos.dtype) != dtype or _jittor_dtype_name(sin.dtype) != dtype:
-        return None
-    x_shape = tuple(int(s) for s in x.shape)
-    b, h, s, d = x_shape
-    if b <= 0 or h <= 0 or s <= 0 or d <= 0 or (d % 2) != 0:
-        return None
-    c_shape = tuple(int(v) for v in cos.shape)
-    s_shape = tuple(int(v) for v in sin.shape)
-    if c_shape != s_shape or len(c_shape) > 4:
-        return None
-    c_shape = (1,) * (4 - len(c_shape)) + c_shape
-    if c_shape[3] != d:
-        return None
-    for ci, xi in zip(c_shape[:3], x_shape[:3]):
-        if ci not in (1, xi):
-            return None
-    return x_dense, seq_major, cos, sin, x_shape, c_shape, dtype
-
-
 def _neox_rope_supported(x, cos, sin):
-    return _neox_rope_contract(x, cos, sin) is not None
+    return jt.core._neox_rope_contract(x, cos, sin, True) is not None
 
 
 @optional_kernel("nn.neox_rope.inference", "cuda", supports=_neox_rope_supported)
 def _neox_rope_cuda(x, cos, sin):
     """Fused vectorized CUDA NeoX RoPE: ``x * cos + rotate_half(x) * sin``."""
-    contract = _neox_rope_contract(x, cos, sin)
+    contract = jt.core._neox_rope_contract(x, cos, sin)
     if contract is None:
         return None
-    x_dense, seq_major, cos, sin, (b, h, s, d), (c0, c1, c2, _), dtype = contract
+    x_dense, cos, sin, specialization = contract
+    return _stop_grad_outputs(jt.code(
+        x.shape, x.dtype, [x_dense, cos, sin], cuda_src=_neox_rope_source(*specialization),
+    ))
+
+
+@lru_cache(maxsize=256)
+def _neox_rope_source(d, float32, seq_major, c0_gt1, c1_gt1, c2_gt1):
     half = d // 2
-    vec2 = 1 if (dtype in ("float16", "bfloat16") and half % 8 == 0) else 0
-    vec4 = 1 if (dtype == "float32" and half % 4 == 0) else 0
+    vec2 = int(not float32 and half % 8 == 0)
+    vec4 = int(float32 and half % 4 == 0)
     half_vec2 = max(1, half // 8)
     half_vec4 = max(1, half // 4)
-    cuda_src = cached_source(r"""
+    return r"""
     __global__ static void neox_rope_vec2(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ cos_p,
@@ -522,7 +450,7 @@ def _neox_rope_cuda(x, cos, sin):
         if (total > 0) neox_rope_scalar<<<blocks, 256>>>(in0_p, in1_p, in2_p, out0_p, B, H, S, c0, c1, c2);
     }
     CHECK(0 == cudaGetLastError());
-    """, {
+    """ % {
         "d": d,
         "half": half,
         "vec2": vec2,
@@ -530,13 +458,10 @@ def _neox_rope_cuda(x, cos, sin):
         "half_vec2": half_vec2,
         "half_vec4": half_vec4,
         "seq_major": int(seq_major),
-        "c0_gt1": int(c0 > 1),
-        "c1_gt1": int(c1 > 1),
-        "c2_gt1": int(c2 > 1),
-    })
-    return _stop_grad_outputs(jt.code(
-        x.shape, x.dtype, [x_dense, cos, sin], cuda_src=cuda_src,
-    ))
+        "c0_gt1": c0_gt1,
+        "c1_gt1": c1_gt1,
+        "c2_gt1": c2_gt1,
+    }
 
 
 def _interleaved_rope_storage(x):

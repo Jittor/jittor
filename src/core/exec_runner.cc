@@ -969,7 +969,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             allocation_target.backend = requested_backend;
         #endif
         allocator = get_allocator(allocation_target, false);
-        temp_allocator = get_allocator(allocation_target, true);
+        // The accelerator workspace and tensors use the same pool. Only the
+        // CPU can choose a separate temporary allocator.
+        temp_allocator = allocation_target.backend == BackendId::Cpu
+            ? get_allocator(allocation_target, true) : allocator;
         exe.allocator = allocator;
         exe.temp_allocator = temp_allocator;
         if (save_mem) {

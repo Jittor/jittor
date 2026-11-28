@@ -185,8 +185,9 @@ void Executor::flush_at_module_boundary() {
     // At a module's return rather than mid-module, so a block -- a residual
     // unit, a transformer layer -- stays in one batch where it can.
     auto& pipeline = runtime_submission_pipeline();
-    if (deferrable_flush()
-            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops) {
+    if (async_flush_ops > 0
+            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops
+            && deferrable_flush()) {
         const auto previous = pipeline.last_run_ops;
         const int calls = exec_called;
         auto_flush();

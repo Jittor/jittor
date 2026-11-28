@@ -42,6 +42,7 @@ PyObject* placement_context = nullptr;
 // but "unset": until one of the setters below runs, no context holds a value.
 bool frontend_context_set = false;
 bool placement_context_set = false;
+PyObject* device_zero_placements[int(BackendId::Corex) + 1]{};
 
 PyObject* placement_variable() {
     if (!placement_context) {
@@ -130,26 +131,16 @@ PyObject* set_tensor_placement_context(int backend, int device) {
     USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
         << "tensor placement requires a registered backend id and a non-negative device index";
     device = backend == 0 ? 0 : device;
-    PyObject* value = nullptr;
-    if (placement_context_set) {
-        if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
-            throw std::runtime_error("cannot read tensor placement context");
-        // Nested modules usually keep their caller's device. Reuse that
-        // immutable value, but always create a real reset token: the body
-        // may change placement, and leaving this scope must still restore it.
-        if (value && !(PyTuple_CheckExact(value) && PyTuple_GET_SIZE(value) == 2
-                && PyLong_CheckExact(PyTuple_GET_ITEM(value, 0))
-                && PyLong_CheckExact(PyTuple_GET_ITEM(value, 1))
-                && PyLong_AsLong(PyTuple_GET_ITEM(value, 0)) == backend
-                && PyLong_AsLong(PyTuple_GET_ITEM(value, 1)) == device)) {
-            Py_CLEAR(value);
-        }
+    PyObjHolder temporary;
+    // The common device-zero scopes can use the same immutable tuple across
+    // calls and contexts. Each setter still gets its own reset token.
+    PyObject*& value = device == 0 ? device_zero_placements[backend] : temporary.obj;
+    if (!value) {
+        value = Py_BuildValue("(ii)", backend, device);
+        if (!value) throw std::runtime_error("cannot create tensor placement value");
     }
-    if (!value) value = Py_BuildValue("(ii)", backend, device);
-    if (!value) throw std::runtime_error("cannot create tensor placement value");
     placement_context_set = true;
     PyObject* token = PyContextVar_Set(placement_variable(), value);
-    Py_DECREF(value);
     if (!token) throw std::runtime_error("cannot set tensor placement context");
     return token;
 }

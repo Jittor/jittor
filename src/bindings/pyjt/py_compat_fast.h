@@ -100,6 +100,12 @@ PyObject* rotate_half_source(PyObject* negative, PyObject* positive, int64 dim);
 // @pyjt(_neox_rope_cosine)
 PyObject* neox_rope_cosine(PyObject* product, PyObject* source);
 
+// Validate a fused NeoX rotation from live graph metadata. The support
+// query never builds views. The execution query returns the kernel inputs
+// and source specialization, or None if the layout or dtype needs eager ops.
+// @pyjt(_neox_rope_contract)
+PyObject* neox_rope_contract(PyObject* x, PyObject* cos, PyObject* sin, bool check_only=false);
+
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency
 // hint and no `.data` ownership record. A registered provider is tried once
@@ -108,6 +114,11 @@ PyObject* neox_rope_cosine(PyObject* product, PyObject* source);
 // its recorded owner. Unsupported spellings use the Python path.
 // @pyjt(_fast_getitem)
 PyObject* fast_getitem(PyObject* self, PyObject* index);
+
+// Build regular slices in one graph entry. None leaves specialized and
+// empty splits with the Python slicing dispatcher.
+// @pyjt(_fast_split_slices)
+PyObject* fast_split_slices(PyObject* self, PyObject* sizes, int64 dim, int gopt_disable);
 
 // The native operators the binary fast path calls: `natives` holds the
 // jittor Var's own `__add__`, `__radd__`, `__sub__`, `__rsub__`, `__mul__`,

@@ -12,6 +12,7 @@
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
 #include "mem/allocator.h"
+#include <array>
 #include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -667,7 +668,7 @@ namespace {
 // native name. Dropped when the type is collected.
 struct DtypeTable {
     PyObject* table = nullptr;
-    std::unordered_map<string, PyObject*> by_name;
+    std::array<PyObject*, ns_max_size> by_dtype{};
 };
 std::unordered_map<PyTypeObject*, DtypeTable> dtype_tables;
 
@@ -676,7 +677,7 @@ void forget_dtype_table(PyObject* type) {
     if (found == dtype_tables.end()) return;
     DtypeTable entry = move(found->second);
     dtype_tables.erase(found);
-    for (auto& cached : entry.by_name) Py_DECREF(cached.second);
+    for (auto* cached : entry.by_dtype) Py_XDECREF(cached);
     Py_DECREF(entry.table);
 }
 } // namespace
@@ -699,13 +700,14 @@ PyObject* frontend_dtype(PyObject* self) {
         found = dtype_tables.emplace(type, move(entry)).first;
     }
     auto& entry = found->second;
-    const char* name = GET_RAW_PTR(VarHolder, self)->var->dtype().to_cstring();
-    auto cached = entry.by_name.find(name);
-    if (cached != entry.by_name.end()) {
-        Py_INCREF(cached->second);
-        return cached->second;
+    auto dtype = GET_RAW_PTR(VarHolder, self)->var->dtype();
+    PyObject*& cached = entry.by_dtype[dtype.index()];
+    if (cached) {
+        Py_INCREF(cached);
+        return cached;
     }
-    PyObjHolder key(PyUnicode_FromString(name));
+    PyObjHolder key(PyUnicode_FromString(dtype.to_cstring()));
+    if (!key.obj) return nullptr;
     PyObject* value = PyObject_GetItem(entry.table, key.obj);
     if (!value) {
         PyErr_Clear();
@@ -714,7 +716,7 @@ PyObject* frontend_dtype(PyObject* self) {
     }
     // The table is fixed for an installation; the entry keeps a reference.
     Py_INCREF(value);
-    entry.by_name.emplace(name, value);
+    cached = value;
     return value;
 }
 
@@ -1109,6 +1111,51 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
     return to_py_object<VarHolder*>(out);
 }
 
+PyObject* fast_split_slices(PyObject* self, PyObject* sizes, int64 dim, int gopt_disable) {
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)
+            || !(PyList_CheckExact(sizes) || PyTuple_CheckExact(sizes))
+            || kernel_op_registered("tensor.getitem"))
+        Py_RETURN_NONE;
+    auto** attributes = _PyObject_GetDictPtr(self);
+    if (attributes && *attributes && PyDict_GetItemString(*attributes, "getitem"))
+        Py_RETURN_NONE;
+    auto* var = GET_RAW_PTR(VarHolder, self)->var;
+    if (dim < 0 || dim >= var->shape.size() || var->num < 0
+            || (dim == 0 && !gopt_disable && var->is_contiguous()))
+        Py_RETURN_NONE;
+    const auto count = Py_SIZE(sizes);
+    if (count <= 0 || count > 64) Py_RETURN_NONE;
+    auto* items = PySequence_Fast_ITEMS(sizes);
+    int64 extents[64];
+    int64 remainder = var->shape[dim];
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (!PyLong_CheckExact(items[i])) Py_RETURN_NONE;
+        int overflow;
+        auto extent = PyLong_AsLongLongAndOverflow(items[i], &overflow);
+        if (overflow || extent <= 0 || extent > remainder) Py_RETURN_NONE;
+        extents[i] = extent;
+        remainder -= extent;
+    }
+    if (remainder) Py_RETURN_NONE;
+
+    PyTensorFrontendScope scope(self);
+    PyObjHolder outputs(PyTuple_New(count));
+    if (!outputs.obj) return nullptr;
+    int64 offset = 0;
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        VarSlices slices(dim + 1);
+        for (int axis = 0; axis < dim; ++axis)
+            slices.slices[axis].slice = {0, 0, 1, 7};
+        auto end = offset + extents[i];
+        slices.slices[dim].slice = {offset, end, 1, 4};
+        auto* result = to_py_object<VarHolder*>(new VarHolder(make_getitem(var, move(slices))));
+        if (!result) return nullptr;
+        PyTuple_SET_ITEM(outputs.obj, i, result);
+        offset = end;
+    }
+    return outputs.release();
+}
+
 namespace {
 Op* pending_producer(Var* var) {
     return var->is_finished() ? nullptr : var->input();
@@ -1231,6 +1278,84 @@ PyObject* neox_rope_cosine(PyObject* product, PyObject* source) {
         return to_py_object<VarHolder*>(new VarHolder(other));
     }
     Py_RETURN_NONE;
+}
+
+PyObject* neox_rope_contract(PyObject* x, PyObject* cos, PyObject* sin, bool check_only) {
+    if (!PyObject_TypeCheck(x, &PyjtVarHolder.ht_type)
+            || !PyObject_TypeCheck(cos, &PyjtVarHolder.ht_type)
+            || !PyObject_TypeCheck(sin, &PyjtVarHolder.ht_type))
+        Py_RETURN_NONE;
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    auto* cosine = GET_RAW_PTR(VarHolder, cos);
+    auto* sine = GET_RAW_PTR(VarHolder, sin);
+    if (!no_grad && (holder->get_requires_grad() || cosine->get_requires_grad()
+                    || sine->get_requires_grad()))
+        Py_RETURN_NONE;
+
+    Var* value = holder->var;
+    const auto& shape = value->shape;
+    const auto dtype = value->dtype();
+    if (shape.size() != 4 || (dtype != ns_float16 && dtype != ns_bfloat16 && dtype != ns_float32))
+        Py_RETURN_NONE;
+    for (int axis = 0; axis < 4; ++axis)
+        if (shape[axis] <= 0) Py_RETURN_NONE;
+    const auto width = shape[3];
+    if (width % 2) Py_RETURN_NONE;
+    // There is no matching source to stop at: walk through all identity
+    // clones and broadcasts to get the original, smaller rotation factors.
+    VarPtr c(rope_factor_source(cosine->var, nullptr));
+    VarPtr s(rope_factor_source(sine->var, nullptr));
+    if (c->dtype() != dtype || s->dtype() != dtype || c->shape.size() > 4
+            || c->shape.size() != s->shape.size())
+        Py_RETURN_NONE;
+    int64 factors[4] = {1, 1, 1, 1};
+    auto padding = 4 - c->shape.size();
+    for (uint axis = 0; axis < c->shape.size(); ++axis) {
+        auto extent = c->shape[axis];
+        if (extent != s->shape[axis] || (extent != 1 && extent != shape[padding + axis]))
+            Py_RETURN_NONE;
+        factors[padding + axis] = extent;
+    }
+    if (factors[3] != width) Py_RETURN_NONE;
+
+    const NanoVector swap_heads_sequence{0, 2, 1, 3};
+    auto matching_axes = [](const NanoVector& axes) {
+        return axes.size() == 4 && axes[0] == 0 && axes[1] == 2 && axes[2] == 1 && axes[3] == 3;
+    };
+    Var* producer_source = nullptr;
+    bool transpose_view = false;
+    bool permute_storage = false;
+    if (!value->is_contiguous()) {
+        auto* op = pending_producer(value);
+        const auto* axes = transpose_axes(op);
+        transpose_view = matching_axes(holder->transpose_view_axes());
+        if (axes && matching_axes(*axes) && op->input(0)->shape.size() == 4)
+            producer_source = op->input(0);
+        const auto heads = shape[1], length = shape[2];
+        permute_storage = !value->storage_offset_bytes && value->storage_stride(3) == 1
+            && (heads == 1 || value->storage_stride(1) == width)
+            && (length == 1 || value->storage_stride(2) == heads * width)
+            && (shape[0] == 1 || value->storage_stride(0) == length * heads * width);
+        if (!transpose_view && !producer_source && !permute_storage
+                && (value->is_finished() || axes || (op && op->is_op(op_ids::reindex()))))
+            Py_RETURN_NONE;
+    }
+    if (check_only) Py_RETURN_TRUE;
+
+    PyTensorFrontendScope scope(x);
+    PyObjHolder dense, c_input, s_input;
+    if (transpose_view)
+        dense.obj = to_py_object<VarHolder*>(holder->transpose_view_source());
+    else if (producer_source)
+        dense.obj = to_py_object<VarHolder*>(new VarHolder(producer_source));
+    else if (permute_storage)
+        dense.obj = to_py_object<VarHolder*>(holder->storage_permute(swap_heads_sequence));
+    if (c.ptr != cosine->var) c_input.obj = to_py_object<VarHolder*>(new VarHolder(c.ptr));
+    if (s.ptr != sine->var) s_input.obj = to_py_object<VarHolder*>(new VarHolder(s.ptr));
+    return Py_BuildValue("(OOO(Liiiii))", dense.obj ? dense.obj : x,
+        c_input.obj ? c_input.obj : cos, s_input.obj ? s_input.obj : sin,
+        static_cast<long long>(width), dtype == ns_float32, dense.obj != nullptr,
+        factors[0] > 1, factors[1] > 1, factors[2] > 1);
 }
 
 namespace {
