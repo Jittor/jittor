@@ -503,7 +503,8 @@ def _reduced_precision_admitted(query, key, value, attn_mask, dropout_p, is_caus
 
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                            is_causal=False, scale=None, *, grouped=False,
-                           allow_reduced_precision=False, enable_gqa=False):
+                           allow_reduced_precision=False, enable_gqa=False,
+                           split_kv=False):
     """Run attention through cuDNN, or return None to decline.
 
     ``grouped``: `key` and `value` may have fewer heads than `query`, each
@@ -539,6 +540,14 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         # Inference mask preparation is pure device graph ops and capture-safe.
         if step_capture.tracing() and training:
             return None
+    if (split_kv and not training and not is_causal and query.shape[3] > 0
+            and 0 < query.shape[2] <= 32 and key.shape[2] >= 256):
+        from .split_kv_attention_cuda import split_kv_attention
+
+        split_scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
+        out = split_kv_attention(query, key, value, attn_mask, split_scale)
+        if out is not None:
+            return out
     library = _library()
     if library is None:
         return None
@@ -698,12 +707,13 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 # Not `dtypes=`: the registry filters on every tensor argument, and a bool mask
 # would take a float16 call off this kernel. `supports` looks at the query
 # only, which also keeps float32 for `fused_attention_f32_cuda.py`.
-register_kernel("nn.fused_attention", "cuda", _cudnn_fused_attention, supports=_supports)
+register_kernel("nn.fused_attention", "cuda",
+                functools.partial(_cudnn_fused_attention, split_kv=True), supports=_supports)
 register_kernel("nn.cudnn_attention", "cuda", _cudnn_fused_attention, supports=_supports)
 
 
 def _cudnn_fused_attention_gqa(query, key, value, **kwargs):
-    return _cudnn_fused_attention(query, key, value, grouped=True, **kwargs)
+    return _cudnn_fused_attention(query, key, value, grouped=True, split_kv=True, **kwargs)
 
 
 # Grouped-query attention without repeating the key and value heads first: a
