@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from functools import lru_cache
 from typing import List, Tuple, Union
 
 import jittor as jt
@@ -633,6 +634,13 @@ def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
     return jt.concat(segs, dim=0)
 
 
+@lru_cache(maxsize=32)
+def _numpy_finfo_fields(dtype_name):
+    info = _np.finfo(_np.dtype(dtype_name))
+    return (float(info.min), float(info.max), float(info.eps),
+            float(info.tiny), float(info.resolution), info.bits)
+
+
 class finfo:
     def __init__(self, dt):
         # A range query computes nothing: resolve the name without demanding
@@ -651,14 +659,8 @@ class finfo:
             self.bits, self.dtype = (bits, ds)
             self.resolution = eps
             return
-        info = _np.finfo(_np.dtype(ds))
-        self.min = float(info.min)
-        self.max = float(info.max)
-        self.eps = float(info.eps)
-        self.tiny = float(info.tiny)
-        self.smallest_normal = float(info.tiny)
-        self.resolution = float(info.resolution)
-        self.bits = info.bits
+        self.min, self.max, self.eps, self.tiny, self.resolution, self.bits = _numpy_finfo_fields(ds)
+        self.smallest_normal = self.tiny
         self.dtype = ds
 
 
@@ -936,6 +938,40 @@ def set_default_device(device=None):
     )
 
 
+def set_printoptions(precision=None, threshold=None, edgeitems=None,
+                     linewidth=None, profile=None, sci_mode=None):
+    """Configure NumPy-backed tensor printing options (matches torch.set_printoptions)."""
+    if profile == "default":
+        precision = 4 if precision is None else precision
+        threshold = 1000 if threshold is None else threshold
+        edgeitems = 3 if edgeitems is None else edgeitems
+        linewidth = 80 if linewidth is None else linewidth
+    elif profile == "short":
+        precision = 2 if precision is None else precision
+        threshold = 1000 if threshold is None else threshold
+        edgeitems = 2 if edgeitems is None else edgeitems
+        linewidth = 80 if linewidth is None else linewidth
+    elif profile == "full":
+        precision = 4 if precision is None else precision
+        threshold = float("inf") if threshold is None else threshold
+        edgeitems = 3 if edgeitems is None else edgeitems
+        linewidth = 80 if linewidth is None else linewidth
+    kwargs = {}
+    if precision is not None:
+        kwargs["precision"] = int(precision)
+    if threshold is not None:
+        kwargs["threshold"] = int(threshold) if threshold != float("inf") else 10**9
+    if edgeitems is not None:
+        kwargs["edgeitems"] = int(edgeitems)
+    if linewidth is not None:
+        kwargs["linewidth"] = int(linewidth)
+    if sci_mode is not None:
+        kwargs["suppress"] = not bool(sci_mode)
+    if kwargs:
+        import numpy as _np
+        _np.set_printoptions(**kwargs)
+
+
 def _result_type_info(x):
     ctx = _misc_context()
     g = ctx.jittor_module
@@ -993,6 +1029,10 @@ def is_grad_enabled():
     return not bool(getattr(jt.flags, "no_grad", 0))
 
 
+def is_inference_mode_enabled():
+    return bool(getattr(jt.flags, "no_grad", 0))
+
+
 def set_grad_enabled(mode):
     owner = _misc_context().jittor_module
     return owner.enable_grad() if mode else owner.no_grad()
@@ -1016,6 +1056,10 @@ def are_deterministic_algorithms_enabled():
         if "does not support deterministic algorithm policy" in str(error):
             return False
         raise
+
+
+def is_deterministic_algorithms_warn_only_enabled():
+    return False
 
 
 def use_deterministic_algorithms(mode, *, warn_only=False):
@@ -1213,6 +1257,7 @@ _MISC_BINDINGS = {
     "is_autocast_enabled": is_autocast_enabled,
     "set_autocast_enabled": set_autocast_enabled,
     "is_grad_enabled": is_grad_enabled,
+    "is_inference_mode_enabled": is_inference_mode_enabled,
     "set_grad_enabled": set_grad_enabled,
     "get_autocast_dtype": get_autocast_dtype,
     "set_autocast_dtype": set_autocast_dtype,
@@ -1229,6 +1274,7 @@ _MISC_BINDINGS = {
     "autocast_decrement_nesting": autocast_decrement_nesting,
     "is_autocast_available": is_autocast_available,
     "are_deterministic_algorithms_enabled": are_deterministic_algorithms_enabled,
+    "is_deterministic_algorithms_warn_only_enabled": is_deterministic_algorithms_warn_only_enabled,
     "use_deterministic_algorithms": use_deterministic_algorithms,
     "is_floating_point": is_floating_point,
     "finfo": finfo,
@@ -1243,6 +1289,7 @@ _MISC_BINDINGS = {
     "get_device_module": get_device_module,
     "as_strided": as_strided,
     "empty_strided": empty_strided,
+    "set_printoptions": set_printoptions,
 }
 _MISC_DETAILS = {
     "PyTorchFileReader": "raises NotImplementedError; use torch.load instead",
@@ -1276,6 +1323,7 @@ _MISC_DETAILS = {
     "are_deterministic_algorithms_enabled": "reads the accelerator runtime's own deterministic option",
     "as_strided": "gather-based view; reads are exact but the result does not alias the input storage",
     "empty_strided": "contiguous allocation; the requested strides are not honored",
+    "set_printoptions": "delegates precision, threshold, edgeitems, linewidth, profile, and sci_mode to NumPy print options",
 }
 for _name, _implementation in _MISC_BINDINGS.items():
     _level = (
@@ -1361,3 +1409,15 @@ def install_misc(ctx):
         setattr(owner, name, implementation)
         setattr(var_type, name, implementation)
     var_type.frac = frac
+    tensor_str = modules.get("torch._tensor_str")
+    if tensor_str is None:
+        tensor_str = modules["torch._tensor_str"] = _types_misc.ModuleType("torch._tensor_str")
+        class _PrintOptions:
+            precision = 4
+            threshold = 1000
+            edgeitems = 3
+            linewidth = 80
+            sci_mode = None
+        tensor_str.PRINT_OPTS = _PrintOptions()
+        tensor_str._tensor_str = lambda tensor, indent=0: str(tensor)
+    owner._tensor_str = tensor_str

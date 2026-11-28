@@ -23,6 +23,7 @@
 #include "core/graph.h"
 #include "core/grad.h"
 #include "mem/allocator/cuda_dual_allocator.h"
+#include "mem/allocator/foreign_allocator.h"
 #include "ops/op_register.h"
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
@@ -80,6 +81,7 @@ PyObject* new_var_data_owner(VarHolder* vh) {
         Py_DECREF(owner->holder);
         return nullptr;
     }
+    var->storage_version_token()->externally_visible.store(true, std::memory_order_relaxed);
     owner.release();
     return capsule;
 }
@@ -272,6 +274,7 @@ VarHolder* VarHolder::migrate_to_cpu_() {
 // first time.
 static int64 host_readbacks = 0;
 int64 host_readback_count() { return host_readbacks; }
+int64 step_scalar_epoch() { return total_node.load(std::memory_order_relaxed); }
 
 int first_finished(const vector<VarHolder*>& vars) {
     for (int i = 0; i < (int)vars.size(); i++)
@@ -2337,6 +2340,11 @@ static bool host_copy_without_migration(Var* var, ArrayArgs& result) {
 ArrayArgs VarHolder::fetch_sync() {
     check_backward_storage_read(var);
     note_readback();
+    // Ordinary host reads also flush the pending backlog.
+    return read_array(true);
+}
+
+ArrayArgs VarHolder::read_array(bool weak_sync) {
     ArrayArgs result;
     // A host-resident value is read in place: no sync, no GIL release, so the
     // holder cannot change before the bytes are copied.
@@ -2355,9 +2363,6 @@ ArrayArgs VarHolder::fetch_sync() {
     {
         ReadSnapshot snapshot(var);
         Var* target = snapshot.var;
-        // Same batch policy `VarHolder::sync()` defaults to: a read may also
-        // flush the pending backlog it did not ask for.
-        const bool weak_sync = true;
         result.shape = target->shape;
         result.dtype = target->dtype();
         result.storage_strides = target->storage_strides;
@@ -2407,6 +2412,119 @@ inline static void cast_item_data(ItemData& data) {
 
 ItemData VarHolder::item() {
     note_readback();
+    return read_item(true);
+}
+
+ItemData VarHolder::item_without_migration() {
+    note_readback();
+    return read_item(false);
+}
+
+vector<uint64> VarHolder::step_guarded_storage_version() {
+    if (!var->is_finished() || !var->mem_ptr || !var->allocator
+            || dynamic_cast<ForeignAllocator*>(var->allocator)) return {};
+    auto token = var->storage_version_token();
+    if (token->externally_visible.load(std::memory_order_relaxed)) return {};
+    return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
+}
+
+// Keep the executor entry lock held across validation and the read.
+static PyObject* collect_step_readback_guards(Var* var, int64 epoch,
+                                             size_t max_nodes, int64 max_elements) {
+    std::unordered_set<Var*> seen;
+    vector<Var*> stack{var};
+    PyObjHolder guards(PyList_New(0));
+    if (!guards.obj) return nullptr;
+    static const std::unordered_set<string> pure_ops{
+        "array", "unary", "binary", "ternary", "broadcast_to", "reduce",
+        "reindex", "reshape", "transpose", "getitem", "index", "clone",
+        "copy", "where", "contiguous", "cub_cumsum", "cub_where",
+    };
+    while (!stack.empty()) {
+        auto* value = stack.back();
+        stack.pop_back();
+        if (!seen.insert(value).second) continue;
+        if (seen.size() > max_nodes || value->num < 0 || value->num > max_elements)
+            Py_RETURN_NONE;
+        if (value->id <= epoch) {
+            if (!value->is_finished() || !value->mem_ptr) Py_RETURN_NONE;
+            auto* owner = value->holder;
+            if (!owner || owner->var != value || !owner->python_owner) {
+                owner = nullptr;
+                for (auto* candidate : runtime_holder_state().holders())
+                    if (candidate->var == value && candidate->python_owner) {
+                        owner = candidate;
+                        break;
+                    }
+                if (!owner) Py_RETURN_NONE;
+            }
+            auto version = owner->step_guarded_storage_version();
+            if (version.empty()) Py_RETURN_NONE;
+            PyObjHolder version_obj(to_py_object(std::move(version)));
+            if (!version_obj.obj) return nullptr;
+            PyObjHolder guard(PyTuple_Pack(2, owner->python_owner, version_obj.obj));
+            if (!guard.obj || PyList_Append(guards.obj, guard.obj) < 0) return nullptr;
+            continue;
+        }
+        auto* op = value->input();
+        if (!op || op->flag(OpFlags::_manual_device)) Py_RETURN_NONE;
+        // A lazy in-place spelling can rebind an unallocated temporary to a
+        // fresh producer and advance the version before it has any storage.
+        // Once allocated, retain the version check because a write can
+        // change the bytes without changing the producer.
+        auto version = value->peek_storage_version();
+        if (version && (version->externally_visible.load(std::memory_order_relaxed)
+                        || ((value->is_finished() || value->mem_ptr)
+                            && version->value.load(std::memory_order_relaxed)))) Py_RETURN_NONE;
+        if (!op->is_storage_view() && !pure_ops.count(op->name()))
+            Py_RETURN_NONE;
+        for (auto* input : op->inputs()) stack.push_back(input);
+    }
+    return guards.release();
+}
+
+static bool can_guard_step_readback() {
+    return no_grad && state_capture && !capture_saw_readback && keep_graph == 2;
+}
+
+PyObject* VarHolder::step_guarded_scalar(int64 epoch) {
+    const auto dtype = var->dtype();
+    if (!can_guard_step_readback() || var->num != 1
+            || !(dtype.is_int() || dtype.is_bool() || dtype.is_float())) Py_RETURN_NONE;
+    ExecutorEntryScope entry;
+    PyObjHolder guards(collect_step_readback_guards(var, epoch, 64, 4096));
+    if (!guards.obj) return nullptr;
+    if (guards.obj == Py_None) Py_RETURN_NONE;
+    PyObjHolder scalar(to_py_object(read_item(false)));
+    if (!scalar.obj) return nullptr;
+    return PyTuple_Pack(2, scalar.obj, guards.obj);
+}
+
+PyObject* VarHolder::step_guarded_array(int64 epoch) {
+    if (!can_guard_step_readback() || save_mem) Py_RETURN_NONE;
+    ExecutorEntryScope entry;
+    PyObjHolder guards(collect_step_readback_guards(var, epoch, 64, 4096));
+    if (!guards.obj) return nullptr;
+    if (guards.obj == Py_None) Py_RETURN_NONE;
+    check_backward_storage_read(var);
+    PyObjHolder array(to_py_object(read_array(false)));
+    if (!array.obj) return nullptr;
+    return PyTuple_Pack(2, array.obj, guards.obj);
+}
+
+PyObject* VarHolder::step_guarded_predicate(int64 epoch) {
+    if (!can_guard_step_readback() || var->num != 1 || !var->dtype().is_bool())
+        Py_RETURN_NONE;
+    ExecutorEntryScope entry;
+    PyObjHolder guards(collect_step_readback_guards(var, epoch, 256, 4ll * 1024ll * 1024ll));
+    if (!guards.obj) return nullptr;
+    if (guards.obj == Py_None) Py_RETURN_NONE;
+    PyObjHolder scalar(to_py_object(read_item(false)));
+    if (!scalar.obj) return nullptr;
+    return PyTuple_Pack(2, scalar.obj, guards.obj);
+}
+
+ItemData VarHolder::read_item(bool migrate) {
     // Keep the entry lock through the final scalar copy, including managed
     // allocations which migrate_to_cpu deliberately leaves on the device.
     ExecutorEntryScope entry;
@@ -2437,7 +2555,7 @@ ItemData VarHolder::item() {
             // A var of its own still moves: that is the element alone, and every
             // later read of it is then a host copy rather than a readback.
             bool in_place = var->share_next && var->mem_ptr && var->allocator->is_cuda();
-            if (save_mem || (_HAS_ACCELERATOR && !in_place))
+            if (migrate && (save_mem || (_HAS_ACCELERATOR && !in_place)))
                 migrate_to_cpu(var, runtime_executor().allocator);
         }
         #ifdef HAS_ACCELERATOR

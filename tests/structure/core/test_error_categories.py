@@ -108,10 +108,10 @@ MIGRATED_BROADCAST_SHAPE_BOUNDARIES = {
 # boundaries on the same caller-supplied `(x, shape, dtype)` triple, not
 # internal invariants.
 MIGRATED_REINTERPRET_VIEW_BOUNDARIES = {
-    # Replace the blanket contiguous-only rejection with three precise guards:
-    # last stride 1 for itemsize changes, byte-stride divisibility, and refusal
-    # to reinterpret an arbitrary non-contiguous reshape (net two boundaries).
-    "src/ops/composite/reinterpret_view_op.cc": 12,
+    # Equal-rank dtype views check the last stride and byte-stride divisibility.
+    # Complex pair views also check the component stride when merging a pair
+    # and the byte-stride divisibility of the remaining axes.
+    "src/ops/composite/reinterpret_view_op.cc": 14,
 }
 
 # 2026-09-11: 1 -> 3. Besides the shape check this entry was named for,
@@ -388,7 +388,7 @@ MIGRATED_CUDNN_CONV3D_BWD_W_X_RANK_USER_BOUNDARIES = {
 # caller input. (The same commit also turned the unmapped-backend `LOGf` in
 # `jit_run` into `USER_ERROR`, which this count does not see.)
 MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES = {
-    "src/ops/composite/fused_adamw_op.cc": 10,
+    "src/ops/composite/fused_adamw_op.cc": 11,
 }
 
 MIGRATED_TERNARY_SHAPE_BOUNDARIES = {
@@ -557,6 +557,8 @@ def test_reinterpret_view_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_REINTERPRET_VIEW_BOUNDARIES[
         "src/ops/composite/reinterpret_view_op.cc"]
+    assert source.count("USER_CHECK(x->storage_stride(prefix_rank) == 1)") == 1
+    assert source.count("USER_CHECK(byte_stride % ydsize == 0)") == 2
 
 
 def test_binary_shape_migration_is_explicit_and_bounded():
@@ -1050,9 +1052,9 @@ def test_fused_adamw_cardinality_migration_is_explicit_and_bounded():
     actual = source.count("USER_CHECK(") + source.count("USER_CHECKop(")
     assert actual == MIGRATED_FUSED_ADAMW_CARDINALITY_BOUNDARIES[
         "src/ops/composite/fused_adamw_op.cc"]
-    # Four cardinality checks, then six per-index ones; naming the split
-    # keeps the single number above from hiding a swap between the cohorts.
+    # Keep the list, header and per-index contracts visible independently.
     assert source.count("USER_CHECKop(parameters.size(),") == 4
+    assert source.count("USER_CHECK(step->num >= 1 &&") == 1
     for other in ("moments", "variances", "gradients"):
         assert source.count("USER_CHECK(parameters[i]->shape == %s[i]->shape)" % other) == 1
         assert source.count("USER_CHECK(parameters[i]->dtype() == %s[i]->dtype())" % other) == 1

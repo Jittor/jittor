@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <atomic>
 #include "core/common.h"
 
 // The step tracer behind `jt.profile` (python/jittor/profiling).
@@ -45,7 +46,7 @@ enum StepTraceMode {
     st_shapes = 4,     // input shapes of launched operators
 };
 
-EXTERN_LIB int step_trace_mode;
+EXTERN_LIB std::atomic<int> step_trace_mode;
 
 // Memory event kinds.
 enum StepTraceMemKind {
@@ -74,6 +75,32 @@ int64 step_trace_now();
 /// zeros to stop correlating.
 // @pyjt(step_trace_set_correlation)
 void step_trace_set_correlation(int64 push_fn, int64 pop_fn);
+/// Initialize pure-C++ CUPTI activity buffer callbacks (avoiding Python GIL
+/// acquisition on CUPTI's background delivery thread). Takes function pointers
+/// for `cuptiActivityGetNextRecord` and optional `cuptiActivityGetNumDroppedRecords`,
+/// returns `{buffer_requested_cb, buffer_completed_cb}`.
+// @pyjt(step_trace_cupti_init)
+vector<int64> step_trace_cupti_init(int64 get_next_record_fn, int64 get_dropped_fn);
+/// Clear collected CUPTI activity records and pre-warm spare buffers.
+// @pyjt(step_trace_cupti_reset)
+void step_trace_cupti_reset();
+/// Take interned kernel names collected since last reset.
+// @pyjt(step_trace_cupti_take_names)
+vector<string> step_trace_cupti_take_names();
+/// Take flat kernel records (15 int64s each): start, end, device, stream,
+/// correlation, name_id, graph, gx, gy, gz, bx, by, bz, registers, shmem.
+// @pyjt(step_trace_cupti_take_kernels)
+vector<int64> step_trace_cupti_take_kernels();
+/// Take flat copy/memset records (7 int64s each): start, end, device, stream,
+/// correlation, copy_kind (0=memset, 1..10=memcpy kind), bytes.
+// @pyjt(step_trace_cupti_take_copies)
+vector<int64> step_trace_cupti_take_copies();
+/// Take flat external correlation pairs (2 int64s each): correlation_id, external_id.
+// @pyjt(step_trace_cupti_take_correlations)
+vector<int64> step_trace_cupti_take_correlations();
+/// Number of CUPTI activity records dropped since last reset.
+// @pyjt(step_trace_cupti_dropped)
+int64 step_trace_cupti_dropped();
 /// Interned strings referenced by id from the records below.
 // @pyjt(step_trace_strings)
 vector<string> step_trace_strings();
@@ -123,6 +150,8 @@ struct StepTraceCompileScope {
 
 struct StepTraceBatchScope {
     int64 batch = -1;
+    int64 prev_batch = -1;
+    uint64 gen = 0;
     StepTraceBatchScope();
     ~StepTraceBatchScope();
     void mark(int phase);

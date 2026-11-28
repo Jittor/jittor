@@ -63,7 +63,9 @@ first collective of the bucket: a group has to be open around the NCCL calls
 themselves, and the calls happen here, during graph execution, not while the
 Python-level scope object is being constructed.
 */
-cudaStream_t nccl_stream_begin();
+// Skip the wait only if the communication stream already depends on every
+// producer of the current collective on this device.
+cudaStream_t nccl_stream_begin(bool wait_for_compute = true);
 
 /**
 Close out one collective. Takes the operator's input and output because the

@@ -6,6 +6,7 @@
 #include "bindings/pyjt/py_compat_fast.h"
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -43,6 +44,8 @@ PyObject* slow = nullptr;
 PyObject* prefer_forward_fn = nullptr;
 PyObject* standard_rms_norm = nullptr;
 PyObject* rms_selector_state = nullptr;
+thread_local bool parallel_linear_scope = false;
+PyObject* rms_getattr_state = nullptr;
 PyObject* linear_execute = nullptr;
 PyObject* linear_training_state = nullptr;
 #if PY_VERSION_HEX < 0x030C0000
@@ -173,20 +176,25 @@ PyObject* partial_type = nullptr;
 PyObject* group_norm_name = nullptr;
 PyObject* lt_linear_header = nullptr;
 PyObject* lt_linear_source_fn = nullptr;
-std::map<std::tuple<int64, int64, int64, bool>, string> lt_linear_sources;
+std::map<std::tuple<int64, int64, int64, bool, bool>, const string*> lt_linear_sources;
 string lt_linear_header_text;
 auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+auto make_prepared_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&,
+    const string*, DataMap&&, string&&>("code");
 // Source per hidden size, as `_rms_norm_source` formats it (eps passed via DataMap).
-std::map<int64, string> rms_sources;
+std::map<int64, const string*> rms_sources;
 // `jittor.nn.LayerNorm.execute`, the implementation registered for
 // "nn.layer_norm.inference" and `layer_norm_cuda._affine_source`; see
 // `layer_norm_inference`.
 PyObject* layer_norm_execute = nullptr;
 PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
+PyObject* layer_norm_weight_only_source_fn = nullptr;
+PyObject* residual_layer_norm_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
-std::map<std::pair<int64, bool>, string> layer_norm_sources;
+std::map<std::tuple<int64, bool, bool>, const string*> layer_norm_sources;
+std::map<std::tuple<int64, bool, bool>, std::pair<string, string>> residual_layer_norm_sources;
 
 // Keep fixed dictionary keys, never the values: hooks and module attributes
 // may change between calls and must be read from the live dictionary.
@@ -197,6 +205,7 @@ PyObject* call_depth_key = nullptr;
 PyObject* weight_key = nullptr;
 PyObject* bias_key = nullptr;
 PyObject* getattribute_key = nullptr;
+PyObject* getattr_key = nullptr;
 PyObject* linear_input_keys[6] = {};
 
 PyObject* interned(PyObject*& slot, const char* text) {
@@ -276,7 +285,8 @@ const TypeInfo& info_of(PyTypeObject* type) {
         return name.size() >= suffix.size()
             && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
     };
-    info.rms_named = ends_with("RMSNorm") && !ends_with("RMSNormGated");
+    info.rms_named = (ends_with("RMSNorm") && !ends_with("RMSNormGated"))
+        || (info.prefer_forward && ends_with("LayerNorm"));
     try {
         on_type_collected((PyObject*)type, forget_type_info);
     } catch (...) {
@@ -960,22 +970,25 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
     int64 rows = cin ? a->num / cin : 0;
     if (rows * cout * cin < (int64(1) << 18)) return nullptr;
     bool half = dtype == ns_float16;
-    auto key = std::make_tuple(rows, cin, cout, half);
+    bool capture = half && keep_graph == 2;
+    auto key = std::make_tuple(rows, cin, cout, half, capture);
     auto found = lt_linear_sources.find(key);
     if (found == lt_linear_sources.end()) {
-        PyObjHolder src(PyObject_CallFunction(lt_linear_source_fn, "LLLs",
-            (long long)rows, (long long)cin, (long long)cout, half ? "float16" : "float32"));
+        PyObjHolder src(PyObject_CallFunction(lt_linear_source_fn, "LLLsO",
+            (long long)rows, (long long)cin, (long long)cout, half ? "float16" : "float32",
+            capture ? Py_True : Py_False));
         Py_ssize_t size;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
         if (!text) return nullptr;
-        found = lt_linear_sources.emplace(key, string(text, size)).first;
+        const auto& source = code_source_token(lt_linear_header_text, string(text, size));
+        found = lt_linear_sources.emplace(key, &source).first;
     }
     NanoVector shape;
     for (int i = 0; i < rank - 1; i++) shape.push_back(a->shape[i]);
     shape.push_back(cout);
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_code(shape, dtype, {a, w, b},
-        "", {}, "", string(found->second), {}, string(lt_linear_header_text), {}, "")));
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(shape, dtype, {a, w, b},
+        found->second, {}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
@@ -1043,30 +1056,46 @@ PyObject* rms_norm_registered_inference(PyObject* module, PyObject* dict, PyObje
 // code operator from `_rms_norm_source`. nullptr for anything else.
 PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     if (!dict || !is_var(x)) return nullptr;
+    bool plain_lookup = false;
+    PyTypeObject* type = Py_TYPE(module);
+    if (rms_getattr_state) {
+        auto* owner = PyTuple_GET_ITEM(rms_getattr_state, 0);
+        auto* shim_getattr = PyTuple_GET_ITEM(rms_getattr_state, 1);
+        auto* native_getattr = PyTuple_GET_ITEM(rms_getattr_state, 3);
+        auto* getattribute = interned(getattribute_key, "__getattribute__");
+        plain_lookup = _PyType_Lookup(type, getattribute) == _PyType_Lookup(&PyBaseObject_Type, getattribute)
+            && _PyType_Lookup(type, interned(getattr_key, "__getattr__")) == shim_getattr
+            && PyFunction_GET_CODE(shim_getattr) == PyTuple_GET_ITEM(rms_getattr_state, 2)
+            && PyFunction_GET_CODE(native_getattr) == PyTuple_GET_ITEM(rms_getattr_state, 4)
+            && !PyDict_GetItemString(PyFunction_GET_GLOBALS(native_getattr), "object")
+            && PyDict_GetItemString(owner, "_ORIG_MODULE_GETATTR") == native_getattr
+            && PyDict_GetItemString(owner, "_TORCH_HOOK_TABLES") == PyTuple_GET_ITEM(rms_getattr_state, 5);
+    }
     // Match the public contract guard in `_standard_rms_norm` before
     // kernel selection sees even an intentionally unused affine tensor.
-    // Resolve attributes normally so class options/descriptors also agree.
-    for (const char* name : {"has_weight", "pass_weight", "variance_size_override"}) {
-        PyObject* option_value = PyObject_GetAttrString(module, name);
-        if (!option_value) {
-            if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
-            PyErr_Clear();
+    // Default Module lookup can answer instance-only names directly. Class
+    // descriptors and any custom attribute implementation use Python.
+    static PyObject* option_keys[4]{};
+    const char* names[] = {"has_weight", "pass_weight", "variance_size_override", "forward_native"};
+    for (int i = 0; i < 4; ++i) {
+        auto* key = interned(option_keys[i], names[i]);
+        if (!key) return nullptr;
+        PyObjHolder option;
+        if (plain_lookup && !_PyType_Lookup(type, key)) {
+            option.obj = PyDict_GetItemWithError(dict, key);
+            Py_XINCREF(option.obj);
+        } else {
+            option.obj = PyObject_GetAttr(module, key);
+            if (!option.obj && PyErr_ExceptionMatches(PyExc_AttributeError)) PyErr_Clear();
+        }
+        if (!option.obj) {
+            if (PyErr_Occurred()) return nullptr;
             continue;
         }
-        PyObjHolder option(option_value);
-        if (std::strcmp(name, "variance_size_override") == 0) {
-            if (option.obj != Py_None) return nullptr;
-        } else if (option.obj == Py_False) {
+        if ((i < 2 && option.obj == Py_False)
+                || (i == 2 && option.obj != Py_None)
+                || (i == 3 && PyCallable_Check(option.obj)))
             return nullptr;
-        }
-    }
-    PyObject* native_forward_value = PyObject_GetAttrString(module, "forward_native");
-    if (native_forward_value) {
-        PyObjHolder native_forward(native_forward_value);
-        if (PyCallable_Check(native_forward.obj)) return nullptr;
-    } else {
-        if (!PyErr_ExceptionMatches(PyExc_AttributeError)) return nullptr;
-        PyErr_Clear();
     }
     // These public contract guards apply to backend providers too, before
     // selection can inspect a weight the module has explicitly disabled.
@@ -1076,6 +1105,9 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* eps = PyDict_GetItemString(dict, "variance_epsilon");
     if (!weight || !is_var(weight) || !eps || !(PyFloat_Check(eps) || PyLong_Check(eps)))
+        return nullptr;
+    if (PyDict_GetItemString(dict, "bias") != nullptr
+            || PyDict_GetItemString(dict, "normalized_shape") != nullptr)
         return nullptr;
     double epsilon = PyFloat_AsDouble(eps);
     if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
@@ -1099,16 +1131,111 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
         Py_ssize_t size;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
         if (!text) return nullptr;
-        found = rms_sources.emplace(hidden, string(text, size)).first;
+        const auto& source = code_source_token("", string(text, size));
+        found = rms_sources.emplace(hidden, &source).first;
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma},
-        "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(a->shape, a->dtype(), {a, gamma},
+        found->second, DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
 
-// `nn.LayerNorm` with a weight and a bias on an inference call: the operator
+Op* pending_binary(Var* value, NanoString operation) {
+    auto* op = value->is_finished() ? nullptr : value->input();
+    return op && op->is_op(op_ids::binary()) && op->ns == operation
+        && op->_inputs.size() == 2 ? op : nullptr;
+}
+
+Var* scalar_bound(Var* bound) {
+    while (auto* op = bound->is_finished() ? nullptr : bound->input()) {
+        if (!op->is_op(op_ids::broadcast_to()) || op->_inputs.size() != 1) break;
+        bound = op->input(0);
+    }
+    return bound->num == 1 ? bound : nullptr;
+}
+
+PyObject* residual_layer_norm(PyObject* x, Var* gamma, Var* beta, int64 hidden, double eps) {
+    if (!residual_layer_norm_source_fn || !beta || !no_grad || keep_graph != 2
+            || accelerator_backend_id() != BackendId::Cuda || hidden < 128
+            || hidden > 4096 || hidden % 8)
+        return nullptr;
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    Var* residual = holder->var;
+    // The fused op supplies the residual for subsequent readers. Keep every
+    // existing reader and visible storage alias on the original graph.
+    if (residual->holder != holder || holder->view || holder->views || holder->capture_record
+            || residual->is_finished() || residual->mem_ptr || residual->share_src
+            || residual->share_next || !residual->_outputs.empty()
+            || residual->liveness.backward.count() != 1 || residual->num <= 0
+            || (hidden <= 1024 && residual->num / hidden >= 1024))
+        return nullptr;
+    auto version = residual->peek_storage_version();
+    if (version && (version->value.load(std::memory_order_relaxed)
+            || version->externally_visible.load(std::memory_order_relaxed)))
+        return nullptr;
+
+    auto dtype = residual->dtype();
+    Var* sum = residual;
+    Var* lower = nullptr;
+    Var* upper = nullptr;
+    if (auto* minimum = pending_binary(residual, ns_minimum)) {
+        auto* maximum = pending_binary(minimum->input(1), ns_maximum);
+        if (!maximum) return nullptr;
+        lower = scalar_bound(maximum->input(0));
+        upper = scalar_bound(minimum->input(0));
+        if (!lower || !upper || lower->dtype() != dtype || upper->dtype() != dtype)
+            return nullptr;
+        sum = maximum->input(1);
+    }
+    auto* addition = pending_binary(sum, ns_add);
+    if (!addition || sum->dtype() != dtype || sum->shape != residual->shape)
+        return nullptr;
+    Var* left = addition->input(0);
+    Var* right = addition->input(1);
+    for (Var* value : {left, right, gamma, beta})
+        if (value->dtype() != dtype || !value->is_contiguous()) return nullptr;
+    if (left->shape != residual->shape || right->shape != residual->shape)
+        return nullptr;
+
+    bool narrow = dtype != ns_float32;
+    auto key = std::make_tuple(hidden, lower != nullptr, narrow);
+    auto found = residual_layer_norm_sources.find(key);
+    if (found == residual_layer_norm_sources.end()) {
+        PyObjHolder source(PyObject_CallFunction(residual_layer_norm_source_fn, "LOO",
+            static_cast<long long>(hidden), lower ? Py_True : Py_False,
+            narrow ? Py_True : Py_False));
+        if (!source.obj || !PyTuple_Check(source.obj) || PyTuple_GET_SIZE(source.obj) != 2)
+            return nullptr;
+        const char* header = PyUnicode_AsUTF8(PyTuple_GET_ITEM(source.obj, 0));
+        const char* launch = PyUnicode_AsUTF8(PyTuple_GET_ITEM(source.obj, 1));
+        if (!header || !launch) return nullptr;
+        found = residual_layer_norm_sources.emplace(key, std::make_pair(header, launch)).first;
+    }
+
+    static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&,
+        vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&,
+        string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+    vector<Var*> inputs{left, right, gamma, beta};
+    if (lower) {
+        inputs.push_back(lower);
+        inputs.push_back(upper);
+    }
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    auto outputs = make_code_multi({residual->shape, residual->shape}, {dtype, dtype},
+        move(inputs), "", {}, "", string(found->second.second), {}, string(found->second.first),
+        {{"eps", eps}}, "cuda");
+    unique_ptr<VarHolder> normalized(new VarHolder(move(outputs[0])));
+    normalized->stop_grad();
+    PyObject* result = to_py_object<VarHolder*>(normalized.release());
+    if (!result) return nullptr;
+    VarHolder replacement(move(outputs[1]));
+    replacement.var->set_storage_version(move(version));
+    holder->swap(&replacement);
+    return result;
+}
+
+// Affine `nn.LayerNorm` on an inference call: the operator
 // `_layer_norm_no_grad_cuda` builds, when the dispatcher picks it -- asked with
 // the arguments `layer_norm` asks with, which its native rule answers without
 // a Python predicate. Anything else -- a shape `layer_norm` rejects, a call that
@@ -1123,9 +1250,10 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     PyObject* affine = PyDict_GetItemString(dict, "elementwise_affine");
     PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* bias = PyDict_GetItem(dict, name_bias());
+    const bool has_bias = bias && is_var(bias);
     if (!shape || !PyTuple_Check(shape) || PyTuple_GET_SIZE(shape) != 1 || affine != Py_True
             || !eps || !PyFloat_Check(eps) || !weight || !is_var(weight)
-            || !bias || !is_var(bias))
+            || (!has_bias && bias != Py_None))
         return nullptr;
     PyObject* size = PyTuple_GET_ITEM(shape, 0);
     if (!PyLong_CheckExact(size)) return nullptr;
@@ -1134,35 +1262,49 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* gamma = GET_RAW_PTR(VarHolder, weight)->var;
-    Var* beta = GET_RAW_PTR(VarHolder, bias)->var;
+    Var* beta = has_bias ? GET_RAW_PTR(VarHolder, bias)->var : nullptr;
     int rank = a->shape.size();
-    if (!rank || a->shape[rank - 1] != hidden || a->num < 0) return nullptr;
+    if (hidden <= 0 || !rank || a->shape[rank - 1] != hidden || a->num < 0) return nullptr;
     if (gamma->shape.size() != 1 || gamma->shape[0] != hidden
-            || beta->shape.size() != 1 || beta->shape[0] != hidden)
+            || (beta && (beta->shape.size() != 1 || beta->shape[0] != hidden)))
         return nullptr;
-    if (!no_grad && (!a->is_stop_grad() || !gamma->is_stop_grad() || !beta->is_stop_grad()))
+    if (!no_grad && (!a->is_stop_grad() || !gamma->is_stop_grad()
+            || (beta && !beta->is_stop_grad())))
         return nullptr;
-    PyObjHolder call_args(PyTuple_Pack(5, x, shape, weight, bias, eps));
+    // The functional normalizes an absent bias before running the selector.
+    PyObjHolder zero_bias;
+    if (!has_bias) {
+        zero_bias.obj = PyFloat_FromDouble(0.0);
+        if (!zero_bias.obj) return nullptr;
+    }
+    PyObjHolder call_args(PyTuple_Pack(5, x, shape, weight, has_bias ? bias : zero_bias.obj, eps));
+    if (!call_args.obj) return nullptr;
     PyObjHolder chosen(kernel_select(layer_norm_name, call_args.obj, nullptr));
     if (!chosen.obj || chosen.obj != layer_norm_impl) {
         if (!chosen.obj) PyErr_Clear();
         return nullptr;
     }
+    PyObject* fused = residual_layer_norm(x, gamma, beta, hidden, epsilon);
+    if (fused || PyErr_Occurred()) return fused;
     bool warp = hidden <= 1024 && a->num / hidden >= 1024;
-    auto key = std::make_pair(hidden, warp);
+    auto key = std::make_tuple(hidden, warp, has_bias);
     auto found = layer_norm_sources.find(key);
     if (found == layer_norm_sources.end()) {
-        PyObjHolder src(PyObject_CallFunction(layer_norm_source_fn, "LO",
+        PyObject* source_fn = has_bias ? layer_norm_source_fn : layer_norm_weight_only_source_fn;
+        if (!source_fn) return nullptr;
+        PyObjHolder src(PyObject_CallFunction(source_fn, "LO",
             (long long)hidden, warp ? Py_True : Py_False));
         if (!src.obj) return nullptr;
         Py_ssize_t length;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &length);
         if (!text) return nullptr;
-        found = layer_norm_sources.emplace(key, string(text, length)).first;
+        const auto& source = code_source_token("", string(text, length));
+        found = layer_norm_sources.emplace(key, &source).first;
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma, beta},
-        "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
+    auto inputs = beta ? vector<Var*>{a, gamma, beta} : vector<Var*>{a, gamma};
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(a->shape, a->dtype(), move(inputs),
+        found->second, DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
@@ -1210,50 +1352,30 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
             return call_with(forward, module, args, kwargs);
         }
     }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && linear_execute
-            && _PyType_Lookup(type, name_execute()) == linear_execute
+    if (!kwargs && PyTuple_GET_SIZE(args) == 1
             && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = linear_without_bias(module, dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-        fast = linear_with_bias_inference(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-        fast = linear_with_bias_training(module, dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && conv_execute
-            && _PyType_Lookup(type, name_execute()) == conv_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = conv2d_inference(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && batch_norm_execute
-            && _PyType_Lookup(type, name_execute()) == batch_norm_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = batch_norm_eval_channels_last(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && layer_norm_execute
-            && _PyType_Lookup(type, name_execute()) == layer_norm_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = layer_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && dropout_execute
-            && _PyType_Lookup(type, name_execute()) == dropout_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* same = dropout_passthrough(dict, PyTuple_GET_ITEM(args, 0));
-        if (same) return same;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && function_module_execute
-            && _PyType_Lookup(type, name_execute()) == function_module_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = activation_module(type, dict, PyTuple_GET_ITEM(args, 0));
-        if (fast || PyErr_Occurred()) return fast;
-    }
-    if (!kwargs && PyTuple_GET_SIZE(args) == 1 && group_norm_execute
-            && _PyType_Lookup(type, name_execute()) == group_norm_execute
-            && !(dict && PyDict_GetItem(dict, name_execute()))) {
-        PyObject* fast = group_norm_inference(dict, PyTuple_GET_ITEM(args, 0));
+        PyObject* execute = _PyType_Lookup(type, name_execute());
+        PyObject* x = PyTuple_GET_ITEM(args, 0);
+        PyObject* fast = nullptr;
+        if (!parallel_linear_scope && execute && execute == linear_execute) {
+            fast = linear_without_bias(module, dict, x);
+            if (fast || PyErr_Occurred()) return fast;
+            fast = linear_with_bias_inference(dict, x);
+            if (fast || PyErr_Occurred()) return fast;
+            fast = linear_with_bias_training(module, dict, x);
+        } else if (execute && execute == conv_execute) {
+            fast = conv2d_inference(dict, x);
+        } else if (execute && execute == batch_norm_execute) {
+            fast = batch_norm_eval_channels_last(dict, x);
+        } else if (execute && execute == layer_norm_execute) {
+            fast = layer_norm_inference(dict, x);
+        } else if (execute && execute == dropout_execute) {
+            fast = dropout_passthrough(dict, x);
+        } else if (execute && execute == function_module_execute) {
+            fast = activation_module(type, dict, x);
+        } else if (execute && execute == group_norm_execute) {
+            fast = group_norm_inference(dict, x);
+        }
         if (fast || PyErr_Occurred()) return fast;
     }
     PyObjHolder execute(PyObject_GetAttr(module, name_execute()));
@@ -1262,6 +1384,12 @@ PyObject* dispatch_native(PyObject* module, const TypeInfo& info, PyObject* args
 }
 
 } // namespace
+
+bool set_parallel_linear_scope(bool enabled) {
+    const bool previous = parallel_linear_scope;
+    parallel_linear_scope = enabled;
+    return previous;
+}
 
 void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
                       PyObject* dispatch_module_call_, PyObject* published_,
@@ -1281,6 +1409,13 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     };
     part(prefer_forward_fn, "prefer_forward");
     part(standard_rms_norm, "standard_rms_norm");
+    part(rms_getattr_state, "rms_getattr_state");
+    if (rms_getattr_state && (!PyTuple_CheckExact(rms_getattr_state)
+            || PyTuple_GET_SIZE(rms_getattr_state) != 6
+            || !PyDict_Check(PyTuple_GET_ITEM(rms_getattr_state, 0))
+            || !PyFunction_Check(PyTuple_GET_ITEM(rms_getattr_state, 1))
+            || !PyFunction_Check(PyTuple_GET_ITEM(rms_getattr_state, 3))))
+        throw std::invalid_argument("invalid module attribute lookup state");
     part(rms_selector_state, "rms_selector_state");
     if (rms_selector_state && (!PyTuple_CheckExact(rms_selector_state)
             || PyTuple_GET_SIZE(rms_selector_state) != 9
@@ -1340,8 +1475,11 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(layer_norm_execute, "layer_norm_execute");
     part(layer_norm_impl, "layer_norm_inference");
     part(layer_norm_source_fn, "layer_norm_source");
+    part(layer_norm_weight_only_source_fn, "layer_norm_weight_only_source");
+    part(residual_layer_norm_source_fn, "residual_layer_norm_source");
     if (!layer_norm_name) layer_norm_name = PyUnicode_InternFromString("nn.layer_norm.inference");
     layer_norm_sources.clear();
+    residual_layer_norm_sources.clear();
     part(bn_coefficients_key, "bn_coefficients_key");
     if (!conv2d_name) conv2d_name = PyUnicode_InternFromString("conv2d");
     if (!depthwise_kwargs) {
@@ -1406,7 +1544,7 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
         // (the portable convolution under autocast).
         if (Var* placed = first_placed_module_var(module)) like_var = placed;
     }
-    PyObject* type_token = set_tensor_frontend_type(info.tensor_type);
+    PyObject* type_token = enter_module_tensor_type(info.tensor_type);
     PyObject* placement_token = nullptr;
     auto previous_precision = current_float32_precision_policy();
     int previous_policy = -1;
@@ -1420,7 +1558,7 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
         }
         set_float32_precision_policy({matmul, cudnn});
         if (like_var && like_var->placement.explicit_backend)
-            placement_token = set_tensor_placement_context(
+            placement_token = enter_module_tensor_placement(
                 int(like_var->placement.device.backend), std::max(like_var->device_id, 0));
         previous_policy = get_autograd_policy();
         set_autograd_policy(true, true);
@@ -1433,8 +1571,8 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     } catch (...) {
         if (previous_policy >= 0) set_autograd_policy(previous_policy & 1, previous_policy & 2);
         set_float32_precision_policy(previous_precision);
-        if (placement_token) { reset_tensor_placement_context(placement_token); Py_DECREF(placement_token); }
-        reset_tensor_frontend_type(type_token);
+        if (placement_token) { leave_module_tensor_placement(placement_token); Py_DECREF(placement_token); }
+        leave_module_tensor_type(type_token);
         Py_DECREF(type_token);
         throw;
     }
@@ -1444,8 +1582,8 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
     // A module boundary: where a batch is cut for the worker thread.
     if (result && !error_type) runtime_executor().flush_at_module_boundary();
     set_float32_precision_policy(previous_precision);
-    if (placement_token) { reset_tensor_placement_context(placement_token); Py_DECREF(placement_token); }
-    reset_tensor_frontend_type(type_token);
+    if (placement_token) { leave_module_tensor_placement(placement_token); Py_DECREF(placement_token); }
+    leave_module_tensor_type(type_token);
     Py_DECREF(type_token);
     PyErr_Restore(error_type, error_value, error_tb);
     return result;

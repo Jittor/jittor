@@ -1,10 +1,11 @@
 """cuDNN adapters shared by convolution functional implementations."""
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+import math
 import os
 
 import jittor as jt
-from jittor._runtime.dispatch import native_rule, optional_kernel, register_kernel
+from jittor._runtime.dispatch import dispatch_context, native_rule, optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor.nn.functional._amp import bias_for_compute_dtype
@@ -57,11 +58,9 @@ def _inference_filter(x, weight, groups):
     same at the price of the convolution weights twice over, 1.1 GB for the
     UNet.
 
-    Only a materialized weight moves -- a parameter, not a filter computed in
-    the call -- and never while a step is being traced, where rebinding a
-    parameter reads as a state change. A 1x1 filter is the same bytes in
-    either layout and is only relabelled. With a backward nothing moves; a
-    weight moved earlier still reads right, through its strides.
+    Only a materialized weight moves. During step capture, express the reorder
+    explicitly so constant folding can hoist it and guard its source. Computed
+    filters stay on the cuDNN path when their reorder cannot be hoisted.
     """
     if (groups != 1 or _jittor_dtype_name(weight.dtype) not in ("float16", "bfloat16")
             or _output_requires_grad(x, weight)):
@@ -75,14 +74,27 @@ def _inference_filter(x, weight, groups):
     moved = state.get(_FILTER_OHWI)
     if moved is not None and moved[0] == weight.var_ptr:
         return moved[1], "ohwi"
+    if _is_ohwi_storage(weight):
+        return weight._storage_permute((0, 2, 3, 1)), "ohwi"
     from jittor.autograd.checkpoint import _rematerializing
     from jittor._runtime import step_capture
+    if channels_last_filters and step_capture.tracing() and not _rematerializing.get():
+        # Conv1d supplies a view of its filter. Follow views only, so filters
+        # computed as part of the captured step keep their usual layout.
+        source = weight
+        while not source.is_finished and source._producer_is_view():
+            source = source._input(0)
+        if source.is_finished:
+            return jt.contiguous(weight._storage_permute((0, 2, 3, 1))), "ohwi"
     # The checkpoint forward also runs under no_grad, but it must leave the
     # captured weight and its version intact until backward.
     if (not channels_last_filters or not weight.is_finished
             or step_capture.tracing() or jt.flags.keep_graph or _rematerializing.get()):
         return weight, "oihw"
-    dense = weight.transpose(0, 2, 3, 1).clone()
+    # Materialize dense OHWI explicitly: under the Torch frontend `Tensor.clone`
+    # defaults to `preserve_format`, which would keep the transposed view's OIHW
+    # strides and force cuDNN's op entry to run a contiguous copy on every call.
+    dense = jt.contiguous(weight.transpose(0, 2, 3, 1))
     with jt.flag_scope(transpose_storage_view=1):
         view = dense.transpose(0, 3, 1, 2)
     # Made under `no_grad`, the view is born stopped; a parameter that takes a
@@ -107,26 +119,16 @@ channels_last_activations = True
 
 _HALF = ("float16", "bfloat16")
 
-#: Whether a convolution that records a gradient runs channels-last where
-#: that pays, float32 included. cuDNN's tensor-core kernels compute in NHWC for
-#: training too: handed NCHW, every forward, data-gradient and filter-gradient
-#: call converts its operands on the way in and its result on the way out --
-#: 7.4 ms of a 78 ms ResNet-50 training step, whose convolutions ran in 41.3 ms
-#: NCHW against 37.1 NHWC. It only pays while what reads the result keeps the
-#: layout: a batch norm does (its NHWC kernels), a group norm, an
-#: interpolation or a reshape would convert it back, and a DDPM UNet trained
-#: 13% slower with every convolution channels-last. So a convolution whose
-#: input is NCHW hands out NCHW and offers the channels-last result
-#: (`offer_channels_last`) for a reader that can use it; one whose input is
-#: already channels-last stays channels-last. Gradients follow the same
-#: layout back (`TransposeOp::grad` keeps a view a view). Grouped convolutions
-#: stay NCHW: their channels-last kernels are the slow ones.
+#: Ungrouped training convolutions can keep a channels-last input's layout.
+#: With tensor-op math, they can also offer that layout to a consumer such as
+#: BatchNorm. For strict float32 cuDNN can select NCHW engines even when the
+#: descriptors say NHWC, especially for the gradients. Starting an NHWC
+#: chain from NCHW in that mode adds activation reorders inside cuDNN.
 channels_last_training = True
 
 
-def _training_channels_last(x, weight, bias, groups):
+def _training_channels_last(x, weight, bias, groups, dtype):
     """Whether a call that records a gradient may run channels-last."""
-    dtype = _jittor_dtype_name(x.dtype)
     return (channels_last_training and groups == 1
             and (dtype in _HALF or dtype == "float32")
             and not jt.flags.no_grad and _output_requires_grad(x, weight, bias))
@@ -158,8 +160,9 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
             y = y + bias_for_compute_dtype(y, bias)
         return channels_last_view(y)
 
-    training = _training_channels_last(x, weight, bias, groups)
-    if training or (channels_last_activations and _jittor_dtype_name(x.dtype) in _HALF
+    dtype = _jittor_dtype_name(x.dtype)
+    training = _training_channels_last(x, weight, bias, groups, dtype)
+    if training or (channels_last_activations and dtype in _HALF
                     and (jt.flags.no_grad or not _output_requires_grad(x, weight, bias))):
         source = channels_last_source(x)
         if source is None:
@@ -174,7 +177,8 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     y = cudnn.cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups, "abcd", layout)
     if bias is not None:
         y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
-    if training:
+    if training and (dtype in _HALF or dispatch_context(x, weight).backend != "cuda"
+                     or jt.core.float32_precision_state()[1] != "highest"):
         offer_channels_last(y, lambda: channels_last(None))
     return y
 
@@ -225,8 +229,47 @@ def _supports_conv3d(x, weight, stride, padding, dilation, groups):
     return get_library_ops("cudnn") is not None
 
 
+def _conv3d_nonoverlapping_patches(x, weight, stride, padding, dilation, groups):
+    # With an exact non-overlapping tiling, each input is consumed once by
+    # the patch gather. A channels-last 1x1 convolution can then operate on
+    # whole patches with Tensor Cores and keep cuDNN's FP32 accumulation.
+    dtype = _jittor_dtype_name(x.dtype)
+    if (groups != 1 or dtype not in _HALF or dtype != _jittor_dtype_name(weight.dtype)
+            or jt.flags.amp_reg or _output_requires_grad(x, weight)
+            or os.environ.get("JITTOR_CUDNN3D_HALF_NATIVE", "1") == "0"
+            or len(x.shape) != 5 or len(weight.shape) != 5
+            or dispatch_context(x, weight).backend != "cuda"):
+        return None
+    batch, channels, *spatial = tuple(x.shape)
+    out_channels, weight_channels, *kernel = tuple(weight.shape)
+    if (channels != weight_channels or tuple(kernel) != stride or any(padding)
+            or dilation != (1, 1, 1)
+            or min(batch, channels, out_channels, *spatial, *kernel) <= 0
+            or any(size % tile for size, tile in zip(spatial, kernel))):
+        return None
+    patch_size = channels * math.prod(kernel)
+    if patch_size % 8 or out_channels % 8:
+        return None
+    depth, height, width = (size // tile for size, tile in zip(spatial, kernel))
+    kd, kh, kw = kernel
+    patches = x.reindex(
+        (batch, depth, height, width, patch_size),
+        ["i0", f"i4/{kd * kh * kw}", f"i1*{kd}+i4/{kh * kw}%{kd}",
+         f"i2*{kh}+i4/{kw}%{kh}", f"i3*{kw}+i4%{kw}"],
+    )
+    y = get_library_ops("cudnn").cudnn_conv(
+        patches.reshape((batch, depth * height, width, patch_size)),
+        weight.reshape((out_channels, 1, 1, patch_size)),
+        1, 1, 0, 0, 1, 1, 1, "acdb", "ohwi", "acdb",
+    )
+    return y.reshape((batch, depth, height, width, out_channels))._storage_permute((0, 4, 1, 2, 3))
+
+
 @optional_kernel("conv3d", "cuda", supports=_supports_conv3d)
 def _try_cudnn_conv3d(x, weight, stride, padding, dilation, groups):
+    y = _conv3d_nonoverlapping_patches(x, weight, stride, padding, dilation, groups)
+    if y is not None:
+        return y
     return _cudnn_conv3d_fp16_safe(get_library_ops("cudnn").cudnn_conv3d,
                                   x, weight, *stride, *padding, *dilation, groups)
 

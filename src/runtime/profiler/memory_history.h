@@ -4,6 +4,7 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#include <atomic>
 #include "core/common.h"
 
 // The device memory history behind `torch.cuda.memory._record_memory_history`
@@ -32,10 +33,10 @@ namespace jittor {
 struct Op;
 
 // 0 off; otherwise a MemoryHistoryMode bit set.
-EXTERN_LIB int memory_history_mode;
+EXTERN_LIB std::atomic<int> memory_history_mode;
 // Nonzero while someone wants `Op::memory_stack` captured: bit 1 the memory
 // history (allocation stacks), bit 2 a `jt.profile(stacks=True)` region.
-EXTERN_LIB int capture_op_stacks;
+EXTERN_LIB std::atomic<int> capture_op_stacks;
 
 enum MemoryHistoryMode {
     mh_on = 1,            // block state (and its stacks) for snapshots
@@ -77,9 +78,15 @@ string memory_history_layout();
 /// Frames as (filename, line, name) triples, flattened; index = frame id.
 // @pyjt(memory_history_frames)
 vector<string> memory_history_frames();
+/// Frames appended from `from_frame` onward (incremental read of append-only table).
+// @pyjt(memory_history_frames_since)
+vector<string> memory_history_frames_since(int64 from_frame);
 /// Stacks: for each id from 1, its length then its frame ids.
 // @pyjt(memory_history_stacks)
 vector<int64> memory_history_stacks();
+/// Stacks appended from `from_stack` onward (incremental read of append-only table).
+// @pyjt(memory_history_stacks_since)
+vector<int64> memory_history_stacks_since(int64 from_stack);
 /// The recorded trace of `device`, flat; `memory_history_layout` names fields.
 // @pyjt(memory_history_trace)
 vector<int64> memory_history_trace(int device);

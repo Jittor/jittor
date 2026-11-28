@@ -1,4 +1,5 @@
 #include "runtime/backend.h"
+#include "runtime/backend_streams.h"
 #include "runtime/runtime.h"
 #include "runtime/executor_entry.h"
 #include "runtime/launch_diagnostics.h"
@@ -157,7 +158,10 @@ void* backend_graph_capture_end() {
 void backend_graph_launch(void* graph) {
     const auto* ops = graph_backend();
     if (!ops || !graph) return;
-    ops->graph_launch(graph, ops->current_device());
+    const int device = ops->current_device();
+    ops->graph_launch(graph, device);
+    if (device >= 0 && device < 64)
+        backend_compute_stream_release(1ull << device);
 }
 
 void backend_graph_release(void* graph) {

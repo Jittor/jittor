@@ -74,6 +74,12 @@ class NativeOperation:
         context = get_install_context(jittor_mod)
         implementation = context.state["native_torch_operations"][self._operation_key]
         if self._is_plain and not kwargs:
+            if self._operation_key == "matmul" and len(args) == 2:
+                direct = getattr(implementation, "_frontend_batched_matmul", None)
+                if direct is not None:
+                    value = direct(*args, context.state["Var"])
+                    if value is not None:
+                        return value
             with tensor_frontend(context.state["Var"]):
                 if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
                     implementation = implementation()

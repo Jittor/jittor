@@ -196,11 +196,10 @@ void parallel_compile_all_ops(vector<int>& queue, vector<int>& range, FusedOp& f
         const char* op_kind = nullptr;
         try {
         if (op->type() != OpType::other) {
-            op = &fused_op;
-            is_fused_op = true;
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            op = load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            is_fused_op = op == &fused_op;
         }
         // `op`, never `fused_op.ops`. Printing the sub-operator list walks
         // every `Op*` in it, and that is exactly what was crashing in both

@@ -23,6 +23,7 @@
 // [bias_b, bias_h, seq_q, seq_kv] -- bias_b 1 or batch, bias_h 1 or heads, 0
 // for none -- carries a constant attention mask in both forward and backward.
 // Graphs are built once per shape and kept: building one costs milliseconds.
+#include <cuda_runtime_api.h>
 #include <cudnn.h>
 #include <cudnn_frontend.h>
 
@@ -39,12 +40,14 @@ namespace fe = cudnn_frontend;
 namespace {
 
 enum { DTYPE_HALF = 0, DTYPE_BF16 = 1 };
-enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4 };
+enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4, LAYOUT_PACKED_QKV = 8, TUNE_FORWARD = 16, LAYOUT_DENSE_OUTPUT = 32 };
 
 using Key = std::tuple<int, int, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
                        int, uint32_t, int64_t, int64_t, cudnnHandle_t>;
 
 struct Forward {
+    std::mutex plan_mutex;
+    bool tune = false;
     std::shared_ptr<fe::graph::Graph> graph;
     std::shared_ptr<fe::graph::Tensor_attributes> q, k, v, bias, o, stats;
 };
@@ -64,10 +67,24 @@ fe::DataType_t io_type(int dtype) {
     return dtype == DTYPE_BF16 ? fe::DataType_t::BFLOAT16 : fe::DataType_t::HALF;
 }
 
+bool bias_uses_io_dtype() {
+    // The 9.10.2 SDPA engines on CUDA can read a declared FP32 bias as
+    // the Q/K/V dtype. Describing the actual input type avoids that mismatch.
+    static const bool required = cudnnGetVersion() == 91002;
+    return required;
+}
+
+fe::DataType_t bias_type(int dtype) {
+    return bias_uses_io_dtype() ? io_type(dtype) : fe::DataType_t::FLOAT;
+}
+
 std::vector<int64_t> dims(int64_t b, int64_t h, int64_t s, int64_t d) { return {b, h, s, d}; }
 std::vector<int64_t> dense(int64_t h, int64_t s, int64_t d) { return {h * s * d, s * d, d, 1}; }
-// Strides of a [b, h, s, d] tensor stored as [b, s, h, d] when `seq_major`.
-std::vector<int64_t> strides(bool seq_major, int64_t h, int64_t s, int64_t d) {
+// Strides of a [b, h, s, d] tensor stored as [b, s, h, d] when `seq_major`,
+// or as one slice of a packed [b, s, 3, h, d] QKV tensor when `packed_qkv`.
+std::vector<int64_t> strides(bool seq_major, int64_t h, int64_t s, int64_t d,
+                             bool packed_qkv = false) {
+    if (packed_qkv) return {3 * s * h * d, d, 3 * h * d, 1};
     if (seq_major) return {s * h * d, d, h * d, 1};
     return dense(h, s, d);
 }
@@ -79,9 +96,10 @@ uint32_t bits(float value) {
 }
 
 std::shared_ptr<fe::graph::Tensor_attributes> input(fe::graph::Graph& graph, const char* name,
-        int64_t b, int64_t h, int64_t s, int64_t d, bool seq_major) {
+        int64_t b, int64_t h, int64_t s, int64_t d, bool seq_major, bool packed_qkv = false) {
     return graph.tensor(fe::graph::Tensor_attributes()
-        .set_name(name).set_dim(dims(b, h, s, d)).set_stride(strides(seq_major, h, s, d)));
+        .set_name(name).set_dim(dims(b, h, s, d))
+        .set_stride(strides(seq_major, h, s, d, packed_qkv)));
 }
 
 std::shared_ptr<fe::graph::Tensor_attributes> stats_input(fe::graph::Graph& graph,
@@ -115,9 +133,10 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     graph.set_io_data_type(io_type(dtype))
         .set_intermediate_data_type(fe::DataType_t::FLOAT)
         .set_compute_data_type(fe::DataType_t::FLOAT);
-    entry->q = input(graph, "q", b, h, sq, d, layout & LAYOUT_Q);
-    entry->k = input(graph, "k", b, hk, skv, d, layout & LAYOUT_K);
-    entry->v = input(graph, "v", b, hk, skv, d, layout & LAYOUT_V);
+    const bool packed_qkv = (layout & LAYOUT_PACKED_QKV) != 0;
+    entry->q = input(graph, "q", b, h, sq, d, (layout & LAYOUT_Q) != 0, packed_qkv);
+    entry->k = input(graph, "k", b, hk, skv, d, (layout & LAYOUT_K) != 0, packed_qkv);
+    entry->v = input(graph, "v", b, hk, skv, d, (layout & LAYOUT_V) != 0, packed_qkv);
     auto options = fe::graph::SDPA_attributes().set_name("sdpa")
         .set_generate_stats(training != 0).set_attn_scale(scale);
     if (causal) options.set_causal_mask(true);
@@ -125,19 +144,31 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
         entry->bias = graph.tensor(fe::graph::Tensor_attributes()
             .set_name("bias").set_dim({bias_b, bias_h, sq, skv})
             .set_stride({bias_h * sq * skv, sq * skv, skv, 1})
-            .set_data_type(fe::DataType_t::FLOAT));
+            .set_data_type(bias_type(dtype)));
         options.set_bias(entry->bias);
     }
     auto outputs = graph.sdpa(entry->q, entry->k, entry->v, options);
     entry->o = outputs[0];
+    const bool seq_major_output = !(layout & LAYOUT_DENSE_OUTPUT)
+        && ((layout & LAYOUT_Q) || packed_qkv);
     entry->o->set_output(true).set_dim(dims(b, h, sq, d))
-        .set_stride(strides(layout & LAYOUT_Q, h, sq, d));
+        .set_stride(strides(seq_major_output, h, sq, d));
     if (training) {
         entry->stats = outputs[1];
         entry->stats->set_output(true).set_data_type(fe::DataType_t::FLOAT)
             .set_dim(dims(b, h, sq, 1)).set_stride(dense(h, sq, 1));
     }
-    if (!build(graph, handle)) {
+    entry->tune = (layout & TUNE_FORWARD) && !training;
+    if (entry->tune) {
+        graph.deselect_workspace_greater_than(8 << 20);
+        auto status = graph.build(handle, {fe::HeurMode_t::A, fe::HeurMode_t::B},
+                                  fe::BuildPlanPolicy_t::ALL);
+        if (status.is_bad()) {
+            last_error = status.get_message();
+            unsupported[key] = true;
+            return nullptr;
+        }
+    } else if (!build(graph, handle)) {
         unsupported[key] = true;
         return nullptr;
     }
@@ -174,7 +205,7 @@ std::shared_ptr<Backward> backward_graph(cudnnHandle_t handle, int dtype, int64_
         entry->bias = graph.tensor(fe::graph::Tensor_attributes()
             .set_name("bias").set_dim({bias_b, bias_h, sq, skv})
             .set_stride({bias_h * sq * skv, sq * skv, skv, 1})
-            .set_data_type(fe::DataType_t::FLOAT));
+            .set_data_type(bias_type(dtype)));
         options.set_bias(entry->bias);
     }
     auto grads = graph.sdpa_backward(entry->q, entry->k, entry->v, entry->o, entry->dout,
@@ -211,6 +242,10 @@ int run(fe::graph::Graph& graph, cudnnHandle_t handle,
 
 extern "C" {
 
+int jt_cudnn_sdpa_bias_uses_io_dtype() {
+    return bias_uses_io_dtype();
+}
+
 const char* jt_cudnn_sdpa_last_error() { return last_error.c_str(); }
 
 // Builds (and caches) the graphs a call would use; 0 if cuDNN cannot run it.
@@ -237,12 +272,32 @@ int jt_cudnn_sdpa_supported(cudnnHandle_t handle, int dtype, int64_t b, int64_t 
     }
 }
 
+int jt_cudnn_sdpa_supported_host(int dtype, int64_t b, int64_t h, int64_t hk, int64_t sq,
+        int64_t skv, int64_t d, float scale, int causal, int training, int layout,
+        int64_t bias_b, int64_t bias_h) {
+    static std::mutex probe_mutex;
+    static cudnnHandle_t probe_handle = nullptr;
+    std::lock_guard<std::mutex> lock(probe_mutex);
+    if (!probe_handle) {
+        if (cudnnCreate(&probe_handle) != CUDNN_STATUS_SUCCESS) {
+            probe_handle = nullptr;
+            return 0;
+        }
+    }
+    int64_t workspace = 0;
+    return jt_cudnn_sdpa_supported(probe_handle, dtype, b, h, hk, sq, skv, d, scale, causal,
+                                   training, layout, bias_b, bias_h, &workspace);
+}
+
 int64_t jt_cudnn_sdpa_forward_workspace(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
         int64_t hk, int64_t sq, int64_t skv, int64_t d, float scale, int causal, int training,
         int layout, int64_t bias_b, int64_t bias_h) {
     auto forward = forward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, training,
                                  layout, bias_b, bias_h);
-    return forward ? forward->graph->get_workspace_size() : -1;
+    if (!forward) return -1;
+    std::lock_guard<std::mutex> lock(forward->plan_mutex);
+    return forward->tune ? forward->graph->get_autotune_workspace_size()
+                         : forward->graph->get_workspace_size();
 }
 
 int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h, int64_t hk,
@@ -257,6 +312,24 @@ int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
             {forward->q, q}, {forward->k, k}, {forward->v, v}, {forward->o, o}};
         if (training) pack[forward->stats] = stats;
         if (bias_b) pack[forward->bias] = bias;
+        std::lock_guard<std::mutex> lock(forward->plan_mutex);
+        if (forward->tune) {
+            cudaStream_t stream;
+            cudaStreamCaptureStatus capture;
+            if (cudnnGetStream(handle, &stream) != CUDNN_STATUS_SUCCESS
+                    || cudaStreamIsCapturing(stream, &capture) != cudaSuccess) {
+                last_error = "could not query the cuDNN attention stream";
+                return 1;
+            }
+            if (capture == cudaStreamCaptureStatusNone) {
+                auto status = forward->graph->autotune(handle, pack, workspace);
+                if (status.is_bad()) {
+                    last_error = status.get_message();
+                    return 1;
+                }
+                forward->tune = false;
+            }
+        }
         return run(*forward->graph, handle, pack, workspace);
     } catch (const std::exception& e) {
         last_error = e.what();

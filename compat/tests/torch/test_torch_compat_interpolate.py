@@ -211,6 +211,18 @@ class TestInterpolateBicubic(Base):
 # nn.Upsample / nn.UpsamplingNearest2d / nn.UpsamplingBilinear2d
 # ---------------------------------------------------------------------------
 class TestUpsampleModules(Base):
+    def test_upsample_nearest1d(self):
+        def body(device):
+            source = torch.arange(6, dtype=torch.float32, device=device).reshape(1, 1, 6)
+            module = torch.nn.Upsample(scale_factor=1.6, mode="nearest")
+            result = module(source)
+            functional = torch.nn.functional.interpolate(source, scale_factor=(1.6,), mode="nearest")
+            expected = [[[0, 0, 1, 1, 2, 3, 3, 4, 5]]]
+            self.ac(result.cpu().numpy(), expected, msg=device)
+            self.ac(functional.cpu().numpy(), expected, msg=device)
+            self.assertEqual(result.device, source.device)
+        both_devices(body)
+
     def test_upsample_nearest_scale2(self):
         x = np.random.RandomState(47).randn(1, 2, 3, 4).astype("float32")
         def body(dev):

@@ -873,7 +873,7 @@ string OpCompiler::precompile(const unordered_map<string,string>& defs, const st
     return jittor::precompile(defs, src, macros);
 }
 
-string OpCompiler::get_jit_src(Op* op) {
+string OpCompiler::get_jit_src(Op* op, bool fused_member) {
     string name = op->name();
     string name2 = Op::op_name_to_file_name(name);
     string name3 = Op::file_name_to_class_name(name2);
@@ -888,6 +888,8 @@ string OpCompiler::get_jit_src(Op* op) {
     // source that need to be added after the last #include statement
     string after_include_src = "";
     auto jit_define = op->get_jit_define();
+    if (fused_member)
+        jit_define.emplace_back("JIT_fuser", "1");
     // An interned code source: the key names it by token, the source is the
     // header and code it stands for (see ops/composite/code_source.h).
     for (size_t k = 0; k < jit_define.size(); k++) {
@@ -970,7 +972,7 @@ string OpCompiler::get_fused_src(FusedOp* op) {
             continue;
         }
         Op* opi = op->ops[oi];
-        string src = get_jit_src(opi);
+        string src = get_jit_src(opi, true);
         op_srcs.push_back(move(src));
     }
     return OpCompiler::__get_fused_src(op->ops, op_srcs, op_members);

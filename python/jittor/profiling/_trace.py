@@ -45,6 +45,7 @@ def write_chrome_trace(result, path):
         events.append({"ph": "i", "s": "g", "pid": _HOST_PID, "tid": 1, "name": "step %d" % index,
                        "ts": _us(t, t0)})
     streams = set()
+    flow_id = 0
     for r in result.kernel_records + result.copy_records:
         tid = 1000 + r["stream"]
         streams.add(tid)
@@ -60,9 +61,10 @@ def write_chrome_trace(result, path):
         events.append({"ph": "X", "pid": _DEVICE_PID, "tid": tid, "name": r["name"],
                        "ts": _us(r["start"], t0), "dur": (r["end"] - r["start"]) / 1e3, "args": args})
         if op is not None:
-            events.append({"ph": "s", "id": r["correlation"], "pid": _HOST_PID, "tid": 2,
+            flow_id += 1
+            events.append({"ph": "s", "id": flow_id, "pid": _HOST_PID, "tid": 2,
                            "ts": _us(op["t_start"], t0), "name": "launch", "cat": "launch"})
-            events.append({"ph": "f", "bp": "e", "id": r["correlation"], "pid": _DEVICE_PID, "tid": tid,
+            events.append({"ph": "f", "bp": "e", "id": flow_id, "pid": _DEVICE_PID, "tid": tid,
                            "ts": _us(r["start"], t0), "name": "launch", "cat": "launch"})
     for tid in sorted(streams):
         events.append({"ph": "M", "pid": _DEVICE_PID, "tid": tid, "name": "thread_name",
@@ -70,11 +72,18 @@ def write_chrome_trace(result, path):
     memory = result.memory
     if memory is not None:
         timeline = memory.timeline
-        step = max(1, len(timeline) // 20000)
-        for t, allocated, temp, reserved in timeline[::step] + timeline[-1:]:
-            events.append({"ph": "C", "pid": _HOST_PID, "name": "device memory (MiB)", "ts": _us(t, t0),
-                           "args": {"allocated": allocated / 2**20, "workspace": temp / 2**20,
-                                    "reserved": reserved / 2**20}})
+        if timeline:
+            step = max(1, len(timeline) // 20000)
+            indices = set(range(0, len(timeline), step))
+            indices.add(len(timeline) - 1)
+            # Always preserve the peak point when downsampling.
+            peak_idx = max(range(len(timeline)), key=lambda idx: timeline[idx][1] + timeline[idx][2])
+            indices.add(peak_idx)
+            for idx in sorted(indices):
+                t, allocated, temp, reserved = timeline[idx]
+                events.append({"ph": "C", "pid": _HOST_PID, "name": "device memory (MiB)", "ts": _us(t, t0),
+                               "args": {"allocated": allocated / 2**20, "workspace": temp / 2**20,
+                                        "reserved": reserved / 2**20}})
     directory = os.path.dirname(os.path.abspath(path))
     os.makedirs(directory, exist_ok=True)
     with open(path, "w") as out:

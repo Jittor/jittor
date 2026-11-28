@@ -1251,6 +1251,10 @@ Returns a handle that removes both halves.
     def training(self, value):
         self._set_training_mode(value)
 
+    @training.deleter
+    def training(self):
+        self.__dict__.pop("is_train", None)
+
     def mpi_param_broadcast(self, root=0):
         # Read through to the owner, never a module-level snapshot. 6.B15.
         from jittor import compile_extern

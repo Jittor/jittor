@@ -73,10 +73,19 @@ void ReinterpretViewOp::infer_shape() {
         USER_CHECK(x->dtype() == ns_float64 && x->shape.size() && x->shape[x->shape.size()-1] == 2)
             << "float64 -> complex128 reinterpret_view requires input shape [..., 2]";
     }
-    // A dtype view preserves byte addresses, not dense element strides. Only
-    // its last dimension changes size; preceding strides change their units.
-    // Keep the existing contiguous arbitrary-shape/complex-pair contracts,
-    // without treating an arbitrary non-contiguous reshape as a dtype view.
+    // A complex pair view splits or merges the trailing component axis while
+    // preserving the byte addresses of all preceding axes.
+    const auto prefix_rank = std::min(x->shape.size(), yshape.size());
+    bool matching_prefix = true;
+    for (uint i=0; i<prefix_rank; ++i)
+        matching_prefix &= x->shape[i] == yshape[i];
+    const bool split_pair = x->dtype().is_complex() && matching_prefix
+        && yshape.size() == x->shape.size() + 1;
+    const bool merge_pair = dtype.is_complex() && matching_prefix
+        && x->shape.size() == yshape.size() + 1;
+
+    // Equal-rank dtype views change the last dimension and the units of its
+    // preceding strides. Arbitrary reshape still requires dense storage.
     bool dtype_view_shape = yshape.size() == x->shape.size();
     if (dtype_view_shape && yshape.size()) {
         for (uint i=0; i+1<yshape.size(); ++i)
@@ -84,7 +93,20 @@ void ReinterpretViewOp::infer_shape() {
         uint last = yshape.size()-1;
         dtype_view_shape &= yshape[last] * ydsize == x->shape[last] * x->dsize();
     }
-    if (dtype_view_shape) {
+    if (split_pair || merge_pair) {
+        if (merge_pair) {
+            USER_CHECK(x->storage_stride(prefix_rank) == 1)
+                << "reinterpret_view requires complex pair component stride 1";
+        }
+        vector<int64> strides(yshape.size(), 1);
+        for (uint i=0; i<prefix_rank; ++i) {
+            int64 byte_stride = x->storage_stride(i) * x->dsize();
+            USER_CHECK(byte_stride % ydsize == 0)
+                << "reinterpret_view requires storage strides divisible by target element size";
+            strides[i] = byte_stride / ydsize;
+        }
+        y->set_storage_strides(strides);
+    } else if (dtype_view_shape) {
         const bool changes_itemsize = x->dsize() != ydsize;
         if (changes_itemsize) {
             USER_CHECK(x->shape.size() && x->storage_stride(x->shape.size()-1) == 1)

@@ -182,6 +182,7 @@ struct VarHolder {
      */
     // @pyjt(fetch_sync,numpy)
     ArrayArgs fetch_sync();
+    ArrayArgs read_array(bool weak_sync);
 
     inline void release_holder() {var->holder = nullptr;}
     inline void own_holder() {var->holder = this;}
@@ -649,6 +650,9 @@ public:
         return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
     }
 
+    // @pyjt(_step_guarded_storage_version)
+    vector<uint64> step_guarded_storage_version();
+
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 
@@ -732,6 +736,18 @@ public:
      */
     // @pyjt(item)
     ItemData item();
+    // @pyjt(_item_without_migration)
+    ItemData item_without_migration();
+    ItemData read_item(bool migrate);
+
+    // @pyjt(_step_guarded_scalar)
+    PyObject* step_guarded_scalar(int64 epoch);
+
+    // @pyjt(_step_guarded_array)
+    PyObject* step_guarded_array(int64 epoch);
+
+    // @pyjt(_step_guarded_predicate)
+    PyObject* step_guarded_predicate(int64 epoch);
 
     /**
      * return the number of dimensions.
@@ -1081,6 +1097,8 @@ public:
  */
 // @pyjt(_host_readback_count)
 int64 host_readback_count();
+// @pyjt(_step_scalar_epoch)
+int64 step_scalar_epoch();
 // An implicit dynamic-shape read can make a trace ineligible before the
 // optimizer runs, just as an explicit value read does.
 // @pyjt(_state_capture_active)

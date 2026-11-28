@@ -158,6 +158,26 @@ def _batch_norm_eval(x, dims, running_mean, running_var, weight, bias, eps):
     if fast is not None:
         return fast
     scale, shift = _batch_norm_eval_coefficients(running_mean, running_var, weight, bias, eps)
+    offer = getattr(x, "_jt_depthwise_affine", None)
+    if (offer is not None and offer[0] == x.id and not x.is_finished
+            and jt.flags.no_grad and not jt.flags.amp_reg
+            and all(isinstance(term, jt.Var) and term.dtype == x.dtype
+                    and tuple(term.shape) == (x.shape[1],) for term in (scale, shift))):
+        build = offer[1]
+        fused = build(scale, shift)
+        if fused is not None:
+            from .activation import offer_activation
+
+            stamps = scale._saved_storage_version(), shift._saved_storage_version()
+
+            def activate(kind):
+                if (kind == "silu" and jt.flags.no_grad and not jt.flags.amp_reg
+                        and (scale._saved_storage_version(), shift._saved_storage_version()) == stamps):
+                    return build(scale, shift, silu=True)
+                return None
+
+            offer_activation(fused, activate)
+            return fused
     return x * scale.broadcast(x, dims) + shift.broadcast(x, dims)
 
 

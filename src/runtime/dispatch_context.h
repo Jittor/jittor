@@ -14,5 +14,6 @@ struct DispatchContext {
 // Pending constants may follow another input, but this query never retargets
 // their graph. The eventual Op::propagate_device performs that mutation.
 DispatchContext query_dispatch_context(const vector<Var*>& inputs);
+DispatchContext query_dispatch_context(Var* const* inputs, size_t count);
 
 } // namespace jittor

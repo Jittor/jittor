@@ -28,6 +28,7 @@ divergence unnoticed.
 """
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -97,6 +98,63 @@ class TestConv1dParameterSync(unittest.TestCase):
         expected = _reference_conv(x, module.weight.numpy()[:, :, 0],
                                    np.zeros(8, dtype="float32"), 3)
         self.assertLess(np.abs(got - expected).max(), 1e-4)
+
+    def test_channels_last_storage_with_one_spatial_axis(self):
+        from jittor.nn.functional._layout import channels_last_source, channels_last_view
+
+        with jt.flag_scope(use_cuda=0), jt.no_grad():
+            for shape in ((2, 1, 7, 8), (2, 7, 1, 8)):
+                data = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+                tensor = jt.array(data)
+                logical = channels_last_view(tensor)
+                self.assertFalse(logical._storage_is_contiguous())
+                source = channels_last_source(logical)
+                self.assertIsNotNone(source)
+                self.assertTrue(source._storage_is_contiguous())
+                np.testing.assert_array_equal(source.numpy(), data)
+
+    @unittest.skipUnless(jt.has_cuda and jt.compiler.is_cuda, "requires CUDA")
+    def test_dilated_convolution_uses_same_width_eager_and_captured(self):
+        from jittor._runtime.step_capture import tracing
+
+        with jt.no_grad(), jt.flag_scope(use_cuda=1, auto_graph_replay=0):
+            module = jt.nn.Conv1d(4, 8, 5, stride=2, padding=4, dilation=2)
+            original_conv2d = jt.nn.conv2d
+            eager_shapes, captured_shapes = [], []
+
+            def observe(x, weight, *args, **kwargs):
+                shapes = captured_shapes if tracing() else eager_shapes
+                shapes.append((tuple(x.shape), tuple(weight.shape)))
+                return original_conv2d(x, weight, *args, **kwargs)
+
+            def step(x):
+                return module(x), jt.nn.conv1d(x, module.weight, module.bias,
+                                               stride=2, padding=4, dilation=2)
+
+            signal = self.rng.standard_normal((1, 4, 96)).astype("float32")
+            first, second = jt.array(signal), jt.array(signal * 2)
+            weight, bias = module.weight.numpy(), module.bias.numpy()
+            windows = np.lib.stride_tricks.sliding_window_view(
+                np.pad(signal * 2, ((0, 0), (0, 0), (4, 4))), 9, axis=-1
+            )[:, :, ::2, ::2]
+            expected = np.einsum("nclk,ock->nol", windows, weight) + bias[None, :, None]
+
+            module.weight = jt.array(weight)
+            module.bias = jt.array(bias)
+            jt.sync([first, second, module.weight, module.bias], device_sync=True)
+            captured = jt.capture_step(step)
+            with patch.object(jt.nn, "conv2d", observe):
+                eager = step(second)
+                self.assertEqual(eager_shapes, [((1, 4, 1, 96), (8, 4, 1, 5))] * 2)
+                for _ in range(4):
+                    captured(first)
+                outputs = captured(second)
+                jt.sync(list(outputs), device_sync=True)
+            self.assertGreater(captured.stats["graph"], 0, captured.graph_refused or captured.refused)
+            self.assertEqual(captured_shapes, [((1, 4, 1, 96), (8, 4, 1, 5))] * 2)
+            for output in (*eager, *outputs):
+                self.assertEqual(output.location(), "device")
+                np.testing.assert_allclose(output.numpy(), expected, rtol=2e-5, atol=2e-6)
 
 
 if __name__ == "__main__":

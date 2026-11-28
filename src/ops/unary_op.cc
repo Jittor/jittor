@@ -945,8 +945,8 @@ VarPtr fold_number_cast(Var* x, NanoString dtype) {
 
 VarPtr UnaryOp::forward_before_construct(Var* x, NanoString op) {
     if (op.is_dtype() && op != x->dtype()) return fold_number_cast(x, op);
-    if (op != x->dtype()) return VarPtr();
-    // Counted as the op the constructor used to build and discard: automatic
+    if (op != x->dtype() && !(op == ns_conj && !x->dtype().is_complex())) return VarPtr();
+    // Counted as the op the constructor would build and discard: automatic
     // flushes and module-boundary cuts are placed by this count, and they have
     // to fall where they fell. Without it every identity cast moved the later
     // cuts by one -- a DDPM UNet training step batched differently and ran
@@ -990,7 +990,7 @@ UnaryOp::UnaryOp(Var* x, NanoString op) : x(x) {
             << "Unary op 'as_imag' takes a float32 or float64 Var, but got x:"
             >> x->dtype().to_cstring();
     NanoString dtype;
-    if (ns == x->dtype()) {
+    if (ns == x->dtype() || (ns == ns_conj && !x->dtype().is_complex())) {
         forward(x);
         return;
     }

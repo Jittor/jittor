@@ -289,27 +289,35 @@ class TestPoolStructure(unittest.TestCase):
             ),
             (
                 pool_facade.MaxPool2d(2),
-                (("_layer", (
-                    "Pool",
-                    (
-                        ("return_indices", None), ("kernel_size", (2, 2)),
-                        ("op", "maximum"), ("stride", (2, 2)),
-                        ("padding", (0, 0)), ("ceil_mode", False),
-                        ("count_include_pad", True),
-                    ),
-                )),),
+                (
+                    ("kernel_size", 2), ("stride", 2), ("padding", 0),
+                    ("dilation", 1), ("return_indices", False), ("ceil_mode", False),
+                    ("_layer", (
+                        "Pool",
+                        (
+                            ("return_indices", None), ("kernel_size", (2, 2)),
+                            ("op", "maximum"), ("stride", (2, 2)),
+                            ("padding", (0, 0)), ("ceil_mode", False),
+                            ("count_include_pad", True),
+                        ),
+                    )),
+                ),
             ),
             (
                 pool_facade.MaxPool3d(2),
-                (("_layer", (
-                    "Pool3d",
-                    (
-                        ("return_indices", None),
-                        ("kernel_size", (2, 2, 2)), ("op", "maximum"),
-                        ("stride", (2, 2, 2)), ("padding", (0, 0, 0)),
-                        ("ceil_mode", False), ("count_include_pad", True),
-                    ),
-                )),),
+                (
+                    ("kernel_size", 2), ("stride", 2), ("padding", 0),
+                    ("dilation", 1), ("return_indices", False), ("ceil_mode", False),
+                    ("_layer", (
+                        "Pool3d",
+                        (
+                            ("return_indices", None),
+                            ("kernel_size", (2, 2, 2)), ("op", "maximum"),
+                            ("stride", (2, 2, 2)), ("padding", (0, 0, 0)),
+                            ("ceil_mode", False), ("count_include_pad", True),
+                        ),
+                    )),
+                ),
             ),
             (
                 pool_facade.MaxUnpool2d(2),

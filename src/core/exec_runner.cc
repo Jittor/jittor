@@ -690,7 +690,7 @@ static void finish_unfused(Op* op, vector<Var*>& outputs_bk) {
         var->finish_pending_liveness();
 }
 
-DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them; they are otherwise applied whenever the lock is free. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
+DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
 
 namespace {
 // The async worker's graph bookkeeping, applied behind its launches.
@@ -704,7 +704,7 @@ namespace {
 // with no worker at all. A launch reads none of that bookkeeping (a segment is
 // loaded from the batch's own snapshot), so the worker launches without the
 // lock and queues the releases and finishes in their order. The queue is
-// applied whenever the lock happens to be free, before anything reads
+// applied in groups when the lock happens to be free, before anything reads
 // liveness again (the dying-input reuse), once the releases it holds back
 // pass `async_release_lag_bytes`, and when the loop is over -- on an
 // exception too.
@@ -768,12 +768,14 @@ struct DeferredGraphWork {
         std::lock_guard<GraphMutationMutex> graph(graph_mutation_mutex());
         apply();
     }
-    // Between operators: when the lock is free, or when waiting for it is
-    // cheaper than the memory the queued releases keep.
+    // Amortize handoffs of the graph lock across small operators. Large
+    // batches of bytes still drain immediately at the existing memory limit.
     void step() {
-        if (empty()) return;
-        if (try_apply_and_hold()) graph_mutation_mutex().unlock();
-        else if (lag_bytes > async_release_lag_bytes) apply_now();
+        if (lag_bytes > async_release_lag_bytes) {
+            apply_now();
+        } else if (items.size() - front >= 8 && try_apply_and_hold()) {
+            graph_mutation_mutex().unlock();
+        }
     }
     ~DeferredGraphWork() {
         if (empty()) return;
@@ -891,11 +893,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1))) prepared_jit_key.clear();
         try {
         if (op->type() != OpType::other) {
-            op = &fused_op;
-            is_fused_op = true;
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            op = load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            is_fused_op = op == &fused_op;
         }
         // A kept graph run again: an in-graph constant has already moved its
         // data into its output (ArrayOp::run), so there is nothing to run --
@@ -917,6 +918,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         const auto requested_backend = placement.explicit_backend
             ? placement.device.backend : execution_target_backend();
         const auto execution_backend = op->execution_backend_for(requested_backend);
+        const bool storage_view = op->is_storage_view();
         ExecutionBackendScope operation_backend_scope(requested_backend);
         TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
@@ -969,7 +971,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             allocation_target.backend = requested_backend;
         #endif
         allocator = get_allocator(allocation_target, false);
-        temp_allocator = get_allocator(allocation_target, true);
+        // The accelerator workspace and tensors use the same pool. Only the
+        // CPU can choose a separate temporary allocator.
+        temp_allocator = allocation_target.backend == BackendId::Cpu
+            ? get_allocator(allocation_target, true) : allocator;
         exe.allocator = allocator;
         exe.temp_allocator = temp_allocator;
         if (save_mem) {
@@ -1038,7 +1043,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             memory_profiler.check();
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->prepare_execution_on(jkl, execution_backend);
+        if (storage_view)
+            jkl.clear();
+        else
+            op->prepare_execution_on(jkl, execution_backend);
         if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1)))
             prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
         bool is_cuda = execution_backend != BackendId::Cpu;
@@ -1124,17 +1132,20 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         exe.last_is_cuda = is_cuda;
         // _JT_SEH_START2;
-        if (execution_backend != BackendId::Cpu)
-            record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
-        else
-            int_division_by_zero.store(0, std::memory_order_relaxed);
-        op->execute_prepared_on(jkl, execution_backend);
-        // An integer `//`, `%` or fmod by zero in a host kernel (see
-        // type/floor_divide_compute.h): torch's CPU kernels raise
-        // "RuntimeError: ZeroDivisionError" for it.
-        if (execution_backend == BackendId::Cpu
-                && PREDICT_BRANCH_NOT_TAKEN(int_division_by_zero.exchange(0, std::memory_order_relaxed)))
-            throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
+        // A storage view shares its allocation above. Transfers, if needed,
+        // keep the operation's attribution, but the view itself has no kernel.
+        if (!storage_view) {
+            if (is_cuda)
+                record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
+            else
+                int_division_by_zero.store(0, std::memory_order_relaxed);
+            op->execute_prepared_on(jkl, execution_backend);
+            // An integer `//`, `%` or fmod by zero in a host kernel (see
+            // type/floor_divide_compute.h) must surface at that operation.
+            if (!is_cuda && PREDICT_BRANCH_NOT_TAKEN(
+                    int_division_by_zero.exchange(0, std::memory_order_relaxed)))
+                throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
+        }
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu

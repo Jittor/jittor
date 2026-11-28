@@ -1126,8 +1126,9 @@ def _clamp_cpu(x, min_v=None, max_v=None):
     # bound, reversed bounds -- takes the general path.
     if type(min_v) is ori_int and type(max_v) is ori_int and min_v <= max_v \
             and _jittor_dtype_name(x.dtype) in _CLAMP_INT_DTYPES:
-        min_v = jt.unary(min_v, x.dtype).stop_grad()
-        max_v = jt.unary(max_v, x.dtype).stop_grad()
+        with device_scope_like(x, prefer_reference=True):
+            min_v = jt.unary(min_v, x.dtype).stop_grad()
+            max_v = jt.unary(max_v, x.dtype).stop_grad()
         result = dispatch_acl_clamp(x, min_v, max_v)
         if result is not None:
             return result
@@ -1147,7 +1148,7 @@ def _clamp_cpu(x, min_v=None, max_v=None):
                 and isinstance(bound, numbers.Real)
                 and not isinstance(bound, numbers.Integral)):
             value = value.cast("float32")
-        with device_scope_like(value):
+        with device_scope_like(value, prefer_reference=True):
             bound = jt.unary(bound, value.dtype).stop_grad()
         return value, bound
 

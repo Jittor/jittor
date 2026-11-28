@@ -15,6 +15,9 @@
 #include "cublas_batched_matmul_op.h"
 #include "cublas_wrapper.h"
 #include "cublas_compute_type.h"
+#if defined(JIT_cuda) && !defined(IS_ROCM) && !defined(IS_COREX)
+#include "cublas_row_product.h"
+#endif
 
 using namespace std;
 
@@ -22,11 +25,14 @@ namespace jittor {
 
 #ifndef JIT
 
-static auto make_cublas_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool>("cublas_batched_matmul");
+static auto make_cublas_batched_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, float>("cublas_batched_matmul");
 static auto make_unary = op_constructor<VarPtr, Var*, NanoString>("unary");
 
 CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b)
-    : a(a), b(b), trans_a(trans_a), trans_b(trans_b) {
+    : CublasBatchedMatmulOp(a, b, trans_a, trans_b, 1.0f) {}
+
+CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool trans_b, float alpha)
+    : a(a), b(b), trans_a(trans_a), trans_b(trans_b), alpha(alpha) {
     // TODO: support int8 * int8
     bool complex_pair = a->dtype().is_complex() || b->dtype().is_complex();
     USER_CHECK((a->dtype().is_float() && b->dtype().is_float())
@@ -44,7 +50,7 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
     auto at = cast_operand_to_compute_dtype(a, dtype);
     auto bt = cast_operand_to_compute_dtype(b, dtype);
     if (at || bt) {
-        auto cp = make_cublas_batched_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b);
+        auto cp = make_cublas_batched_matmul(at ? at.ptr : a, bt ? bt.ptr : b, trans_a, trans_b, alpha);
         forward(cp);
         return;
     }
@@ -59,7 +65,7 @@ CublasBatchedMatmulOp::CublasBatchedMatmulOp(Var* a, Var* b, bool trans_a, bool 
 
 VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // a [b,n,m] b [b,m,k], c[b,n,k]
-    // c = a*b
+    // c = alpha * a*b
     // As in CublasMatmulOp::grad: a promoted consumer can hand back a float32
     // cotangent for a half/bf16 product; match the saved operand's dtype.
     VarPtr dout_cast = cast_operand_to_compute_dtype(dout, (v_index == 0 ? b : a)->dtype());
@@ -74,16 +80,16 @@ VarPtr CublasBatchedMatmulOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     }
     if (v_index == 0) {
         if (trans_a)
-            return make_cublas_batched_matmul(other, dout, trans_b, 1);
+            return make_cublas_batched_matmul(other, dout, trans_b, 1, alpha);
         else
             // da = dc*b^T
-            return make_cublas_batched_matmul(dout, other, 0, trans_b^1);
+            return make_cublas_batched_matmul(dout, other, 0, trans_b^1, alpha);
     } else {
         if (trans_b)
-            return make_cublas_batched_matmul(dout, other, 1, trans_a);
+            return make_cublas_batched_matmul(dout, other, 1, trans_a, alpha);
         else
             // db = a^T*dc
-            return make_cublas_batched_matmul(other, dout, trans_a^1, 0);
+            return make_cublas_batched_matmul(other, dout, trans_a^1, 0, alpha);
     }
 }
 
@@ -125,6 +131,7 @@ void CublasBatchedMatmulOp::infer_shape(){
 }
 
 void CublasBatchedMatmulOp::jit_prepare(JK& jk) {
+    // Alpha is read from the op instance, so different scales share this kernel.
     jk << "«T:" << a->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
     jk << "«Trans_b:" << (trans_b ? 'T' : 'N');
@@ -136,21 +143,21 @@ void CublasBatchedMatmulOp::jit_prepare(JK& jk) {
 #pragma clang diagnostic ignored "-Wtautological-compare"
 void CublasBatchedMatmulOp::jit_run() {
     if (!c->num) return;
-    cublasHandle_t handle_ = cublas_bind_stream();
     // Zero inner dimensions need a zero fill, not a GEMM with invalid
     // leading dimensions. Use the bound stream so dependent ops see it.
     if (!a->num || !b->num) {
+        auto handle = cublas_bind_stream();
         cudaStream_t stream;
-        checkCudaErrors(cublasGetStream(handle_, &stream));
+        checkCudaErrors(cublasGetStream(handle, &stream));
         checkCudaErrors(cudaMemsetAsync(c->ptr<T>(), 0, c->size, stream));
         return;
     }
-    const T alpha = 1.0f;
-    const T beta  = 0.0f;
-    const float alpha_f = 1.0f;
+    const float alpha_f = alpha;
     const float beta_f  = 0.0f;
-    void* alpha_p = (void*)&alpha_f;
-    void* beta_p = (void*)&beta_f;
+    const T alpha_t = T(alpha_f);
+    const T beta_t = T(beta_f);
+    const void* alpha_p = &alpha_f;
+    const void* beta_p = &beta_f;
 
     const auto& as = a->shape;
     const auto& bs = b->shape;
@@ -168,6 +175,16 @@ void CublasBatchedMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bs[adim-2];
     }
+#if !defined(IS_ROCM) && !defined(IS_COREX)
+    if ('@Trans_a' == 'N' && '@Trans_b' == 'T' && n == 1 && alpha_f == 1.0f && c->is_stop_grad()
+            && a->dtype() == ns_float32 && b->dtype() == ns_float32 && c->dtype() == ns_float32
+            && float32_matmul_tier() == F32_HIGHEST
+            && a->is_contiguous() && b->is_contiguous() && c->is_contiguous()
+            && row_product::launch<float, false, true>(a->ptr<float>(), b->ptr<float>(),
+                nullptr, c->ptr<float>(), m, k, batch_size))
+        return;
+#endif
+    auto handle_ = cublas_bind_stream();
     bool has_fp16 = a->dtype() == ns_float16
         || b->dtype() == ns_float16 || c->dtype() == ns_float16;
     bool has_bf16 = a->dtype() == ns_bfloat16
@@ -180,8 +197,8 @@ void CublasBatchedMatmulOp::jit_run() {
     auto computeType = mode.compute;
     auto algo = mode.algo;
     if (mode.typed_alpha) {
-        alpha_p = (void*)&alpha;
-        beta_p = (void*)&beta;
+        alpha_p = &alpha_t;
+        beta_p = &beta_t;
     }
     LOGvvv << "cublas_batched_matmul algo select:"
         << "precision=" >> float32_precision_tier_name(mode.tier)
@@ -194,13 +211,6 @@ void CublasBatchedMatmulOp::jit_run() {
     a->ptr<T>(),get_dtype(a->dtype()), '@Trans_a' == 'N' ? m : n, n * m, beta_p,
     c->ptr<T>(),get_dtype(c->dtype()), k, k * n,
     batch_size,computeType,algo));
-    // checkCudaErrors(cublas@op@@gemmStridedBatched(handle_,
-    // CUBLAS_OP_@Trans_b, CUBLAS_OP_@Trans_a,
-    // k, n, m, &alpha,
-    // b->ptr<T>(), '@Trans_b' == 'N' ? k : m, k * m, 
-    // a->ptr<T>(), '@Trans_a' == 'N' ? m : n, n * m, &beta,
-    // c->ptr<T>(), k, k * n,
-    // batch_size));
 }
 #endif
 #endif // JIT

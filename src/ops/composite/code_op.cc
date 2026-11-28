@@ -51,6 +51,15 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     configure_grad();
 }
 
+CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
+               const string* cuda_token, DataMap&& data, string&& backend)
+    : CodeOp(move(shape), dtype, move(inputs), "", {}, "", "", {}, "", move(data), move(backend)) {
+    CHECK(cuda_token && is_code_source_token(*cuda_token))
+        << "prepared device code requires an interned source token";
+    prepared_cuda_source = cuda_token;
+    set_flag(OpFlags::_cuda);
+}
+
 
 CodeOp::CodeOp(
     vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, 
@@ -351,12 +360,24 @@ unordered_map<string, InternedSource*> by_token;
 } // namespace
 
 const string& code_source_token(const string& header, const string& src) {
+    // The intern table owns its entries for the life of the runtime. A
+    // thread can reuse recent text matches without sampling or locking it.
+    static thread_local const InternedSource* recent[4]{};
+    static thread_local unsigned next = 0;
+    for (auto* entry : recent)
+        if (entry && entry->src == src && entry->header == header)
+            return entry->token;
+    auto remember = [&](const InternedSource* entry) -> const string& {
+        recent[next] = entry;
+        next = (next + 1) % 4;
+        return entry->token;
+    };
     uint64 sample = sampled_key(header, src);
     std::lock_guard<std::mutex> guard(interned_lock);
     auto range = by_sample.equal_range(sample);
     for (auto it = range.first; it != range.second; ++it)
         if (it->second->src == src && it->second->header == header)
-            return it->second->token;
+            return remember(it->second);
     // First sight of this text: name it by its full digest and build its tail.
     uint64 a = 0x243F6A8885A308D3ull ^ header.size(), b = 0x13198A2E03707344ull ^ src.size();
     source_digest(header, a, b);
@@ -370,7 +391,7 @@ const string& code_source_token(const string& header, const string& src) {
     while (by_token.count(entry->token)) entry->token = token.str() + "_" + std::to_string(++dup);
     by_sample.emplace(sample, entry);
     by_token.emplace(entry->token, entry);
-    return entry->token;
+    return remember(entry);
 }
 
 const string* code_source_tail(const string& token) {
@@ -411,6 +432,10 @@ void CodeOp::jit_prepare(JK& jk) {
             << JK::dec(_outputs[i]->shape.size());
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
+    }
+    if (prepared_cuda_source && executes_on_accelerator()) {
+        jk << "«HEADER:" << *prepared_cuda_source;
+        return;
     }
     const string& header = executes_on_accelerator() ?
         cuda_header : cpu_header;

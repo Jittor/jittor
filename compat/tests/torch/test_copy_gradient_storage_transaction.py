@@ -107,5 +107,38 @@ class TestCopyGradientStorageTransaction:
         _assert_values(old.grad, [[2., 2.], [0., 0.], [2., 2.]])
         _assert_values(source.grad, [[1., 1.]])
 
+    def test_index_copy_no_grad_preserves_storage_along_non_zero_dim(self, device):
+        destination = torch.zeros((1, 2, 4, 2), device=device)
+        pointer = destination.data_ptr()
+        index = torch.tensor([2], device=device, dtype=torch.int64)
+        source = torch.arange(1, 5, device=device, dtype=torch.float32).reshape(1, 2, 1, 2)
+        with torch.no_grad():
+            out = destination.index_copy_(2, index, source)
+        assert out is destination
+        assert destination.data_ptr() == pointer
+        expected = np.zeros((1, 2, 4, 2), dtype=np.float32)
+        expected[:, :, 2:3, :] = np.arange(1, 5, dtype=np.float32).reshape(1, 2, 1, 2)
+        _assert_values(destination, expected)
+
+    def test_tied_embedding_and_linear_gradient_setitem_matches_sum(self, device):
+        # Exercises `GetitemOp::grad_into` feeding a SetitemOp(add) over a
+        # matmul-produced gradient buffer so `setitem_inplace` shares storage
+        # without corrupting either branch's gradient.
+        rng = np.random.default_rng(7)
+        weight_np = rng.standard_normal((16, 8)).astype(np.float32)
+        hidden_np = rng.standard_normal((3, 8)).astype(np.float32)
+        idx_np = np.array([1, 4, 1], dtype=np.int64)
+        w = torch.tensor(weight_np, device=device, requires_grad=True)
+        h = torch.tensor(hidden_np, device=device, requires_grad=True)
+        idx = torch.tensor(idx_np, device=device)
+        emb = torch.nn.functional.embedding(idx, w)
+        logits = h @ w.t()
+        loss = (emb * 2.0).sum() + (logits * 0.5).sum()
+        loss.backward()
+        expected = np.broadcast_to(hidden_np.sum(axis=0, keepdims=True) * 0.5, (16, 8)).copy()
+        for i in idx_np:
+            expected[i] += 2.0
+        np.testing.assert_allclose(w.grad.detach().cpu().numpy(), expected, rtol=1e-5, atol=1e-5)
+
 
 instantiate_device_type_tests(TestCopyGradientStorageTransaction, globals(), only_for=("cpu", "cuda"))

@@ -455,6 +455,17 @@ class TestInfo(Base):
         self.assertAlmostEqual(torch.finfo(x.dtype).eps, float(np.finfo("float32").eps))
         self.assertAlmostEqual(torch.finfo("float32").eps, float(np.finfo("float32").eps))
 
+    def test_finfo_range_metadata_is_reused_with_independent_instances(self):
+        from unittest import mock
+
+        expected = torch.finfo(torch.float32)
+        first = torch.finfo("float32")
+        first.min = 0.0
+        with mock.patch.object(np, "finfo", side_effect=AssertionError("repeated range query")):
+            another = torch.finfo(torch.float32)
+        for field in ("min", "max", "eps", "tiny", "smallest_normal", "resolution", "bits", "dtype"):
+            self.assertEqual(getattr(another, field), getattr(expected, field))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

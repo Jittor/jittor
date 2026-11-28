@@ -6,14 +6,83 @@ from functools import lru_cache
 from jittor._runtime.backend_libraries import library_resource
 from jittor._runtime.dispatch import optional_kernel, select_kernel
 
+
+_MASKED_ROW_SOFTMAX = r"""
+__device__ __forceinline__ static float score_reduce(float value, bool maximum) {
+    __shared__ float groups[4];
+    __shared__ float result;
+    const int lane = threadIdx.x & 31;
+    const int group = threadIdx.x >> 5;
+    for (int offset = 16; offset; offset /= 2) {
+        const float other = __shfl_down_sync(0xffffffff, value, offset);
+        value = maximum ? fmaxf(value, other) : value + other;
+    }
+    if (lane == 0) groups[group] = value;
+    __syncthreads();
+    if (threadIdx.x == 0)
+        result = maximum
+            ? fmaxf(fmaxf(groups[0], groups[1]), fmaxf(groups[2], groups[3]))
+            : (groups[0] + groups[1]) + (groups[2] + groups[3]);
+    __syncthreads();
+    return result;
+}
+
+__device__ __forceinline__ static long long score_row_offset(
+        int batch, int head, int query, int4 dims) {
+    long long offset = dims.x == 1 ? 0 : batch;
+    offset = offset * dims.y + (dims.y == 1 ? 0 : head);
+    offset = offset * dims.z + (dims.z == 1 ? 0 : query);
+    return offset * dims.w;
+}
+
+__global__ static void masked_row_softmax(
+        const float* scores, const bool* mask, const float* bias, float* probabilities,
+        int heads, int queries, int keys, int4 mask_shape, int4 bias_shape, float scale, float fill) {
+    const int row = blockIdx.x;
+    const int batch = row / (heads * queries);
+    const int head = (row / queries) % heads;
+    const int query = row % queries;
+    const bool* mask_row = mask + score_row_offset(batch, head, query, mask_shape);
+    const float* bias_row = bias + score_row_offset(batch, head, query, bias_shape);
+    const long long base = (long long)row * keys;
+    extern __shared__ float weights[];
+    float maximum = -INFINITY;
+    for (int k = threadIdx.x; k < keys; k += blockDim.x) {
+        float score = mask_row[mask_shape.w == 1 ? 0 : k]
+            ? fill : scores[base + k] * scale;
+        score += bias_row[bias_shape.w == 1 ? 0 : k];
+        weights[k] = score;
+        maximum = fmaxf(maximum, score);
+    }
+    maximum = score_reduce(maximum, true);
+    float sum = 0.f;
+    for (int k = threadIdx.x; k < keys; k += blockDim.x) {
+        const float weight = expf(weights[k] - maximum);
+        weights[k] = weight;
+        sum += weight;
+    }
+    sum = score_reduce(sum, false);
+    for (int k = threadIdx.x; k < keys; k += blockDim.x)
+        probabilities[base + k] = weights[k] / sum;
+}
+const auto broadcast_shape = [](Var* input) {
+    int dims[4] = {1, 1, 1, 1};
+    const int rank = input->shape.size();
+    for (int i = 0; i < rank; ++i) dims[4 - rank + i] = input->shape[i];
+    return make_int4(dims[0], dims[1], dims[2], dims[3]);
+};
+masked_row_softmax<<<in0->num / in0_shape3, 128, in0_shape3 * sizeof(float)>>>(
+    in0_p, in1_p, in2_p, out0_p, in0_shape1, in0_shape2, in0_shape3,
+    broadcast_shape(in1), broadcast_shape(in2), data.at("scale"), data.at("fill"));
+CHECK(0 == cudaGetLastError());
+"""
+if hasattr(jt.core, "_bind_masked_row_softmax"):
+    jt.core._bind_masked_row_softmax(_MASKED_ROW_SOFTMAX)
+
+
 def _supports_softmax(a, log=False, zero_all_neg_inf=False, dim=-1):
-    if not a.shape:
-        return False
-    if dim != -1 and dim != len(a.shape)-1:
-        return False
-    if int(a.shape[-1]) <= 0:
-        return False
-    return True
+    shape = a.shape
+    return bool(shape) and (dim == -1 or dim == len(shape) - 1) and int(shape[-1]) > 0
 
 
 def can_softmax_v1(a, dim):
@@ -71,6 +140,15 @@ CHECK(0 == cudaGetLastError());
 ''')
 
 
+@lru_cache(maxsize=8)
+def _softmax_header(cub_home):
+    return f'''
+#include <{cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+#include <type_traits>
+'''
+
+
 @lru_cache(maxsize=256)
 def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     # The generated Function class and CUDA source depend only on the reduced
@@ -95,8 +173,8 @@ def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
         for_loop += f"if ((i*{tnum}+threadIdx.x)*{ILP} < len)\n"
 
     # Short rows need no communication between warps. Pack eight independent
-    # warp reductions into one block when there are enough
-    # FP32 rows to fill the GPU. Wider rows keep the block kernel: its extra
+    # warp reductions into one block when there are enough rows to fill
+    # the GPU. Wider rows keep the block kernel: its extra
     # memory parallelism is faster once a warp holds too many columns.
     warp_source = f"""
 __global__ void softmax_warp_rows(in0_type* x, out0_type* y, int len, int rows) {{
@@ -147,7 +225,9 @@ __global__ void softmax_warp_rows(in0_type* x, out0_type* y, int len, int rows) 
     launch = f"kernel<<<bnum, {tnum}>>>(in0_p, out0_p, len);"
     if warp_source:
         launch = f"""
-if (std::is_same<in0_type, float>::value && bnum >= 4096) {{
+constexpr bool narrow_half_rows = sizeof(in0_type) == 2 && {length} <= 128;
+if (bnum >= (narrow_half_rows ? 1024 : 4096)
+        && (narrow_half_rows || std::is_same<in0_type, float>::value)) {{
     softmax_warp_rows<<<(static_cast<unsigned>(bnum) + 7) / 8, 256>>>(in0_p, out0_p, len, bnum);
 }} else {{
     {launch}
@@ -264,13 +344,20 @@ kernel<<<bnum, {tnum}>>>(in0_p, in1_p, out0_p, len);
 CHECK(0 == cudaGetLastError());
 """
 
+    def forward(x, inference):
+        header = _softmax_header(library_resource("cub", "home"))
+        if inference:
+            return jt.core._cuda_inference_unary_code(
+                x, execute_source, header, not log and not zero_all_neg_inf)
+        return jt.code(x.shape, x.dtype, [x], cuda_header=header, cuda_src=execute_source)
+
     class CodeSoftmax(jt.Function):
+        @staticmethod
+        def inference(x):
+            return forward(x, True)
+
         def execute(self, x):
-            self.save_vars = jt.code(x.shape, x.dtype, [x], cuda_header=f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-#include <type_traits>
-''', cuda_src=execute_source)
+            self.save_vars = forward(x, False)
             return self.save_vars
 
         def grad(self, grad_x):
@@ -558,7 +645,14 @@ def _softmax_v1(a, log=False, zero_all_neg_inf=False, dim=-1):
     cls = (_softmax_v1_cls(length, bool(log), bool(zero_all_neg_inf))
            if kind == "register" else
            _softmax_streaming_cls(threads, bool(log), bool(zero_all_neg_inf)))
-    return cls()(a)
+    no_grad = jt.flags.no_grad
+    result = cls.inference(a) if kind == "register" and no_grad else cls()(a)
+    if (not log and not zero_all_neg_inf and a.ndim == 4 and no_grad
+            and 16 <= length <= 64 and a.numel() // length >= 1024):
+        from .short_attention_cuda import record_softmax
+
+        record_softmax(result, a)
+    return result
 
 
 def softmax_v1(a, log=False, zero_all_neg_inf=False):

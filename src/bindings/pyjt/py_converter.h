@@ -160,6 +160,14 @@ DEF_IS(float64, T) from_py_object(PyObject* obj) {
     return PyLong_AsDouble(obj);
 }
 
+DEF_IS(float32, bool) is_type(PyObject* obj) {
+    return is_type<float64>(obj);
+}
+
+DEF_IS(float32, T) from_py_object(PyObject* obj) {
+    return static_cast<T>(from_py_object<float64>(obj));
+}
+
 struct Slice;
 // Slice
 DEF_IS(Slice, bool) is_type(PyObject* obj) {

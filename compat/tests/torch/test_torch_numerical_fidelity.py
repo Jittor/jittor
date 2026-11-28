@@ -1640,7 +1640,7 @@ class TestTorchNumericalFidelity(unittest.TestCase):
         with _native_jittor.flag_scope(use_cuda=0):
             values_tensor = torch.tensor(values)
             actual = torch.split_with_sizes(values_tensor, sizes, dim=1)
-            method = values_tensor.split(sizes, dim=1)
+            method = values_tensor.split_with_sizes(sizes, dim=1)
         self.assertEqual(len(actual), 2)
         self.assertEqual(len(method), 2)
         for got, got_method, want in zip(actual, method, expected):

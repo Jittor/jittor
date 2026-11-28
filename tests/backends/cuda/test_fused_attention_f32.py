@@ -174,15 +174,14 @@ class TestFusedAttentionF32(unittest.TestCase):
                     self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
 
     def test_mixed_saturated_and_diffuse_rows_backward(self):
-        # One launch can see both decisions: rows 0 and 2 put their mass on a
-        # single key and reconstruct it, rows 1 and 3 spread it and take the
-        # cheap term. Neither branch may disturb the other's rows.
-        shape = (1, 1, 4, 6)
+        # A block can see both decisions and the last block has unused warps.
+        # Check the peaked rows alongside their diffuse neighbors.
+        shape = (1, 1, 11, 6)
         rng = np.random.RandomState(507)
         q, k, v = (rng.uniform(-1, 1, size=shape).astype("float32")
                    for _ in range(3))
         q = q.copy()
-        q[0, 0, (0, 2)] *= 80
+        q[0, 0, (0, 2, 8)] *= 80
         dout = rng.standard_normal(shape).astype("float32")
         for causal in (False, True):
             with self.subTest(causal=causal):
@@ -190,6 +189,8 @@ class TestFusedAttentionF32(unittest.TestCase):
                 jq, jk, jv = (jt.array(a) for a in (q, k, v))
                 out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
                 grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
+                jt.sync([out, *grads], device_sync=True)
+                self.assertTrue(all(t.location() == "device" for t in [out, *grads]))
                 actual = [a.numpy().copy() for a in [out] + list(grads)]
                 for index, (got, want) in enumerate(zip(actual, expected)):
                     self.assertTrue(np.isfinite(got).all())
@@ -197,6 +198,33 @@ class TestFusedAttentionF32(unittest.TestCase):
                     net_tol, pe_tol = (2e-4, 2e-3) if index == 0 else (2e-3, 5e-3)
                     self.assertLess(float(error.max() / (np.abs(want).max() + 1e-30)), net_tol)
                     self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
+
+    def test_captured_batched_scores_match_forward_and_gradients(self):
+        from jittor.nn.functional import attention
+
+        rng = np.random.default_rng(43)
+        shape = (2, 8, 147, 48)
+        key_shape = (2, 8, 157, 48)
+        q, k, v, cotangent = [rng.standard_normal(s, dtype=np.float32)
+                              for s in (shape, key_shape, key_shape, shape)]
+        expected = _reference(q, k, v, False, cotangent)
+
+        def step(query, key, value, cot):
+            out = scaled_dot_product_attention(query, key, value)
+            return [out, *jt.grad((out * cot).sum(), [query, key, value])]
+
+        with jt.flag_scope(backend_fallback="error"), \
+                patch.object(attention, "_composite", wraps=attention._composite) as composite:
+            captured = jt.capture_step(step)
+            inputs = [jt.array(t) for t in (q, k, v, cotangent)]
+            for _ in range(5):
+                result = captured(*inputs)
+                jt.sync(result, device_sync=True)
+            composite.assert_called()
+            self.assertGreater(captured.stats["graph"], 0)
+            self.assertTrue(all(t.location() == "device" for t in result))
+            for got, want in zip(jt.fetch_sync(result), expected):
+                np.testing.assert_allclose(got, want, atol=2e-5, rtol=1e-4)
 
     def test_constant_values_have_zero_query_and_key_gradients(self):
         rng = np.random.RandomState(913)
@@ -308,6 +336,46 @@ class TestFusedAttentionF32(unittest.TestCase):
         # even when adding log(key_count) to finfo.min would round it away.
         mask[1, :, 7, :] = np.finfo(np.float32).min
         self._check(2, 3, 64, 64, 64, False, mask)
+
+    def test_factorized_additive_mask_matches_cpu_on_partial_tiles(self):
+        rng = np.random.default_rng(240)
+        batch, heads, qh, qw, kh, kw, depth = 2, 3, 3, 27, 7, 15, 24
+        shapes = [(batch, heads, length, depth) for length in (qh * qw, kh * kw, kh * kw)]
+        qkv = [rng.normal(size=shape).astype("float32") for shape in shapes]
+        vertical = rng.normal(size=(batch * heads, qw, qh, kh)).astype("float32")
+        horizontal = rng.normal(size=(batch * heads, qh, qw, kw)).astype("float32")
+        vertical[1, 2, 0, :] = -np.inf
+        shape = (batch, heads, qh * qw, kh * kw)
+
+        def attention(operands, height, width):
+            mask = (height.transpose(0, 2, 1, 3)[..., None] + width[..., None, :]).reshape(shape)
+            return scaled_dot_product_attention(*operands, attn_mask=mask)
+
+        with jt.no_grad(), jt.flag_scope(use_cuda=0):
+            expected = attention([jt.array(array) for array in qkv],
+                                 jt.array(vertical), jt.array(horizontal)).numpy()
+        with jt.no_grad(), jt.flag_scope(backend_fallback="error"), \
+                patch.object(self.kernel, "_mask_layout",
+                             side_effect=AssertionError("materialized additive mask")):
+            actual = attention([jt.array(array) for array in qkv],
+                               jt.array(vertical), jt.array(horizontal))
+            actual.sync()
+            self.assertEqual(actual.location(), "device")
+            np.testing.assert_allclose(actual.numpy(), expected, rtol=1e-5, atol=3e-6)
+
+    def test_a_sliding_window_additive_mask(self):
+        # Sliding-window additive masks (as ModernBERT builds with finfo.min or
+        # -inf) leave most 64x64 key tiles completely masked out. Include an
+        # all-finfo.min query row spanning skipped tiles to verify fallback.
+        idx = np.arange(192)
+        window = np.abs(idx[:, None] - idx[None, :]) <= 32
+        for sentinel in (np.finfo(np.float32).min, -np.inf):
+            with self.subTest(sentinel=sentinel):
+                mask = np.where(window, 0.0, sentinel).astype("float32")
+                mask = np.broadcast_to(mask, (2, 1, 192, 192)).copy()
+                if np.isfinite(sentinel):
+                    mask[1, :, 5, :] = sentinel
+                self._check(2, 2, 192, 192, 64, False, mask)
 
     def test_an_additive_mask_per_head(self):
         rng = np.random.RandomState(7)
@@ -513,6 +581,92 @@ class TestFusedAttentionF32(unittest.TestCase):
             q, q, q, attn_mask=jt.zeros((8, 8)).float16().stop_grad()))
         self.assertIsNone(self.kernel._fused_attention_f32(
             q, q, q, attn_mask=jt.ones((3, 8), dtype="bool")))
+
+    def test_many_wide_heads_use_tiled_inference(self):
+        rng = np.random.default_rng(301)
+        queries, keys, depth, heads = 27, 53, 72, 128
+        arrays = [rng.normal(0, 0.3, size=(2, heads // 2, length, depth)).astype("float32")
+                  for length in (queries, keys, keys)]
+        self.assertFalse(self.kernel._use_short_forward(queries, keys, depth, heads))
+        self.assertTrue(self.kernel._use_short_forward(queries, keys, depth, heads - 1))
+        self.assertTrue(self.kernel._use_short_forward(queries, 32, depth, heads))
+        with jt.no_grad(), jt.flag_scope(use_cuda=0):
+            expected = scaled_dot_product_attention(*(jt.array(a) for a in arrays)).numpy()
+        with jt.no_grad(), jt.flag_scope(backend_fallback="error"):
+            result = scaled_dot_product_attention(*(jt.array(a) for a in arrays))
+            result.sync()
+            self.assertEqual(result.location(), "device")
+            np.testing.assert_allclose(result.numpy(), expected, rtol=2e-5, atol=3e-6)
+
+    def test_short_inference_fast_path(self):
+        rng = np.random.RandomState(42)
+        cases = [
+            ("chronos_time_add_mask", (4, 12, 35, 64), (4, 12, 35, 64), False, "add_b11k"),
+            ("chronos_group_add_mask", (35, 12, 4, 64), (35, 12, 4, 64), False, "add_b1qk"),
+            ("d128_causal", (2, 4, 19, 128), (2, 4, 19, 128), True, None),
+            ("odd_d_bool_mask", (2, 3, 13, 37), (2, 3, 29, 37), False, "bool_all_false_row"),
+            ("shared_tiles_causal_bool_mask", (2, 3, 19, 64), (2, 3, 39, 64), True, "bool_all_false_row"),
+            ("shared_tiles_rectangular", (2, 3, 17, 64), (2, 3, 64, 64), False, None),
+            ("long_q_tiny_k", (2, 4, 128, 64), (2, 4, 7, 64), False, None),
+            ("sentinel_all_masked", (1, 2, 4, 64), (1, 2, 4, 64), False, "sentinel"),
+            ("gqa_short", (2, 8, 17, 64), (2, 2, 23, 64), True, None),
+        ]
+        with jt.no_grad():
+            for name, qshape, kshape, causal, mask_kind in cases:
+                with self.subTest(case=name):
+                    q = rng.randn(*qshape).astype("float32")
+                    k = rng.randn(*kshape).astype("float32")
+                    v = rng.randn(*kshape).astype("float32")
+                    b, h, lq, d = qshape
+                    hk, lk = kshape[1], kshape[2]
+                    mask_np = None
+                    if mask_kind == "add_b11k":
+                        mask_np = np.zeros((b, 1, 1, lk), dtype="float32")
+                        mask_np[:, :, :, -5:] = -np.inf
+                        mask_np[0, 0, 0, :3] = -3.4028235e+38
+                    elif mask_kind == "add_b1qk":
+                        mask_np = np.zeros((b, 1, lq, lk), dtype="float32")
+                        mask_np[:, :, 0, 2:] = -np.inf
+                        mask_np[1, 0, 3, :] = -np.inf
+                    elif mask_kind == "bool_all_false_row":
+                        mask_np = rng.rand(b, 1, lq, lk) > 0.3
+                        mask_np[0, 0, 0, :] = False
+                    elif mask_kind == "sentinel":
+                        mask_np = np.full((b, 1, lq, lk), -3.4028235e+38, dtype="float32")
+                        mask_np[0, 0, 1, 2] = 0.0
+                    k_ref = np.repeat(k, h // hk, axis=1) if hk != h else k
+                    v_ref = np.repeat(v, h // hk, axis=1) if hk != h else v
+                    expected = _reference(q, k_ref, v_ref, causal, np.zeros_like(q), mask_np)[0]
+
+                    jq, jk, jv = (jt.array(a).stop_grad() for a in (q, k, v))
+                    jm = jt.array(mask_np).stop_grad() if mask_np is not None else None
+                    # Contiguous [B,H,S,D]
+                    out = self.kernel._fused_attention_f32(
+                        jq, jk, jv, attn_mask=jm, is_causal=causal, enable_gqa=(hk != h))
+                    self.assertIsNotNone(out)
+                    np.testing.assert_allclose(out.numpy(), expected, rtol=1e-4, atol=1e-5)
+
+                    # Seq-major [B,S,H,D].transpose(0, 2, 1, 3) view
+                    jq_s = jt.array(np.ascontiguousarray(q.transpose(0, 2, 1, 3))).stop_grad().transpose(0, 2, 1, 3)
+                    jk_s = jt.array(np.ascontiguousarray(k.transpose(0, 2, 1, 3))).stop_grad().transpose(0, 2, 1, 3)
+                    jv_s = jt.array(np.ascontiguousarray(v.transpose(0, 2, 1, 3))).stop_grad().transpose(0, 2, 1, 3)
+                    out_s = self.kernel._fused_attention_f32(
+                        jq_s, jk_s, jv_s, attn_mask=jm, is_causal=causal, enable_gqa=(hk != h))
+                    self.assertIsNotNone(out_s)
+                    np.testing.assert_allclose(out_s.numpy(), expected, rtol=1e-4, atol=1e-5)
+
+    def test_short_inference_reads_misaligned_key_and_value_rows(self):
+        rng = np.random.default_rng(21)
+        q = rng.normal(size=(2, 3, 37, 64)).astype("float32")
+        k, v = [rng.normal(size=(2, 3, 41, 65)).astype("float32") for _ in range(2)]
+        expected = _reference(q, k[..., 1:], v[..., 1:], False, np.zeros_like(q), None)[0]
+        with jt.no_grad():
+            jq, jk, jv = (jt.array(a).stop_grad() for a in (q, k, v))
+            out = self.kernel._fused_attention_f32(jq, jk[..., 1:], jv[..., 1:])
+            self.assertIsNotNone(out)
+            out.sync()
+            self.assertEqual(out.location(), "device")
+            np.testing.assert_allclose(out.numpy(), expected, rtol=1e-4, atol=1e-5)
 
     def test_the_scores_are_never_built(self):
         heads, tokens, width = 8, 4096, 40

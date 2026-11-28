@@ -161,6 +161,8 @@ def _try_vector_norm(x, ord, dim, keepdim):
     their different epsilon and argument conventions remain with each owner.
     """
     from jittor._runtime.dispatch import select_kernel
+    from jittor.backends.cuda.kernels.math.vector_norm_cuda import vector_norm_columns_cuda  # noqa: F401
+
     kernel = select_kernel("linalg.vector_norm", x, ord, dim, keepdim)
     return None if kernel is None else kernel(x, ord, dim, keepdim)
 

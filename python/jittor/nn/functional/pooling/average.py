@@ -193,7 +193,7 @@ def adaptive_avg_pool2d(input, output_size):
         return dispatched
     n, channels, height, width = input.shape
     if out_height == 1 and out_width == 1:
-        return input.reduce("mean", [2, 3], keepdims=True)
+        return jt.mean(input, [2, 3], keepdims=True)
 
     yy, xx = jt.meshgrid(jt.arange(0, out_height, 1), jt.arange(0, out_width, 1))
     start_height = jt.floor(yy * height / out_height).int32()

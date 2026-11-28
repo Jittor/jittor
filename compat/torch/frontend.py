@@ -170,8 +170,7 @@ class tensor_frontend:
     autograd `policy_scope` cost more than the native calls they wrap.
     """
 
-    __slots__ = ("_type", "_device", "_like", "_default_placement", "_backend",
-                 "_token", "_placement_token", "_precision_token", "_policy_bits")
+    __slots__ = ("_type", "_device", "_like", "_default_placement", "_backend", "_token")
 
     def __init__(self, tensor_type, *, device=None, like=None, default_placement=True):
         self._type = tensor_type
@@ -185,44 +184,18 @@ class tensor_frontend:
         self._backend = backend
         if backend is None:
             return None
-        core = backend.core
-        self._token = core._set_tensor_frontend_type(self._type)
-        self._placement_token = self._precision_token = self._policy_bits = None
-        try:
-            self._precision_token = core._set_float32_precision(
-                *self._type._frontend_precision_policy())
-            placement = _placement_request(backend, self._device, self._like,
-                                           self._default_placement)
-            if placement is not None:
-                self._placement_token = core._set_tensor_placement(*placement)
-            # backend.autograd.policy_scope(EXPLICIT_REQUIRES_GRAD), inline.
-            policy = backend.autograd.EXPLICIT_REQUIRES_GRAD
-            self._policy_bits = core._get_autograd_policy()
-            core._set_autograd_policy(policy.stop_outputs_when_inputs_stopped,
-                                      policy.preserve_requires_grad_on_assignment)
-        except BaseException:
-            self._restore()
-            raise
+        policy = backend.autograd.EXPLICIT_REQUIRES_GRAD
+        self._token = backend.core._enter_tensor_frontend_scope(
+            self._type, _placement_request,
+            (backend, self._device, self._like, self._default_placement),
+            policy.stop_outputs_when_inputs_stopped,
+            policy.preserve_requires_grad_on_assignment)
         return None
 
     def __exit__(self, *exc):
         if self._backend is not None:
-            self._restore()
+            self._backend.core._leave_tensor_frontend_scope(self._token)
         return False
-
-    def _restore(self):
-        backend = self._backend
-        if backend is None:
-            return
-        core = backend.core
-        bits = self._policy_bits
-        if bits is not None:
-            core._set_autograd_policy(bool(bits & 1), bool(bits & 2))
-        if self._precision_token is not None:
-            core._reset_float32_precision(self._precision_token)
-        if self._placement_token is not None:
-            core._reset_tensor_placement(self._placement_token)
-        core._reset_tensor_frontend_type(self._token)
 
 
 class FrontendFactory:

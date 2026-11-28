@@ -77,3 +77,28 @@ def test_invalid_rank_has_no_channels_last_3d_layout(device):
         x.contiguous(memory_format=fmt)
     with pytest.raises(RuntimeError, match="required rank 5"):
         torch.empty_like(x, memory_format=fmt)
+
+
+@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float16])
+def test_nonoverlapping_conv3d_packs_channels_and_spatial_axes(device, dtype):
+    rng = np.random.default_rng(17)
+    x = rng.integers(-2, 3, size=(2, 8, 4, 9, 4)).astype(np.float32)
+    weight = rng.integers(-2, 3, size=(16, 8, 2, 3, 2)).astype(np.float32)
+    bias = np.arange(16, dtype=np.float32) / 4
+    from jittor._runtime.fallback import forbid_backend_fallbacks
+
+    with torch.no_grad(), forbid_backend_fallbacks():
+        out = torch.nn.functional.conv3d(
+            torch.tensor(x, device=device, dtype=dtype),
+            torch.tensor(weight, device=device, dtype=dtype),
+            torch.tensor(bias, device=device, dtype=dtype),
+            stride=(2, 3, 2),
+        )
+        assert out.dtype == dtype and out.device.type == device
+        if device == "cuda":
+            assert out.is_contiguous(memory_format=torch.channels_last_3d)
+        tiles = x.reshape(2, 8, 2, 2, 3, 3, 2, 2).transpose(0, 2, 4, 6, 1, 3, 5, 7)
+        expected = tiles.reshape(-1, 96) @ weight.reshape(16, 96).T + bias
+        expected = torch.tensor(expected, dtype=dtype, device="cpu").float().numpy()
+        actual = out.permute(0, 2, 3, 4, 1).reshape(-1, 16).float().cpu().numpy()
+        np.testing.assert_array_equal(actual, expected)

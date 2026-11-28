@@ -39,7 +39,7 @@ API_PATHS = {
         "LazyBatchNorm3d", "LeakyReLU", "Linear", "MSELoss", "MaxPool1d", "MaxPool2d",
         "MaxPool3d", "MaxUnpool2d", "MaxUnpool3d", "Mish", "Module", "ModuleList",
         "MultiheadAttention", "PReLU", "ParameterDict", "RNN", "RNNBase", "RNNCell",
-        "RReLU", "ReLU", "ReLU6", "ReflectionPad2d", "ReplicationPad2d", "Sequential",
+        "RReLU", "ReLU", "ReLU6", "ReflectionPad1d", "ReflectionPad2d", "ReplicationPad2d", "Sequential",
         "SiLU", "Sigmoid", "Softmax", "Tanh", "Unfold", "Upsample",
         "UpsamplingBilinear2d", "UpsamplingNearest2d", "ZeroPad2d",
     ),

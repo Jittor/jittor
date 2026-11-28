@@ -76,6 +76,39 @@ def test_cpu_clamp_bounds_do_not_allocate_cuda_memory():
         assert torch.cuda.max_memory_allocated() == baseline
 
 
+@pytest.mark.parametrize("device, ambient", [("cpu", "cuda"), ("cuda", "cpu")])
+def test_clamp_scalar_bounds_follow_input_device(device, ambient):
+    from jittor._core.var import device_scope_like
+    import torch
+
+    with _cuda_runtime(), torch.no_grad():
+        source = torch.tensor([-1, 0, 2, 3], dtype=torch.int32, device=device)
+        with device_scope_like(torch.empty(1, device=ambient)):
+            upper = source.clip(max=2)
+            both = source.clamp(0, 2)
+        assert upper.device == both.device == source.device
+        np.testing.assert_array_equal(upper.cpu().numpy(), [-1, 0, 2, 2])
+        np.testing.assert_array_equal(both.cpu().numpy(), [0, 0, 2, 2])
+
+
+@pytest.mark.parametrize("dtype", ["int64", "bfloat16", "complex128"])
+def test_item_preserves_cuda_scalar_and_view_storage(dtype):
+    import jittor as jt
+    import torch
+
+    with _cuda_runtime(), torch.no_grad():
+        source = torch.tensor([[1, 2], [3, 4]], dtype=getattr(torch, dtype), device="cuda")
+        view = source.t()[0, 1]
+        result = view + 2
+        before = jt.core._host_readback_count()
+        assert view.item() == 3 and result.item() == 5
+        assert jt.core._host_readback_count() == before + 2
+        assert view.location() == source.location() == result.location() == "device"
+        source[1, 0] = 9
+        assert view.item() == 9
+        assert result.item() == 5
+
+
 @pytest.mark.parametrize("spatial_shape", [(6, 8), (4, 6, 8)])
 def test_cpu_grid_operations_do_not_allocate_cuda_memory(spatial_shape):
     import torch

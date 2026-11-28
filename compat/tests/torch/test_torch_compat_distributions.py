@@ -471,5 +471,38 @@ class TestExponential(Base):
         both_devices(body)
 
 
+def test_affine_transform_student_t_negative_binomial_and_torch_config():
+    assert isinstance(torch.__config__.show(), str)
+    assert isinstance(torch.__config__.parallel_info(), str)
+    from torch.distributions import (
+        AffineTransform,
+        ComposeTransform,
+        NegativeBinomial,
+        StudentT,
+        TransformedDistribution,
+    )
+    from torch.distributions.transforms import AffineTransform as SubAffine
+
+    assert SubAffine is AffineTransform
+    for dev, use_cuda in _DEVICES:
+        with jt.flag_scope(use_cuda=use_cuda):
+            x = torch.tensor([1.0, 2.0, -3.0])
+            t = AffineTransform(loc=2.0, scale=3.0)
+            y = t(x)
+            np.testing.assert_allclose(y.detach().cpu().numpy(), [5.0, 8.0, -7.0], atol=1e-6)
+            np.testing.assert_allclose(t.inv(y).detach().cpu().numpy(), [1.0, 2.0, -3.0], atol=1e-6)
+            composed = ComposeTransform([t, AffineTransform(loc=-1.0, scale=0.5)])
+            np.testing.assert_allclose(composed.inv(composed(x)).detach().cpu().numpy(), [1.0, 2.0, -3.0], atol=1e-5)
+
+            st = StudentT(df=5.0, loc=1.0, scale=2.0)
+            td = TransformedDistribution(st, [AffineTransform(loc=0.5, scale=1.5)])
+            lp = td.log_prob(torch.tensor([2.0, 3.0])).detach().cpu().numpy()
+            assert np.isfinite(lp).all()
+
+            nb = NegativeBinomial(total_count=4.0, probs=0.4)
+            nb_lp = nb.log_prob(torch.tensor([0.0, 1.0, 3.0])).detach().cpu().numpy()
+            assert np.isfinite(nb_lp).all()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

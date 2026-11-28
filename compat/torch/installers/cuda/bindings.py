@@ -503,6 +503,12 @@ def _install_version(g, registry=None):
     version.git_version = "jittor"
     _modules["torch.version"] = version
     g.version = version
+    config = _types.ModuleType("torch.__config__")
+    config.show = lambda: f"Jittor {jittor_version} (Torch API {torch_api_version}, CUDA {version.cuda})"
+    config.parallel_info = lambda: f"Jittor parallel backend (CUDA {version.cuda})"
+    config._cxx_flags = lambda: ""
+    _modules["torch.__config__"] = config
+    g.__config__ = config
 
 
 def _install_accelerator(g, registry=None):

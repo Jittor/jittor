@@ -67,6 +67,12 @@ void cuda_indexing_optimize(Op* op, NanoVector o_shape, string& src) {
         << "setitem_op.cc has to be guarded with @if(@is_def(JIT_cpu), ...)";
     new_func->push_back(func->children.back()->move_out());
     auto& loop = new_func->children.back();
+    if (op->execution_backend() == BackendId::Cuda && jd_map["OP"] == "void"
+            && jd_map["Ti"] == jd_map["Td"]) {
+        // The host checks the actual strides and pointers after allocation.
+        // Other assignments continue through the generated scatter below.
+        func->push_back("if (try_packed_slice_write<index_t>(out, data, vs, op, dp)) return;");
+    }
     int no = o_shape.size();
     STACK_ALLOC(KernelIR*, loops, no);
     if (!no) {

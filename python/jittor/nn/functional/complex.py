@@ -202,10 +202,15 @@ class _Real2ToComplex(jt.Function):
 
 
 def _complex_to_real2(z):
+    if getattr(jt, "reinterpret_view", None) is not None:
+        # The native op owns the backward and keeps the storage strides.
+        return _complex_to_real2_raw(z)
     return _ComplexToReal2.apply(z)
 
 
 def _real2_to_complex(x):
+    if getattr(jt, "reinterpret_view", None) is not None:
+        return _real2_to_complex_raw(x)
     return _Real2ToComplex.apply(x)
 
 

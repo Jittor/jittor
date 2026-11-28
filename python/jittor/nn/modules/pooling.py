@@ -213,6 +213,12 @@ class MaxUnpool3d(Module):
 class MaxPool2d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
         if _no_dilation(dilation): dilation = None
+        self.kernel_size = kernel_size
+        self.stride = stride if stride is not None else kernel_size
+        self.padding = padding
+        self.dilation = 1 if dilation is None else dilation
+        self.return_indices = bool(return_indices)
+        self.ceil_mode = ceil_mode
         self._layer = Pool(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
 
     def execute(self, x):
@@ -222,6 +228,12 @@ class MaxPool2d(Module):
 class MaxPool3d(Module):
     def __init__(self, kernel_size, stride=None, padding=0, dilation=None, return_indices=None, ceil_mode=False):
         if _no_dilation(dilation): dilation = None
+        self.kernel_size = kernel_size
+        self.stride = stride if stride is not None else kernel_size
+        self.padding = padding
+        self.dilation = 1 if dilation is None else dilation
+        self.return_indices = bool(return_indices)
+        self.ceil_mode = ceil_mode
         self._layer = Pool3d(kernel_size=kernel_size, stride=stride, padding=padding, dilation=dilation, return_indices=return_indices, ceil_mode=ceil_mode, op="maximum")
 
     def execute(self, x):

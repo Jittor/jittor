@@ -15,7 +15,10 @@ def channels_last_source(x):
     if len(x.shape) != 4 or x._storage_is_contiguous() or x._storage_offset():
         return None
     n, c, h, w = (int(size) for size in x.shape)
-    if min(c, h, w) <= 1 or tuple(x._storage_strides()) != (h * w * c, 1, w * c, c):
+    expected = (h * w * c, 1, w * c, c)
+    if min(n, c, h, w) <= 0 or any(
+            size > 1 and stride != dense_stride
+            for size, stride, dense_stride in zip(x.shape, x._storage_strides(), expected)):
         return None
     return x._storage_permute((0, 2, 3, 1))
 

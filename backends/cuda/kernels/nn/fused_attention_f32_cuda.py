@@ -112,6 +112,8 @@ struct Mask {
     const void* data;
     int heads;
     long long batch_stride, head_stride, row_stride, col_stride;
+    const float* column_bias = nullptr;
+    int key_height = 0;
     __device__ __forceinline__ long long base(int bh) const {
         return (long long)(bh / heads) * batch_stride + (long long)(bh % heads) * head_stride;
     }
@@ -141,6 +143,18 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
     for (int c = 0; c < 4; c++) out[c] = col + c < lk ? p[c * mask.col_stride] : 0.f;
 }
 
+template <int KEY_WIDTH>
+__device__ __forceinline__ void factorized_bias4(const Mask& mask, long long row,
+                                                 int col, int lk, float (&out)[4]) {
+    const float* height = static_cast<const float*>(mask.data) + row * mask.key_height;
+    const float* width = mask.column_bias + row * KEY_WIDTH;
+    #pragma unroll
+    for (int c = 0; c < 4; ++c) {
+        const int key = col + c;
+        out[c] = key < lk ? height[key / KEY_WIDTH] + width[key % KEY_WIDTH] : 0.f;
+    }
+}
+
 // The per-row softmax term of the query gradient: sum_k p_k * dP_k, which the
 // caller already has as dO . O. Recomputing it from dP only pays off where
 // that product loses precision -- a row nearly one-hot has p_1 ~ 1 and the
@@ -149,29 +163,38 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
 // step no longer walks the score matrix once per layer just to rebuild a
 // number it already computed; BERT-large's backward was 136 of its 172 ms
 // here. Only one double per query is stored, never a score matrix.
-template <int D, bool CAUSAL, int MASK, bool DROPOUT>
+// Pack short rows into a block. The diffuse rows then have one active lane
+// per warp, while a peaked short row can do its reduction within its warp.
+constexpr int ROW_DELTA_THREADS = 256;
+constexpr int ROW_DELTA_WARPS = ROW_DELTA_THREADS / 32;
+
+template <int D, bool CAUSAL, int MASK, bool DROPOUT, int ROW_THREADS>
 __global__ void row_delta(const float* q, const float* k, const float* v,
         const float* dout, const float* normalizer, const double* approximate,
         double* delta, int lq, int lk, float scale, float recompute_inv,
         Mask mask, Rows ql, Rows kl, Rows vl, Dropout dropout) {
-    const int row = blockIdx.x, bh = blockIdx.y, tid = threadIdx.x;
-    const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
-        dob(dout, ql, bh);
+    constexpr int rows_per_block = ROW_DELTA_THREADS / ROW_THREADS;
+    const int row = blockIdx.x * rows_per_block + threadIdx.x / ROW_THREADS;
+    if (row >= lq) return;
+    const int bh = blockIdx.y, tid = threadIdx.x % ROW_THREADS;
     const size_t index = ((size_t)bh * lq + row) * 2;
     const float top = normalizer[index], inv = normalizer[index + 1];
     if (!(inv > recompute_inv)) {
         if (tid == 0) delta[(size_t)bh * lq + row] = approximate[(size_t)bh * lq + row];
         return;
     }
+    const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
+        dob(dout, ql, bh);
     const long long mask_base = MASK ? mask.base(bh) : 0;
     double weighted = 0., total = 0.;
-    for (int col = tid; col < lk; col += blockDim.x) {
+    for (int col = tid; col < lk; col += ROW_THREADS) {
         if (CAUSAL && col > row) continue;
         float score = 0.f, dp = 0.f;
         #pragma unroll 4
         for (int d = 0; d < D; d++) {
-            score += __fmul_rn(qb[row][d], scale) * kb[col][d];
-            dp += dob[row][d] * vb[col][d];
+            // Recompute the same FP32 dot products the tiled kernels use.
+            score = fmaf(__fmul_rn(qb[row][d], scale), kb[col][d], score);
+            dp = fmaf(dob[row][d], vb[col][d], dp);
         }
         if (MASK) score = masked<MASK>(score, mask, mask_base
             + row * mask.row_stride + col * mask.col_stride);
@@ -184,20 +207,27 @@ __global__ void row_delta(const float* q, const float* k, const float* v,
         weighted += (double)p * (double)dp;
         total += (double)p;
     }
-    __shared__ double sums[2][256];
-    sums[0][tid] = weighted;
-    sums[1][tid] = total;
-    __syncthreads();
-    for (int step = 128; step; step >>= 1) {
-        if (tid < step) {
-            sums[0][tid] += sums[0][tid + step];
-            sums[1][tid] += sums[1][tid + step];
+    for (int offset = 16; offset; offset >>= 1) {
+        weighted += __shfl_down_sync(0xffffffffu, weighted, offset);
+        total += __shfl_down_sync(0xffffffffu, total, offset);
+    }
+    if constexpr (rows_per_block == 1) {
+        __shared__ double sums[2][ROW_DELTA_WARPS];
+        if ((tid & 31) == 0) {
+            sums[0][tid / 32] = weighted;
+            sums[1][tid / 32] = total;
         }
         __syncthreads();
+        if (tid == 0) {
+            #pragma unroll
+            for (int warp = 1; warp < ROW_DELTA_WARPS; warp++) {
+                weighted += sums[0][warp];
+                total += sums[1][warp];
+            }
+        }
     }
     // Normalize the reconstructed probabilities' small float32 rounding error.
-    if (tid == 0) delta[(size_t)bh * lq + row] = sums[1][0] > 0.
-        ? sums[0][0] / sums[1][0] : 0.;
+    if (tid == 0) delta[(size_t)bh * lq + row] = total > 0. ? weighted / total : 0.;
 }
 
 } // namespace mea
@@ -237,18 +267,55 @@ __device__ __forceinline__ float lanes16_sum(float v) {
 template <int MASK, bool CAUSAL, int ROWS, int COLS>
 __device__ __forceinline__ int tile_visibility(const mea::Mask& mask, long long base, int r0,
                                                int c0, int lq, int lk) {
-    bool any = false, all = true;
-    for (int i = threadIdx.x; i < ROWS * COLS; i += THREADS) {
-        const int row = r0 + i / COLS, col = c0 + i % COLS;
-        if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
-        const long long at = base + row * mask.row_stride + col * mask.col_stride;
-        const bool shown = MASK == 1 ? static_cast<const bool*>(mask.data)[at]
-                                     : static_cast<const float*>(mask.data)[at] != -INFINITY;
-        any |= shown;
-        all &= shown;
+    bool any_non_neginf = false, any_non_sentinel = false, all_zero = true;
+    if (MASK == 2 && mask.row_stride == 0 && mask.col_stride == 1) {
+        if (threadIdx.x < COLS) {
+            const int col = c0 + threadIdx.x;
+            if (col < lk && (!CAUSAL || col <= min(lq - 1, r0 + ROWS - 1))) {
+                const float v = static_cast<const float*>(mask.data)[base + col];
+                any_non_neginf = (v != -INFINITY);
+                any_non_sentinel = !(v <= -1e38f);
+                all_zero = (v == 0.f);
+            }
+        }
+    } else if (MASK == 2 && !CAUSAL && mask.col_stride == 1 && (COLS % 4 == 0)
+               && (c0 + COLS <= lk) && (r0 + ROWS <= lq)
+               && ((reinterpret_cast<size_t>(static_cast<const float*>(mask.data) + base + c0) & 15u) == 0)
+               && ((mask.row_stride & 3) == 0)) {
+        constexpr int kVecCols = COLS / 4;
+        constexpr int kVecs = ROWS * kVecCols;
+        const float* ptr = static_cast<const float*>(mask.data) + base;
+        for (int i = threadIdx.x; i < kVecs; i += THREADS) {
+            const int row = r0 + i / kVecCols;
+            const int col4 = c0 + (i % kVecCols) * 4;
+            const float4 v = *reinterpret_cast<const float4*>(ptr + row * mask.row_stride + col4);
+            any_non_neginf |= (v.x != -INFINITY) || (v.y != -INFINITY)
+                              || (v.z != -INFINITY) || (v.w != -INFINITY);
+            any_non_sentinel |= !(v.x <= -1e38f) || !(v.y <= -1e38f)
+                                || !(v.z <= -1e38f) || !(v.w <= -1e38f);
+            all_zero &= (v.x == 0.f) && (v.y == 0.f) && (v.z == 0.f) && (v.w == 0.f);
+        }
+    } else {
+        for (int i = threadIdx.x; i < ROWS * COLS; i += THREADS) {
+            const int row = r0 + i / COLS, col = c0 + i % COLS;
+            if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
+            const long long at = base + row * mask.row_stride + col * mask.col_stride;
+            if (MASK == 1) {
+                const bool shown = static_cast<const bool*>(mask.data)[at];
+                any_non_neginf |= shown;
+                any_non_sentinel |= shown;
+                all_zero &= shown;
+            } else {
+                const float v = static_cast<const float*>(mask.data)[at];
+                any_non_neginf |= (v != -INFINITY);
+                any_non_sentinel |= !(v <= -1e38f);
+                all_zero &= (v == 0.f);
+            }
+        }
     }
-    if (!__syncthreads_or(any)) return 0;
-    return MASK == 1 && __syncthreads_and(all) ? 2 : 1;
+    if (!__syncthreads_or(any_non_neginf)) return 0;
+    if (MASK == 2 && !__syncthreads_or(any_non_sentinel)) return -1;
+    return __syncthreads_and(all_zero) ? 2 : 1;
 }
 
 template <int RPT>
@@ -262,7 +329,7 @@ __device__ __forceinline__ void load_rows(const float* p, float (&out)[RPT]) {
     }
 }
 
-template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT>
+template <int D, int RPT, bool CAUSAL, int MASK, bool DROPOUT, int KEY_WIDTH = 0>
 __global__ void __launch_bounds__(THREADS) forward(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o, float* __restrict__ normalizer,
@@ -293,97 +360,140 @@ __global__ void __launch_bounds__(THREADS) forward(
         for (int c = 0; c < DPT; c++) acc[r][c] = 0.f;
     }
     const int kend = CAUSAL ? min(lk, q0 + BQ) : lk;
-    for (int k0 = 0; k0 < kend; k0 += BK) {
-        const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL, BQ, BK>(
-            mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
-        if (!shown) continue;
-        __syncthreads();
-        for (int i = threadIdx.x; i < BK * D; i += THREADS) {
-            const int r = i / D, c = i - r * D;
-            skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
-        }
-        __syncthreads();
-        float s[RPT][4], bias[RPT][4];
-        #pragma unroll
-        for (int r = 0; r < RPT; r++) {
-            #pragma unroll
-            for (int c = 0; c < 4; c++) s[r][c] = 0.f;
-            if (MASK == 2 && q0 + ty * RPT + r < lq)
-                mea::bias4(mask, mask_base + (q0 + ty * RPT + r) * mask.row_stride,
-                           k0 + tx * 4, lk, bias[r]);
-        }
-        #pragma unroll 4
-        for (int d = 0; d < D; d++) {
-            float qv[RPT];
-            load_rows<RPT>(sq + d * QP + ty * RPT, qv);
-            const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
+    bool skipped_sentinel = false;
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int k0 = 0; k0 < kend; k0 += BK) {
+            float bias[RPT][4];
+            int shown = 2;
+            if constexpr (MASK >= 2) {
+                bool any_non_neginf = false, any_non_sentinel = false;
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    const int row = q0 + ty * RPT + r;
+                    if (row < lq) {
+                        if constexpr (MASK == 3)
+                            mea::factorized_bias4<KEY_WIDTH>(mask, mask_base + row,
+                                                             k0 + tx * 4, lk, bias[r]);
+                        else
+                            mea::bias4(mask, mask_base + row * mask.row_stride,
+                                       k0 + tx * 4, lk, bias[r]);
+                        #pragma unroll
+                        for (int c = 0; c < 4; c++) {
+                            const int col = k0 + tx * 4 + c;
+                            if (col < lk && (!CAUSAL || col <= row)) {
+                                const float bv = bias[r][c];
+                                any_non_neginf |= (bv != -INFINITY);
+                                any_non_sentinel |= !(bv <= -1e38f);
+                            }
+                        }
+                    }
+                }
+                if (!__syncthreads_or(any_non_neginf)) shown = 0;
+                else if (!__syncthreads_or(any_non_sentinel)) shown = -1;
+                else shown = 1;
+            } else if (MASK == 1) {
+                shown = tile_visibility<MASK, CAUSAL, BQ, BK>(
+                    mask, mask_base, q0, k0, lq, lk);
+            }
+            if (pass == 0) {
+                if (shown == 0) continue;
+                if (shown < 0) { skipped_sentinel = true; continue; }
+            } else {
+                if (shown >= 0) continue;
+            }
+            __syncthreads();
+            for (int i = threadIdx.x; i < BK * D; i += THREADS) {
+                const int r = i / D, c = i - r * D;
+                skv[c * KP + r] = k0 + r < lk ? kb[k0 + r][c] : 0.f;
+            }
+            __syncthreads();
+            float s[RPT][4];
             #pragma unroll
             for (int r = 0; r < RPT; r++) {
-                s[r][0] += qv[r] * kv.x;
-                s[r][1] += qv[r] * kv.y;
-                s[r][2] += qv[r] * kv.z;
-                s[r][3] += qv[r] * kv.w;
+                #pragma unroll
+                for (int c = 0; c < 4; c++) s[r][c] = 0.f;
             }
-        }
-        #pragma unroll
-        for (int r = 0; r < RPT; r++) {
-            const int row = q0 + ty * RPT + r;
-            float top = -INFINITY;
-            #pragma unroll
-            for (int c = 0; c < 4; c++) {
-                const int col = k0 + tx * 4 + c;
-                if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
-                else if (MASK == 2 && row < lq) s[r][c] += bias[r][c];
-                else if (MASK == 1 && shown == 1 && row < lq)
-                    s[r][c] = mea::masked<MASK>(s[r][c], mask, mask_base
-                        + row * mask.row_stride + col * mask.col_stride);
-                top = fmaxf(top, s[r][c]);
+            #pragma unroll 4
+            for (int d = 0; d < D; d++) {
+                float qv[RPT];
+                load_rows<RPT>(sq + d * QP + ty * RPT, qv);
+                const float4 kv = *reinterpret_cast<const float4*>(skv + d * KP + tx * 4);
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    s[r][0] = fmaf(qv[r], kv.x, s[r][0]);
+                    s[r][1] = fmaf(qv[r], kv.y, s[r][1]);
+                    s[r][2] = fmaf(qv[r], kv.z, s[r][2]);
+                    s[r][3] = fmaf(qv[r], kv.w, s[r][3]);
+                }
             }
-            const float next = fmaxf(m[r], lanes16_max(top));
-            const float keep = next == -INFINITY ? 1.f : __expf(m[r] - next);
-            float sum = 0.f;
-            #pragma unroll
-            for (int c = 0; c < 4; c++) {
-                s[r][c] = next == -INFINITY ? 0.f : __expf(s[r][c] - next);
-                sum += s[r][c];
-            }
-            l[r] = l[r] * keep + lanes16_sum(sum);
-            m[r] = next;
-            #pragma unroll
-            for (int c = 0; c < DPT; c++) acc[r][c] *= keep;
-        }
-        if (DROPOUT) {
-            // The softmax's statistics stay those of the undropped row; only
-            // what multiplies V is dropped.
             #pragma unroll
             for (int r = 0; r < RPT; r++) {
-                float z[4];
-                dropout.mask(bh, q0 + ty * RPT + r, (k0 >> 2) + tx, z);
+                const int row = q0 + ty * RPT + r;
+                float top = -INFINITY;
                 #pragma unroll
-                for (int c = 0; c < 4; c++) s[r][c] *= z[c];
+                for (int c = 0; c < 4; c++) {
+                    const int col = k0 + tx * 4 + c;
+                    if (col >= lk || (CAUSAL && col > row)) s[r][c] = -INFINITY;
+                    else if (MASK >= 2 && shown != 2 && row < lq) s[r][c] += bias[r][c];
+                    else if (MASK == 1 && shown == 1 && row < lq)
+                        s[r][c] = mea::masked<MASK>(s[r][c], mask, mask_base
+                            + row * mask.row_stride + col * mask.col_stride);
+                    top = fmaxf(top, s[r][c]);
+                }
+                const float next = fmaxf(m[r], lanes16_max(top));
+                const float keep = next == -INFINITY ? 1.f : __expf(m[r] - next);
+                float sum = 0.f;
+                #pragma unroll
+                for (int c = 0; c < 4; c++) {
+                    s[r][c] = next == -INFINITY ? 0.f : __expf(s[r][c] - next);
+                    sum += s[r][c];
+                }
+                l[r] = l[r] * keep + lanes16_sum(sum);
+                m[r] = next;
+                #pragma unroll
+                for (int c = 0; c < DPT; c++) acc[r][c] *= keep;
+            }
+            if (DROPOUT) {
+                // The softmax's statistics stay those of the undropped row; only
+                // what multiplies V is dropped.
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) {
+                    float z[4];
+                    dropout.mask(bh, q0 + ty * RPT + r, (k0 >> 2) + tx, z);
+                    #pragma unroll
+                    for (int c = 0; c < 4; c++) s[r][c] *= z[c];
+                }
+            }
+            #pragma unroll
+            for (int c = 0; c < 4; c++)
+                #pragma unroll
+                for (int r = 0; r < RPT; r++) sp[(tx * 4 + c) * QP + ty * RPT + r] = s[r][c];
+            __syncthreads();
+            for (int i = threadIdx.x; i < BK * D; i += THREADS) {
+                const int r = i / D, c = i - r * D;
+                skv[r * D + c] = k0 + r < lk ? vb[k0 + r][c] : 0.f;
+            }
+            __syncthreads();
+            #pragma unroll 2
+            for (int j = 0; j < BK; j++) {
+                float p[RPT];
+                load_rows<RPT>(sp + j * QP + ty * RPT, p);
+                #pragma unroll
+                for (int c = 0; c < DPT; c++) {
+                    const int col = tx + c * 16;
+                    const float vv = col < D ? skv[j * D + col] : 0.f;
+                    #pragma unroll
+                    for (int r = 0; r < RPT; r++) acc[r][c] = fmaf(p[r], vv, acc[r][c]);
+                }
             }
         }
-        #pragma unroll
-        for (int c = 0; c < 4; c++)
+        if (pass == 0) {
+            if (!skipped_sentinel) break;
+            bool any_empty = false;
             #pragma unroll
-            for (int r = 0; r < RPT; r++) sp[(tx * 4 + c) * QP + ty * RPT + r] = s[r][c];
-        __syncthreads();
-        for (int i = threadIdx.x; i < BK * D; i += THREADS) {
-            const int r = i / D, c = i - r * D;
-            skv[r * D + c] = k0 + r < lk ? vb[k0 + r][c] : 0.f;
-        }
-        __syncthreads();
-        #pragma unroll 2
-        for (int j = 0; j < BK; j++) {
-            float p[RPT];
-            load_rows<RPT>(sp + j * QP + ty * RPT, p);
-            #pragma unroll
-            for (int c = 0; c < DPT; c++) {
-                const int col = tx + c * 16;
-                const float vv = col < D ? skv[j * D + col] : 0.f;
-                #pragma unroll
-                for (int r = 0; r < RPT; r++) acc[r][c] += p[r] * vv;
-            }
+            for (int r = 0; r < RPT; r++)
+                if (q0 + ty * RPT + r < lq && !(m[r] > -1e30f)) any_empty = true;
+            if (!__syncthreads_or(any_empty)) break;
         }
     }
     #pragma unroll
@@ -407,6 +517,190 @@ __global__ void __launch_bounds__(THREADS) forward(
     }
 }
 
+constexpr int SHORT_THREADS = 128;
+
+__device__ __forceinline__ float warp_sum(float v) {
+    v += __shfl_xor_sync(0xffffffff, v, 16);
+    v += __shfl_xor_sync(0xffffffff, v, 8);
+    v += __shfl_xor_sync(0xffffffff, v, 4);
+    v += __shfl_xor_sync(0xffffffff, v, 2);
+    return v + __shfl_xor_sync(0xffffffff, v, 1);
+}
+
+template <int D, int DPT>
+struct VecRow {
+    __device__ __forceinline__ static void load(
+            const float* __restrict__ p, int lane, bool, float (&out)[DPT]) {
+        #pragma unroll
+        for (int c = 0; c < DPT; ++c) {
+            const int idx = lane + c * 32;
+            out[c] = idx < D ? p[idx] : 0.f;
+        }
+    }
+    __device__ __forceinline__ static void store(
+            float* __restrict__ p, int lane, bool, const float (&in)[DPT], float inv) {
+        #pragma unroll
+        for (int c = 0; c < DPT; ++c) {
+            const int idx = lane + c * 32;
+            if (idx < D) p[idx] = in[c] * inv;
+        }
+    }
+};
+
+template <>
+struct VecRow<64, 2> {
+    __device__ __forceinline__ static void load(
+            const float* __restrict__ p, int lane, bool aligned, float (&out)[2]) {
+        if (aligned) {
+            const float2 v = *reinterpret_cast<const float2*>(p + lane * 2);
+            out[0] = v.x; out[1] = v.y;
+        } else {
+            const int base = lane * 2;
+            out[0] = p[base]; out[1] = p[base + 1];
+        }
+    }
+    __device__ __forceinline__ static void store(
+            float* __restrict__ p, int lane, bool aligned, const float (&in)[2], float inv) {
+        if (aligned) {
+            *reinterpret_cast<float2*>(p + lane * 2) = make_float2(in[0] * inv, in[1] * inv);
+        } else {
+            const int base = lane * 2;
+            p[base] = in[0] * inv; p[base + 1] = in[1] * inv;
+        }
+    }
+};
+
+template <>
+struct VecRow<128, 4> {
+    __device__ __forceinline__ static void load(
+            const float* __restrict__ p, int lane, bool aligned, float (&out)[4]) {
+        if (aligned) {
+            const float4 v = *reinterpret_cast<const float4*>(p + lane * 4);
+            out[0] = v.x; out[1] = v.y; out[2] = v.z; out[3] = v.w;
+        } else {
+            const int base = lane * 4;
+            out[0] = p[base]; out[1] = p[base + 1];
+            out[2] = p[base + 2]; out[3] = p[base + 3];
+        }
+    }
+    __device__ __forceinline__ static void store(
+            float* __restrict__ p, int lane, bool aligned, const float (&in)[4], float inv) {
+        if (aligned) {
+            *reinterpret_cast<float4*>(p + lane * 4) = make_float4(
+                in[0] * inv, in[1] * inv, in[2] * inv, in[3] * inv);
+        } else {
+            const int base = lane * 4;
+            p[base] = in[0] * inv; p[base + 1] = in[1] * inv;
+            p[base + 2] = in[2] * inv; p[base + 3] = in[3] * inv;
+        }
+    }
+};
+
+// Warp-per-query-row inference kernel for short sequences: zero shared memory,
+// zero block barriers, Q and output accumulator held in registers across 32
+// lanes with vectorized 64/128-bit loads for D=64/128.
+template <int D, bool CAUSAL, int MASK>
+__global__ void __launch_bounds__(SHORT_THREADS) forward_short(
+        const float* __restrict__ q, const float* __restrict__ k,
+        const float* __restrict__ v, float* __restrict__ o,
+        int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
+        mea::Rows vl, mea::Rows ol) {
+    constexpr int DPT = (D + 31) / 32;
+    const int bh = blockIdx.y;
+    const int warp = threadIdx.x >> 5;
+    const int lane = threadIdx.x & 31;
+    const int row = blockIdx.x * 4 + warp;
+    if (row >= lq) return;
+
+    const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh);
+    const mea::RowPtr<float> obase(o, ol, bh);
+    constexpr int ALIGN_BYTES = (D == 128) ? 16 : ((D == 64) ? 8 : 4);
+    constexpr int ALIGN_ELEMS = ALIGN_BYTES / 4;
+    const bool q_al = ((reinterpret_cast<size_t>(qb.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((qb.stride & (ALIGN_ELEMS - 1)) == 0);
+    const bool k_al = ((reinterpret_cast<size_t>(kb.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((kb.stride & (ALIGN_ELEMS - 1)) == 0);
+    const bool v_al = ((reinterpret_cast<size_t>(vb.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((vb.stride & (ALIGN_ELEMS - 1)) == 0);
+    const bool o_al = ((reinterpret_cast<size_t>(obase.p) & (ALIGN_BYTES - 1)) == 0)
+        && ((obase.stride & (ALIGN_ELEMS - 1)) == 0);
+
+    float qv[DPT], acc[DPT];
+    VecRow<D, DPT>::load(qb[row], lane, q_al, qv);
+    #pragma unroll
+    for (int i = 0; i < DPT; ++i) {
+        qv[i] *= scale;
+        acc[i] = 0.f;
+    }
+
+    const int kend = CAUSAL ? min(lk, row + 1) : lk;
+    const long long mask_row = MASK ? (mask.base(bh) + (long long)row * mask.row_stride) : 0;
+    float m = -INFINITY, l = 0.f;
+
+    for (int k0 = 0; k0 < kend; k0 += 4) {
+        float s[4] = {-INFINITY, -INFINITY, -INFINITY, -INFINITY};
+        float bias[4] = {0.f, 0.f, 0.f, 0.f};
+        bool active[4];
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            const int col = k0 + c;
+            if (col >= kend) {
+                active[c] = false;
+            } else if (MASK == 1) {
+                active[c] = static_cast<const bool*>(mask.data)[mask_row + col * mask.col_stride];
+            } else if (MASK == 2) {
+                bias[c] = static_cast<const float*>(mask.data)[mask_row + col * mask.col_stride];
+                active[c] = (bias[c] != -INFINITY);
+            } else {
+                active[c] = true;
+            }
+        }
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            if (!active[c]) continue;
+            float kv[DPT];
+            VecRow<D, DPT>::load(kb[k0 + c], lane, k_al, kv);
+            float dot = 0.f;
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) dot = fmaf(qv[i], kv[i], dot);
+            float sc = warp_sum(dot);
+            if (MASK == 2) sc += bias[c];
+            s[c] = sc;
+        }
+        const float tile_max = fmaxf(fmaxf(s[0], s[1]), fmaxf(s[2], s[3]));
+        if (tile_max == -INFINITY) continue;
+        const float next = fmaxf(m, tile_max);
+        const float keep = (m == -INFINITY) ? 0.f : __expf(m - next);
+        float p[4];
+        float psum = 0.f;
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            p[c] = (s[c] == -INFINITY) ? 0.f : __expf(s[c] - next);
+            psum += p[c];
+        }
+        l = l * keep + psum;
+        m = next;
+        if (keep == 0.f) {
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) acc[i] = 0.f;
+        } else if (keep != 1.f) {
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) acc[i] *= keep;
+        }
+        #pragma unroll
+        for (int c = 0; c < 4; ++c) {
+            if (p[c] > 0.f) {
+                float vv[DPT];
+                VecRow<D, DPT>::load(vb[k0 + c], lane, v_al, vv);
+                #pragma unroll
+                for (int i = 0; i < DPT; ++i) acc[i] = fmaf(p[c], vv[i], acc[i]);
+            }
+        }
+    }
+    const float inv = l > 0.f ? 1.f / l : 0.f;
+    VecRow<D, DPT>::store(obase[row], lane, o_al, acc, inv);
+}
+
 } // namespace mea_fwd
 
 // The backward, register-tiled. A block owns 32 keys and walks the queries 32
@@ -428,18 +722,55 @@ constexpr int BQ = 32, BK = 32, QP = BQ + 2, KP = BK + 4, PP = BK + 4;
 template <int MASK, bool CAUSAL>
 __device__ __forceinline__ int tile_visibility(const mea::Mask& mask, long long base, int r0,
                                                int c0, int lq, int lk) {
-    bool any = false, all = true;
-    for (int i = threadIdx.x; i < BQ * BK; i += THREADS) {
-        const int row = r0 + i / BK, col = c0 + i % BK;
-        if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
-        const long long at = base + row * mask.row_stride + col * mask.col_stride;
-        const bool shown = MASK == 1 ? static_cast<const bool*>(mask.data)[at]
-                                     : static_cast<const float*>(mask.data)[at] != -INFINITY;
-        any |= shown;
-        all &= shown;
+    bool any_non_neginf = false, any_non_sentinel = false, all_zero = true;
+    if (MASK == 2 && mask.row_stride == 0 && mask.col_stride == 1) {
+        if (threadIdx.x < BK) {
+            const int col = c0 + threadIdx.x;
+            if (col < lk && (!CAUSAL || col <= min(lq - 1, r0 + BQ - 1))) {
+                const float v = static_cast<const float*>(mask.data)[base + col];
+                any_non_neginf = (v != -INFINITY);
+                any_non_sentinel = !(v <= -1e38f);
+                all_zero = (v == 0.f);
+            }
+        }
+    } else if (MASK == 2 && !CAUSAL && mask.col_stride == 1 && (BK % 4 == 0)
+               && (c0 + BK <= lk) && (r0 + BQ <= lq)
+               && ((reinterpret_cast<size_t>(static_cast<const float*>(mask.data) + base + c0) & 15u) == 0)
+               && ((mask.row_stride & 3) == 0)) {
+        constexpr int kVecCols = BK / 4;
+        constexpr int kVecs = BQ * kVecCols;
+        const float* ptr = static_cast<const float*>(mask.data) + base;
+        for (int i = threadIdx.x; i < kVecs; i += THREADS) {
+            const int row = r0 + i / kVecCols;
+            const int col4 = c0 + (i % kVecCols) * 4;
+            const float4 v = *reinterpret_cast<const float4*>(ptr + row * mask.row_stride + col4);
+            any_non_neginf |= (v.x != -INFINITY) || (v.y != -INFINITY)
+                              || (v.z != -INFINITY) || (v.w != -INFINITY);
+            any_non_sentinel |= !(v.x <= -1e38f) || !(v.y <= -1e38f)
+                                || !(v.z <= -1e38f) || !(v.w <= -1e38f);
+            all_zero &= (v.x == 0.f) && (v.y == 0.f) && (v.z == 0.f) && (v.w == 0.f);
+        }
+    } else {
+        for (int i = threadIdx.x; i < BQ * BK; i += THREADS) {
+            const int row = r0 + i / BK, col = c0 + i % BK;
+            if (row >= lq || col >= lk || (CAUSAL && col > row)) continue;
+            const long long at = base + row * mask.row_stride + col * mask.col_stride;
+            if (MASK == 1) {
+                const bool shown = static_cast<const bool*>(mask.data)[at];
+                any_non_neginf |= shown;
+                any_non_sentinel |= shown;
+                all_zero &= shown;
+            } else {
+                const float v = static_cast<const float*>(mask.data)[at];
+                any_non_neginf |= (v != -INFINITY);
+                any_non_sentinel |= !(v <= -1e38f);
+                all_zero &= (v == 0.f);
+            }
+        }
     }
-    if (!__syncthreads_or(any)) return 0;
-    return MASK == 1 && __syncthreads_and(all) ? 2 : 1;
+    if (!__syncthreads_or(any_non_neginf)) return 0;
+    if (MASK == 2 && !__syncthreads_or(any_non_sentinel)) return -1;
+    return __syncthreads_and(all_zero) ? 2 : 1;
 }
 
 template <int D, bool CAUSAL, int MASK, bool DROPOUT>
@@ -487,11 +818,17 @@ __global__ void __launch_bounds__(THREADS) backward(
     // Query tiles wholly above the diagonal see none of these keys.
     const int qstart = CAUSAL ? (k0 / BQ) * BQ : 0;
     for (int q0 = qstart; q0 < lq; q0 += BQ) {
-        // A boolean mask may hide a tile whole; an additive one, as the
-        // forward reads it, is added element by element.
-        const int shown = MASK == 1 ? tile_visibility<MASK, CAUSAL>(
-            mask, mask_base, q0, k0, lq, lk) : (MASK ? 1 : 2);
-        if (!shown) continue;
+        const int shown = MASK ? tile_visibility<MASK, CAUSAL>(
+            mask, mask_base, q0, k0, lq, lk) : 2;
+        if (shown == 0) continue;
+        if (MASK == 2 && shown < 0) {
+            bool any_sentinel_row = false;
+            if (tid < BQ && q0 + tid < lq) {
+                const size_t idx = ((size_t)bh * lq + (q0 + tid)) * 2;
+                if (!(normalizer[idx] > -1e30f)) any_sentinel_row = true;
+            }
+            if (!__syncthreads_or(any_sentinel_row)) continue;
+        }
         __syncthreads();
         for (int i = tid; i < BQ * D; i += THREADS) {
             const int r = i / D, c = i - r * D;
@@ -505,7 +842,7 @@ __global__ void __launch_bounds__(THREADS) backward(
         for (int r = 0; r < 2; r++) {
             #pragma unroll
             for (int c = 0; c < 4; c++) s[r][c] = dp[r][c] = 0.f;
-            if (MASK == 2 && q0 + ay * 2 + r < lq)
+            if (MASK == 2 && shown != 2 && q0 + ay * 2 + r < lq)
                 mea::bias4(mask, mask_base + (q0 + ay * 2 + r) * mask.row_stride,
                            k0 + ax * 4, lk, bias[r]);
         }
@@ -523,8 +860,8 @@ __global__ void __launch_bounds__(THREADS) backward(
                 for (int c = 0; c < 4; c++) {
                     // Match forward's rounded Q scaling without changing the
                     // unscaled shared Q used by the key-gradient product.
-                    s[r][c] += __fmul_rn(qr[r], scale) * kc[c];
-                    dp[r][c] += orr[r] * vc[c];
+                    s[r][c] = fmaf(__fmul_rn(qr[r], scale), kc[c], s[r][c]);
+                    dp[r][c] = fmaf(orr[r], vc[c], dp[r][c]);
                 }
         }
         #pragma unroll
@@ -542,7 +879,7 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const bool dead = row >= lq || col >= lk || (CAUSAL && col > row)
                                   || row_inv_sum == 0.f;
                 float score = s[r][c];
-                if (MASK == 2 && !dead) score += bias[r][c];
+                if (MASK == 2 && shown != 2 && !dead) score += bias[r][c];
                 if (MASK == 1 && shown == 1 && !dead)
                     score = mea::masked<MASK>(score, mask, mask_base
                         + row * mask.row_stride + col * mask.col_stride);
@@ -571,8 +908,8 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const float qv = col < D ? sq[col * QP + i] : 0.f;
                 #pragma unroll
                 for (int r = 0; r < 4; r++) {
-                    gv[r][c] += pk[r] * ov;
-                    gk[r][c] += dk4[r] * qv;
+                    gv[r][c] = fmaf(pk[r], ov, gv[r][c]);
+                    gk[r][c] = fmaf(dk4[r], qv, gk[r][c]);
                 }
             }
         }
@@ -592,7 +929,7 @@ __global__ void __launch_bounds__(THREADS) backward(
                 const int col = lane + c * 16;
                 const float kv = col < D ? sk[col * KP + j] : 0.f;
                 #pragma unroll
-                for (int r = 0; r < 4; r++) gq[r][c] += dsr[r] * kv;
+                for (int r = 0; r < 4; r++) gq[r][c] = fmaf(dsr[r], kv, gq[r][c]);
             }
         }
         #pragma unroll
@@ -626,11 +963,126 @@ __global__ void __launch_bounds__(THREADS) backward(
 """
 
 
+# Keep the base source for other sizes so their compiled kernels can be reused.
+_TILED_SHORT_KERNELS = _KERNELS + r"""
+namespace mea_fwd {
+template <bool CAUSAL, int MASK>
+__global__ void __launch_bounds__(256) forward_short_tile(
+        const float* __restrict__ q, const float* __restrict__ k,
+        const float* __restrict__ v, float* __restrict__ o,
+        int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
+        mea::Rows vl, mea::Rows ol) {
+    constexpr int D = 64, KeyPad = 64;
+    constexpr int Rows = 8;
+    constexpr int DPT = (D + 31) / 32;
+    const int bh = blockIdx.y;
+    const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
+    const int row = blockIdx.x * Rows + warp;
+    const mea::RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh);
+    const mea::RowPtr<float> ob(o, ol, bh);
+    __shared__ float query[Rows][D];
+    // Store K transposed so each warp can score 32 keys in parallel.
+    // The extra column keeps the cooperative transpose free of bank conflicts.
+    __shared__ float keys[D][KeyPad + 1];
+    __shared__ __align__(16) float values[KeyPad][D];
+    __shared__ float probabilities[Rows][KeyPad];
+
+    for (int i = lane; i < D; i += 32)
+        query[warp][i] = row < lq ? qb[row][i] * scale : 0.f;
+    const bool vector = ((reinterpret_cast<uintptr_t>(kb.p) | reinterpret_cast<uintptr_t>(vb.p)) & 15u) == 0
+        && ((kb.stride | vb.stride) & 3) == 0;
+    if (vector) {
+        for (int i = tid * 4; i < lk * D; i += Rows * 128) {
+            const int key = i / D, dim = i % D;
+            float4 raw_k = *reinterpret_cast<const float4*>(kb[key] + dim);
+            keys[dim][key] = raw_k.x; keys[dim + 1][key] = raw_k.y;
+            keys[dim + 2][key] = raw_k.z; keys[dim + 3][key] = raw_k.w;
+            *reinterpret_cast<float4*>(values[key] + dim) =
+                *reinterpret_cast<const float4*>(vb[key] + dim);
+        }
+    } else {
+        for (int i = tid; i < lk * D; i += Rows * 32) {
+            const int key = i / D, dim = i % D;
+            keys[dim][key] = kb[key][dim];
+            values[key][dim] = vb[key][dim];
+        }
+    }
+    __syncthreads();
+    if (row >= lq) return;
+
+    // One lane owns two keys during QK, then two channels during PV.
+    float logits[2] = {-INFINITY, -INFINITY};
+    const long long mask_row = MASK ? mask.base(bh) + (long long)row * mask.row_stride : 0;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const int col = lane + i * 32;
+        if (col >= lk || (CAUSAL && col > row)) continue;
+        const long long offset = MASK ? mask_row + col * mask.col_stride : 0;
+        if (MASK == 1 && !static_cast<const bool*>(mask.data)[offset]) continue;
+        const float bias = MASK == 2 ? static_cast<const float*>(mask.data)[offset] : 0.f;
+        if (bias == -INFINITY) continue;
+        float score = 0.f;
+        #pragma unroll 8
+        for (int dim = 0; dim < D; ++dim)
+            score = fmaf(query[warp][dim], keys[dim][col], score);
+        logits[i] = score + bias;
+    }
+    float top = fmaxf(logits[0], logits[1]);
+    #pragma unroll
+    for (int i = 16; i > 0; i >>= 1) top = fmaxf(top, __shfl_xor_sync(0xffffffffu, top, i));
+    float denom = 0.f;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i) {
+        const float p = top == -INFINITY ? 0.f : __expf(logits[i] - top);
+        probabilities[warp][lane + i * 32] = p;
+        denom += p;
+    }
+    denom = warp_sum(denom);
+    const float inv = denom > 0.f ? 1.f / denom : 0.f;
+    __syncwarp();
+    float out[DPT] = {};
+    for (int key = 0; key < lk; ++key) {
+        const float p = probabilities[warp][key];
+        if (p > 0.f) {
+            #pragma unroll
+            for (int i = 0; i < DPT; ++i) {
+                const int dim = i * 32 + lane;
+                if (dim < D) out[i] = fmaf(p, values[key][dim], out[i]);
+            }
+        }
+    }
+    #pragma unroll
+    for (int i = 0; i < DPT; ++i) {
+        const int dim = i * 32 + lane;
+        if (dim < D) ob[row][dim] = out[i] * inv;
+    }
+}
+} // namespace mea_fwd
+"""
+
+
 def _launch(kernel, grid, smem, args, threads):
     return f"""
     auto fn = {kernel};
     cudaFuncSetAttribute(fn, cudaFuncAttributeMaxDynamicSharedMemorySize, {smem});
     fn<<<dim3({grid}), {threads}, {smem}>>>({args});
+    """
+
+
+def _row_delta_launch(d, call):
+    lq, lk = call.lengths()
+    heads = f"in0->shape[0] * {call.heads_expr()}"
+    kernel = f"mea::row_delta<{d}, {call.template()}"
+    args = (f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, {lq}, {lk}, "
+            f"{float(call.scale)!r}f, {_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}")
+    return f"""
+    if ({lk} <= mea::ROW_DELTA_THREADS) {{
+        int blocks = ({lq} + mea::ROW_DELTA_WARPS - 1) / mea::ROW_DELTA_WARPS;
+        {kernel}, 32><<<dim3(blocks, {heads}), mea::ROW_DELTA_THREADS>>>({args});
+    }} else {{
+        {kernel}, mea::ROW_DELTA_THREADS>
+            <<<dim3({lq}, {heads}), mea::ROW_DELTA_THREADS>>>({args});
+    }}
     """
 
 
@@ -699,8 +1151,51 @@ def _new_mask_layout(mask, shape):
     return kind, mask.reshape(dims).stop_grad(), tuple(reversed(strides))
 
 
+def _factorized_mask(mask, shape):
+    # The two axes of a spatial key can have independent FP32 biases. Read
+    # their sum in attention instead of materializing every pair of keys.
+    if (mask is None or tuple(mask.shape) != shape
+            or _jittor_dtype_name(mask.dtype) != "float32"
+            or _output_requires_grad(mask)):
+        return None
+    root = mask
+    for _ in range(4):
+        op = root._producer_name()
+        if op == "binary":
+            break
+        if op not in ("reshape", "clone") or not root._storage_is_contiguous():
+            return None
+        inputs = root._inputs()
+        if len(inputs) != 1 or not inputs[0]._storage_is_contiguous():
+            return None
+        root = inputs[0]
+    if root._producer_op() != "binary.add":
+        return None
+    batch, heads, queries, keys = shape
+    dims = tuple(root.shape)
+    if len(dims) < 3 or not root._storage_is_contiguous():
+        return None
+    height, width = dims[-2:]
+    if min(height, width) <= 1 or height * width != keys:
+        return None
+    inputs = root._inputs()
+    if len(inputs) != 2 or any(tuple(t.shape) != dims or t.dtype != mask.dtype for t in inputs):
+        return None
+    vertical, horizontal = inputs
+    if vertical._storage_strides()[-1] != 0 or horizontal._storage_strides()[-2] != 0:
+        return None
+    biases = (vertical[..., 0].reshape(batch * heads, queries, height).contiguous(),
+              horizontal[..., 0, :].reshape(batch * heads, queries, width).contiguous())
+    return 3, biases, (queries, height, width)
+
+
 def _mask_args(layout, heads, index):
-    kind, _, (sb, sh, sq, sk) = layout
+    kind, _, strides = layout
+    if kind == 3:
+        queries, height, _ = strides
+        return (f"mea::Mask{{in{index}_p, (int)({heads}), ({heads}) * {queries}LL, "
+                f"{queries}LL, 0LL, 0LL, in{index + 1}_p, {height}}}")
+    sb, sh, sq, sk = strides
     data = f"in{index}_p" if kind else "nullptr"
     return f"mea::Mask{{{data}, (int)({heads}), {sb}LL, {sh}LL, {sq}LL, {sk}LL}}"
 
@@ -736,15 +1231,18 @@ class _Call:
                      if dropout_p > 0 else None)
 
     def extras(self):
-        return ([self.mask[1]] if self.mask[0] else []) + (
-            [self.seed] if self.seed is not None else [])
+        if self.mask[0] == 3:
+            biases = list(self.mask[1])
+        else:
+            biases = [self.mask[1]] if self.mask[0] else []
+        return biases + ([self.seed] if self.seed is not None else [])
 
     def args(self, first_extra, grads=False):
         index = first_extra
         mask = _mask_args(self.mask, self.heads_expr(), index) if self.mask[0] \
             else _mask_args(self.mask, self.heads_expr(), 0)
         if self.mask[0]:
-            index += 1
+            index += 2 if self.mask[0] == 3 else 1
         heads = self.heads_expr()
         rows = [_rows_args(f"in{i}", seq, heads, 1 if i == 0 else self.group)
                 for i, seq in enumerate(self.seq)]
@@ -774,6 +1272,11 @@ class _Call:
                 f"{str(self.seed is not None).lower()}")
 
 
+    def forward_template(self):
+        arguments = self.template()
+        return f"{arguments}, {self.mask[2][2]}" if self.mask[0] == 3 else arguments
+
+
 def _rows_args(t, seq, heads, group):
     """`mea::Rows` of the tensor `t`, a [b, h, s, d] or [b, s, h, d] operand."""
     if seq:
@@ -789,6 +1292,23 @@ def _rows_args(t, seq, heads, group):
 #: calls attention with the same settings in every layer, and formatting it
 #: was half of what building the operator cost in Python.
 _FORWARD_SOURCES = {}
+_SHORT_FORWARD_SOURCES = {}
+
+
+def _use_short_forward(lq, lk, depth, batch_heads):
+    # With enough independent wide heads to fill the device, sharing K and V
+    # across the query tile outweighs the warp kernel's lower setup cost.
+    prefer_tiled = batch_heads >= _SM_BLOCKS and depth >= 64 and lq >= 16
+    return lk <= 32 or (lq <= 64 and lk <= 128 and not prefer_tiled)
+
+
+def _short_forward_kernel(d, lq, lk, causal, mask_kind):
+    # Short, nontrivial key sequences can share K and V across query rows.
+    # For very few keys the original register-only kernel avoids setup.
+    flags = f"{str(bool(causal)).lower()}, {mask_kind}"
+    if d == 64 and 16 <= lq <= 64 and 24 <= lk <= 64:
+        return f"mea_fwd::forward_short_tile<{flags}>", _TILED_SHORT_KERNELS, 8
+    return f"mea_fwd::forward_short<{d}, {flags}>", _KERNELS, 4
 
 
 def _dense_storage_layout(tensor):
@@ -840,8 +1360,21 @@ def _forward_view(query, key, value, scale, causal, mask):
     for index, (_, strides, offset) in enumerate(layouts):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
+    if _use_short_forward(lq, lk, d, b * h):
+        kernel, header, rows_per_block = _short_forward_kernel(d, lq, lk, causal, mask[0])
+        src = (
+            kernel +
+            f"<<<dim3({-(-lq // rows_per_block)}, {b * h}), {rows_per_block * 32}>>>("
+            f"{', '.join(pointers)}, out0_p, {lq}, {lk}, {scale!r}f, "
+            f"{_mask_args(mask, str(h), 3 if mask[0] else 0)}, {', '.join(rows)}, "
+            f"{_rows_args('out0', False, str(h), 1)});\n"
+        )
+        return jt.code(
+            query.shape, "float32",
+            [layout[0] for layout in layouts] + call.extras(),
+            cuda_header=header, cuda_src=src)
     src = _launch(
-        f"mea_fwd::forward<{d}, {rpt}, {call.template()}>",
+        f"mea_fwd::forward<{d}, {rpt}, {call.forward_template()}>",
         f"{(lq + 16 * rpt - 1) // (16 * rpt)}, {b * h}",
         _smem_register_forward(d, rpt),
         f"{', '.join(pointers)}, out0_p, out1_p, {lq}, {lk}, {scale!r}f, "
@@ -886,11 +1419,7 @@ def _native_vjp_programs(d, rpt, causal, mask_kind, mask_strides, seq, scale,
         f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq}, {lk}, "
         f"{scale!r}f, {call.args(3)}, "
         f"{_rows_args('out0', call.seq[0], call.heads_expr(), 1)}", threads="mea_fwd::THREADS")
-    row = _launch(
-        f"mea::row_delta<{d}, {call.template()}>",
-        f"{lq}, in0->shape[0] * {call.heads_expr()}", 0,
-        f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, {lq}, {lk}, "
-        f"{scale!r}f, {_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}", threads="256")
+    row = _row_delta_launch(d, call)
     backward = "cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
         f"mea_bwd::backward<{d}, {call.template()}>",
         f"({lk} + 31) / 32, in0->shape[0] * {call.heads_expr()}",
@@ -916,13 +1445,36 @@ def _native_forward(query, key, value, call):
     return output, None  # the native Op owns its saved normalizer
 
 
-def _forward(query, key, value, call, native_vjp=False):
+def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
     if native_vjp:
         return _native_forward(query, key, value, call)
     if call.seq[0]:
         b, lq, h, d = (int(size) for size in query.shape)
     else:
         b, h, lq, d = (int(size) for size in query.shape)
+    lk = int(key.shape[1] if call.seq[1] else key.shape[2])
+    if not need_normalizer and call.seed is None and _use_short_forward(lq, lk, d, b * h):
+        kernel, header, rows_per_block = _short_forward_kernel(d, lq, lk, call.causal, call.mask[0])
+        key_ = (kernel, call.mask[2], call.seq, call.group, float(call.scale))
+        src = _SHORT_FORWARD_SOURCES.get(key_)
+        if src is None:
+            heads = call.heads_expr()
+            mask_arg = _mask_args(call.mask, heads, 3 if call.mask[0] else 0)
+            rows = [_rows_args(f"in{i}", seq, heads, 1 if i == 0 else call.group)
+                    for i, seq in enumerate(call.seq)]
+            lq_expr, lk_expr = call.lengths()
+            src = _SHORT_FORWARD_SOURCES[key_] = (
+                kernel +
+                f"<<<dim3(({lq_expr} + {rows_per_block - 1}) / {rows_per_block}, "
+                f"in0->shape[0] * {heads}), {rows_per_block * 32}>>>("
+                f"in0_p, in1_p, in2_p, out0_p, {lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
+                f"{mask_arg}, {', '.join(rows)}, "
+                f"{_rows_args('out0', call.seq[0], heads, 1)});\n"
+            )
+        out = jt.code(
+            query.shape, "float32", [query, key, value] + call.extras(),
+            cuda_header=header, cuda_src=src)
+        return out, None
     # Four query rows a thread; one where that leaves the grid smaller than
     # the device, which is what BERT at batch 1 (24 tiles of 64) did.
     rpt = 4 if -(-lq // 64) * b * h >= _SM_BLOCKS else 1
@@ -932,7 +1484,7 @@ def _forward(query, key, value, call, native_vjp=False):
     if src is None:
         bq = 16 * rpt
         smem = _smem_register_forward(d, rpt)
-        kernel = f"mea_fwd::forward<{d}, {rpt}, {call.template()}>"
+        kernel = f"mea_fwd::forward<{d}, {rpt}, {call.forward_template()}>"
         lq_expr, lk_expr = call.lengths()
         src = _FORWARD_SOURCES[key_] = _launch(
             kernel, f"({lq_expr} + {bq} - 1) / {bq}, in0->shape[0] * {call.heads_expr()}",
@@ -950,20 +1502,12 @@ def _row_delta(query, key, value, grad_out, normalizer, approximate, call):
     h = int(query.shape[2] if call.seq[0] else query.shape[1])
     lq = int(query.shape[1] if call.seq[0] else query.shape[2])
     d = int(query.shape[3])
-    lq_expr, lk_expr = call.lengths()
-    # `approximate` is dO . O, `call.args(6)` because it is a sixth fixed input
-    # ahead of the mask and dropout the call appends.
+    # `approximate` is dO . O, the sixth fixed input ahead of mask and dropout.
     return jt.code(
         (b, h, lq), "float64",
         [query, key, value, grad_out, normalizer, approximate] + call.extras(),
         cuda_header=_KERNELS,
-        cuda_src=_launch(
-            f"mea::row_delta<{d}, {call.template()}>",
-            f"{lq_expr}, in0->shape[0] * {call.heads_expr()}", 0,
-            f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, "
-            f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
-            f"{_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}",
-            threads="256"))
+        cuda_src=_row_delta_launch(d, call))
 
 
 def _backward(query, key, value, grad_out, normalizer, delta, call):
@@ -1049,18 +1593,11 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
               scale=None, allow_reduced_precision=False):
     if not all(_jittor_dtype_name(t.dtype) == "float32" for t in (query, key, value)):
         return False
-    if (len(query.shape) == len(key.shape) == 4
-            and query.shape[1] == key.shape[1]
-            and 0 < query.shape[2] <= 128 and 0 < key.shape[2] <= 128):
-        scores = int(query.shape[0]) * int(query.shape[1]) * int(query.shape[2]) * int(key.shape[2])
-        if (1 << 18) <= scores <= (4 << 20) and _output_requires_grad(query, key, value):
-            from jittor._runtime import step_capture
-            # For short, well-populated FP32 batches, materialized scores are
-            # bounded and avoid the tiled backward's repeated reconstruction.
-            # Capture amortizes the extra graph construction. Keep tiny calls,
-            # long sequences, GQA and ordinary eager execution on this route.
-            if step_capture.active():
-                return False
+    from jittor.nn.functional.attention import _capture_prefers_batched_fp32
+
+    if (not dropout_p and _capture_prefers_batched_fp32(query, key)
+            and _output_requires_grad(query, key, value)):
+        return False
     return True
 
 
@@ -1091,7 +1628,12 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
     b, h, lq, _ = (int(size) for size in query.shape)
     lk = int(key.shape[2])
     training = _output_requires_grad(query, key, value)
-    mask = _mask_layout(attn_mask, (b, h, lq, lk))
+    shape = (b, h, lq, lk)
+    mask = None
+    if not training and not dropout_p and not _use_short_forward(lq, lk, query.shape[-1], b * h):
+        mask = _factorized_mask(attn_mask, shape)
+    if mask is None:
+        mask = _mask_layout(attn_mask, shape)
     if mask is None:
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
@@ -1114,7 +1656,7 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
         else:
             out = _FusedAttentionF32.apply(query, key, value, call)
     else:
-        out = _forward(query, key, value, call)[0]
+        out = _forward(query, key, value, call, need_normalizer=False)[0]
     return out.transpose(0, 2, 1, 3) if q_seq else out
 
 

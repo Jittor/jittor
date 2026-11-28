@@ -66,3 +66,22 @@ def test_bucketed_means_join_every_bucket_and_preserve_each_shape(monkeypatch):
     for value, original in zip(results, gradients):
         assert value.shape == original.shape and value.dtype == original.dtype
         np.testing.assert_array_equal(value.numpy(), original.numpy()+13)
+
+
+def test_ddp_bucket_layout_preserves_alignment_and_isolates_large_gradients(monkeypatch):
+    gradients = [torch.full((size,), float(index)) for index, size in enumerate((3, 4, 12, 5))]
+    submitted = []
+
+    def start(value, mean=False):
+        assert mean
+        submitted.append(value.numpy().copy())
+        return value + 10
+
+    monkeypatch.setattr(collectives, '_world_size', lambda: 2)
+    monkeypatch.setattr(collectives, '_nccl_ops', lambda: SimpleNamespace(
+        nccl_all_reduce_deferred=start, nccl_wait_many=list))
+    reduced = collectives._all_reduce_mean_bucketed(gradients, 48)
+    assert [len(value) for value in submitted] == [7, 12, 5]
+    np.testing.assert_array_equal(submitted[0], [1, 1, 1, 1, 0, 0, 0])
+    for original, value in zip(gradients, reduced, strict=True):
+        np.testing.assert_array_equal(value.numpy(), original.numpy() + 10)

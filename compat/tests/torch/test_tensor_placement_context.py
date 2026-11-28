@@ -9,6 +9,25 @@ import torch
 from _rng_init_support import require_rng_device
 
 
+def test_python_frontend_scope_restores_state_after_placement_error():
+    from jittor.compat.torch.frontend import tensor_frontend
+
+    class InvalidDevice:
+        @property
+        def type(self):
+            raise ValueError("invalid placement")
+
+    prior_placement = jt.core._current_tensor_placement()
+    prior_policy = jt.core._get_autograd_policy()
+    prior_type = type(jt.ones(1))
+    with pytest.raises(ValueError, match="invalid placement"):
+        with tensor_frontend(torch.Tensor, device=InvalidDevice()):
+            pytest.fail("placement failed before entering the body")
+    assert jt.core._current_tensor_placement() == prior_placement
+    assert jt.core._get_autograd_policy() == prior_policy
+    assert type(jt.ones(1)) is prior_type
+
+
 def test_same_placement_token_restores_changes_made_inside_the_scope():
     before = jt.core._current_tensor_placement()
     outer = jt.core._set_tensor_placement(0, 0)
@@ -59,6 +78,7 @@ def test_nested_module_restores_placement_after_body_changes_it(device, fail):
             # A native caller can change its construction scope. The module's
             # own token must restore it on both return and exception paths.
             jt.core._set_tensor_placement(1 - expected[0], 0)
+            jt.core._set_tensor_frontend_type(jt.Var)
             if fail:
                 raise ValueError("changed placement")
             return result
@@ -76,6 +96,7 @@ def test_nested_module_restores_placement_after_body_changes_it(device, fail):
             else:
                 result = self.inner(value)
             assert jt.core._current_tensor_placement() == expected
+            assert type(jt.ones(1)) is torch.Tensor
             return result + 1
 
     with jt.flag_scope(auto_graph_replay=0):

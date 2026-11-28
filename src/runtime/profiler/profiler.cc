@@ -148,10 +148,12 @@ static void stat_peek_bandwidth(uint64 in, uint64 out, uint64 loop, uint64& peek
     auto size = (in+out) / 2;
     // memcpy in some not aligned case will drop performance
     size &= ~((1 << 12)-1);
+    if (size == 0) return;
     // size = 7680000*4;
     auto temp1 = runtime_executor().alloc_temp(size);
     auto temp2 = runtime_executor().alloc_temp(size);
-    loop = 1 << loop;
+    uint64 shift = std::min<uint64>(loop, 30);
+    loop = 1ULL << shift;
     int warmup = std::max(loop/8, (uint64)1);
     for (int i=0; i<warmup; i++)
     #ifdef HAS_ACCELERATOR
@@ -321,7 +323,8 @@ void Profiler::record_and_run(
             } else
                 loop = fop->get_loop_option("insert_profile_loop") ? 10 : 0;
         }
-        int64 num = 1<<(rerun - loop);
+        int64_t shift = std::max<int64_t>(0, std::min<int64_t>(rerun - loop, 30));
+        int64 num = 1LL << shift;
 
         {
             profiler_enable = 0;
@@ -430,20 +433,24 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
             total_time += kinfo.time_total;
             total_mem_access += kinfo.in_total + kinfo.out_total;
         }
+        double time_denom = kinfo.time_total > 0 ? (double)kinfo.time_total : 1.0;
+        double count_denom = kinfo.count > 0 ? (double)kinfo.count : 1.0;
         info.push_back({
             (double)kinfo.count, // Count
             (double)kinfo.time_total, // TotalTime
-            (double)kinfo.time_total*1.0 / kinfo.count, // AvgTime
+            (double)kinfo.time_total * 1.0 / count_denom, // AvgTime
             (double)kinfo.time_min, // MinTime
             (double)kinfo.time_max, // MaxTime
-            (double)kinfo.in_total*1e9 / kinfo.time_total, // Input
-            (double)kinfo.out_total*1e9 / kinfo.time_total, // Output
-            (double)(kinfo.in_total+kinfo.out_total)*1e9 / kinfo.time_total, // InOut
-            (double)kinfo.compute_total*1e9 / kinfo.time_total, // Compute
+            (double)kinfo.in_total * 1e9 / time_denom, // Input
+            (double)kinfo.out_total * 1e9 / time_denom, // Output
+            (double)(kinfo.in_total + kinfo.out_total) * 1e9 / time_denom, // InOut
+            (double)kinfo.compute_total * 1e9 / time_denom, // Compute
         });
         if (profiler_record_peek)
             info.back().push_back(
-                (double)(kinfo.in_total+kinfo.out_total)*1e9 / kinfo.peek_time_total // Peek
+                kinfo.peek_time_total > 0
+                    ? (double)(kinfo.in_total + kinfo.out_total) * 1e9 / kinfo.peek_time_total
+                    : 0.0 // Peek
             );
     }
     if (sort_key_id>=2)
@@ -513,10 +520,12 @@ vector<vector<string>> Profiler::report(const string& sort_key) {
                     if (is_relay)
                         k = 0;
                     cum_time += k;
+                    double pct = total_time > 0 ? k / total_time * 100 : 0.0;
+                    double cum_pct = total_time > 0 ? cum_time / total_time * 100 : 0.0;
                     ss << '(' << std::setw(3)
-                        << std::setprecision(p) << k / total_time * 100 << "%,"
+                        << std::setprecision(p) << pct << "%,"
                         << std::setw(3)
-                        << std::setprecision(p) << cum_time / total_time * 100 << "%)";
+                        << std::setprecision(p) << cum_pct << "%)";
                 }
             } else if (j<=7 || j==9) {
                 // output thoughtput
@@ -560,7 +569,8 @@ vector<vector<string>> Profiler::report_cache(const string& sort_key) {
         fnames.push_back(Op::get_filename_from_jit_key(origin_key(kv.first), ".cc"));
         CacheInfo& kinfo = *kv.second.cache_info;
         order.push_back(order.size());
-        vector<double> one_info = {(double)kinfo.check_times, ((double)kinfo.tlb_miss_times) / kinfo.check_times};
+        double checks = kinfo.check_times > 0 ? (double)kinfo.check_times : 1.0;
+        vector<double> one_info = {(double)kinfo.check_times, ((double)kinfo.tlb_miss_times) / checks};
         vector<int> one_int_info = {(int)kinfo.check_times, (int)kinfo.tlb_miss_times};
         for (int i = 0; i < (int)kinfo.cache_miss_times.size(); ++i) {
             if ((int)rep[0].size() < 4 + i + 1) {
@@ -568,7 +578,7 @@ vector<vector<string>> Profiler::report_cache(const string& sort_key) {
                 ss << "L" << i + 1 << "MissRate";
                 rep[0].push_back(ss.str());
             }
-            one_info.push_back(((double)kinfo.cache_miss_times[i]) / kinfo.check_times);
+            one_info.push_back(((double)kinfo.cache_miss_times[i]) / checks);
             one_int_info.push_back((int)kinfo.cache_miss_times[i]);
         }
         info.push_back(one_info);

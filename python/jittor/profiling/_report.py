@@ -76,9 +76,9 @@ class ProfileResult:
 
     def __init__(self, *, t0, t1, strings, ops, batches, waits, kernels, copies,
                  correlation, device_note, memory, python, replay, steps, truncated,
-                 on_host=False, stacks=None):
+                 on_host=False, stacks=None, dropped_device_records=0):
         self.t0, self.t1 = t0, t1
-        self.wall_ns = t1 - t0
+        self.wall_ns = max(t1 - t0, 0)
         self.strings = strings
         self.op_records = ops
         self.batches = batches
@@ -92,6 +92,7 @@ class ProfileResult:
         self.steps = steps
         self.truncated = truncated
         self.on_host = on_host
+        self.dropped_device_records = int(dropped_device_records)
         # Stack id -> frames ({"name", "filename", "line"}, innermost first),
         # when the profile recorded stacks.
         self.stacks = stacks
@@ -104,49 +105,104 @@ class ProfileResult:
 
     def _waits_inside_ops(self):
         """Device waits that happened while an operator was being launched:
-        a blocking copy or allocation inside the op, charged to it."""
-        import bisect
-        ops = sorted((o["t_start"], o["t_end"], o["seq"]) for o in self.op_records if o["kind"] == OP)
-        starts = [o[0] for o in ops]
+        a blocking copy or allocation inside the op, charged to the innermost
+        enclosing operator (handling nested batches/operators)."""
+        ops = sorted(((o["t_start"], o["t_end"], o["seq"]) for o in self.op_records if o["kind"] == OP),
+                     key=lambda x: (x[0], -x[1], x[2]))
+        waits = sorted(self.waits, key=lambda w: w["t_begin"])
         out = defaultdict(int)
-        for w in self.waits:
-            i = bisect.bisect_right(starts, w["t_begin"]) - 1
-            if i >= 0 and ops[i][1] >= w["t_end"]:
-                out[ops[i][2]] += w["t_end"] - w["t_begin"]
+        active = []
+        idx = 0
+        n_ops = len(ops)
+        for w in waits:
+            wb, we = w["t_begin"], w["t_end"]
+            while idx < n_ops and ops[idx][0] <= wb:
+                while active and active[-1][1] <= ops[idx][0]:
+                    active.pop()
+                active.append(ops[idx])
+                idx += 1
+            while active and active[-1][1] <= wb:
+                active.pop()
+            for o_start, o_end, seq in reversed(active):
+                if o_start <= wb and we <= o_end:
+                    out[seq] += max(we - wb, 0)
+                    break
         return out
 
     # -- host ---------------------------------------------------------------
+    @staticmethod
+    def _overlap(a0, a1, b0, b1):
+        if a1 <= a0 or b1 <= b0:
+            return 0
+        lo = a0 if a0 > b0 else b0
+        hi = a1 if a1 < b1 else b1
+        return hi - lo if hi > lo else 0
+
     def _host_split(self):
         batches = self.batches
         by_id = {b["batch"]: b for b in batches}
-        child_ns = defaultdict(int)
+        children_of = defaultdict(list)
         for b in batches:
             if b["parent"] in by_id:
-                child_ns[b["parent"]] += b["t_end"] - b["t_begin"]
-        waits_in = defaultdict(int)
-        outside_wait = 0
+                children_of[b["parent"]].append((b["t_begin"], b["t_end"]))
+        waits_in = defaultdict(list)
+        outside_waits = []
         for w in self.waits:
             if w["batch"] in by_id:
-                waits_in[w["batch"]] += w["t_end"] - w["t_begin"]
+                waits_in[w["batch"]].append((w["t_begin"], w["t_end"]))
             else:
-                outside_wait += w["t_end"] - w["t_begin"]
+                outside_waits.append((w["t_begin"], w["t_end"]))
+
         planning = compile_ = launch = wait = 0
         top = 0
         for b in batches:
-            planning += max(b["t_planned"] - b["t_begin"] - child_ns[b["batch"]], 0) if b["t_planned"] else 0
-            if b["t_compiled"]:
-                compile_ += b["t_compiled"] - b["t_planned"]
-                run = b["t_end"] - b["t_compiled"]
-                wait += waits_in[b["batch"]]
-                launch += max(run - waits_in[b["batch"]], 0)
+            t_begin = b["t_begin"]
+            t_end = b["t_end"]
+            if t_end <= t_begin:
+                continue
+            t_planned = b["t_planned"] if b["t_planned"] and b["t_planned"] >= t_begin else 0
+            t_compiled = b["t_compiled"] if b["t_compiled"] and t_planned and b["t_compiled"] >= t_planned else 0
+            # Partition [t_begin, t_end] into its active phases, handling
+            # incomplete batches (e.g. aborted during planning or compile).
+            p_end = min(t_planned, t_end) if t_planned else t_end
+            c_start = p_end
+            c_end = min(t_compiled, t_end) if t_compiled else (t_end if t_planned else p_end)
+            r_start = c_end
+            r_end = t_end if t_compiled else c_end
+
+            child_p = child_c = child_r = 0
+            for cb, ce in children_of.get(b["batch"], ()):
+                child_p += self._overlap(t_begin, p_end, cb, ce)
+                child_c += self._overlap(c_start, c_end, cb, ce)
+                child_r += self._overlap(r_start, r_end, cb, ce)
+
+            wait_p = wait_c = wait_r = 0
+            for wb, we in waits_in.get(b["batch"], ()):
+                wait_p += self._overlap(t_begin, p_end, wb, we)
+                wait_c += self._overlap(c_start, c_end, wb, we)
+                wait_r += self._overlap(r_start, r_end, wb, we)
+
+            planning += max((p_end - t_begin) - child_p - wait_p, 0)
+            compile_ += max((c_end - c_start) - child_c - wait_c, 0)
+            launch += max((r_end - r_start) - child_r - wait_r, 0)
+            wait += wait_p + wait_c + wait_r
             if b["parent"] not in by_id:
-                top += b["t_end"] - b["t_begin"]
-        graph = sum(o["t_end"] - o["t_start"] for o in self.op_records
-                    if o["kind"] == GRAPH_LAUNCH and o["batch"] not in by_id)
+                top += t_end - t_begin
+
+        graph_ops = [(o["t_start"], o["t_end"]) for o in self.op_records
+                     if o["kind"] == GRAPH_LAUNCH and o["batch"] not in by_id]
+        graph_raw = sum(max(ge - gs, 0) for gs, ge in graph_ops)
+        outside_wait = sum(max(we - wb, 0) for wb, we in outside_waits)
+        wait_in_graph = 0
+        for wb, we in outside_waits:
+            for gs, ge in graph_ops:
+                wait_in_graph += self._overlap(gs, ge, wb, we)
+        graph = max(graph_raw - wait_in_graph, 0)
+
         launched = [o for o in self.op_records if o["kind"] == OP]
         # An operator compiles its kernel the first time it runs; that is
         # compilation, not launching.
-        in_ops = min(sum(o["compile_ns"] for o in launched), launch)
+        in_ops = min(sum(max(o["compile_ns"], 0) for o in launched), launch)
         compile_ += in_ops
         launch -= in_ops
         return {
@@ -159,20 +215,22 @@ class ProfileResult:
             "graph_launch": graph,
             "batches": len(batches),
             "operators": len(launched),
-            "operator_alloc": sum(o["t_alloc"] - o["t_start"] for o in launched),
+            "operator_alloc": sum(max(o["t_alloc"] - o["t_start"], 0) for o in launched),
         }
 
     # -- device ---------------------------------------------------------------
     def _device_split(self):
         records = self.kernel_records + self.copy_records
-        busy = _union([(r["start"], r["end"]) for r in records])
-        kernel_ns = sum(r["end"] - r["start"] for r in self.kernel_records)
-        copy_ns = sum(r["end"] - r["start"] for r in self.copy_records)
-        attributed = sum(r["end"] - r["start"] for r in records if r["seq"] in self._by_seq)
+        clamped = [(max(r["start"], self.t0), min(r["end"], self.t1)) for r in records]
+        clamped = [(a, b) for a, b in clamped if b > a]
+        busy = _union(clamped)
+        kernel_ns = sum(max(r["end"] - r["start"], 0) for r in self.kernel_records)
+        copy_ns = sum(max(r["end"] - r["start"], 0) for r in self.copy_records)
+        attributed = sum(max(r["end"] - r["start"], 0) for r in records if r["seq"] in self._by_seq)
         return {"busy": busy, "kernel": kernel_ns, "copy": copy_ns,
                 "kernels": len(self.kernel_records), "copies": len(self.copy_records),
                 "attributed": attributed,
-                "utilization": busy / float(self.wall_ns) if self.wall_ns else 0.0}
+                "utilization": min(busy / float(self.wall_ns), 1.0) if self.wall_ns else 0.0}
 
     @property
     def bound(self):
@@ -205,9 +263,17 @@ class ProfileResult:
         stats = {}
         device = defaultdict(int)
         kernels = defaultdict(int)
+        unattributed_ns = 0
+        unattributed_kernels = 0
         for r in self.kernel_records + self.copy_records:
-            device[r["seq"]] += r["end"] - r["start"]
-            kernels[r["seq"]] += 1
+            dur = max(r["end"] - r["start"], 0)
+            seq = r["seq"]
+            if seq in self._by_seq:
+                device[seq] += dur
+                kernels[seq] += 1
+            else:
+                unattributed_ns += dur
+                unattributed_kernels += 1
         for o in self.op_records:
             name = self.strings[o["name"]]
             shapes = self.strings[o["shapes"]] if o["shapes"] > 0 else ""
@@ -218,25 +284,27 @@ class ProfileResult:
             st.calls += 1
             wait = self._op_wait.get(o["seq"], 0)
             st.wait_ns += wait
-            st.host_ns += o["t_end"] - o["t_start"] - wait - o["compile_ns"]
-            st.alloc_ns += o["t_alloc"] - o["t_start"]
+            st.host_ns += max(o["t_end"] - o["t_start"] - wait - o["compile_ns"], 0)
+            st.alloc_ns += max(o["t_alloc"] - o["t_start"], 0)
             st.device_ns += device.get(o["seq"], 0)
             st.kernels += kernels.get(o["seq"], 0)
             st.out_bytes += o["out_bytes"]
             if o["site"] >= 0:
                 st.sites[_site(self.strings[o["site"]])] += 1
-        if device.get(-1):
+        if unattributed_ns or unattributed_kernels:
             st = stats[("(device work outside any operator)", "")] = OpStat(
                 "(device work outside any operator)", "", -1)
-            st.device_ns = device[-1]
-            st.kernels = kernels[-1]
+            st.device_ns = unattributed_ns
+            st.kernels = unattributed_kernels
         return list(stats.values())
 
     def table(self, sort_by="device_time", row_limit=20, group_by_shapes=False, width=48):
         """The operator table, like ``torch.profiler``'s ``key_averages().table()``."""
         rows = self.op_stats(group_by_shapes)
-        keys = {"device_time": lambda s: s.device_ns, "host_time": lambda s: s.host_ns,
-                "calls": lambda s: s.calls, "name": lambda s: s.name}
+        keys = {"device_time": lambda s: (s.device_ns, s.host_ns),
+                "host_time": lambda s: (s.host_ns, s.device_ns),
+                "calls": lambda s: (s.calls, s.device_ns, s.host_ns),
+                "name": lambda s: s.name}
         if sort_by not in keys:
             raise ValueError("sort_by must be one of %s" % sorted(keys))
         rows.sort(key=keys[sort_by], reverse=sort_by != "name")
@@ -248,11 +316,12 @@ class ProfileResult:
         lines = [header, "-" * len(header)]
         for r in rows[:row_limit]:
             extra = _short(r.shapes, 70) if group_by_shapes else _short_left(r.top_site, 60)
-            lines.append("%-*s %6d %10s %5.1f%% %9s %10s %5.1f%% %8s %7d  %s" % (
+            dev_pct = ("%5.1f%%" % (100 * r.device_ns / total_dev)) if self.device is not None else "   n/a"
+            lines.append("%-*s %6d %10s %5.1f%% %9s %10s %6s %8s %7d  %s" % (
                 width, _short(r.name, width), r.calls, _us(r.host_ns), 100 * r.host_ns / total_host,
                 _us(r.wait_ns) if r.wait_ns else "",
                 _us(r.device_ns) if self.device is not None else "n/a",
-                100 * r.device_ns / total_dev,
+                dev_pct,
                 _us(r.device_ns / r.calls) if r.calls and self.device is not None else "",
                 r.kernels, extra))
         if len(rows) > row_limit:
@@ -292,9 +361,14 @@ class ProfileResult:
             s["launch_ns"] += o["t_end"] - o["t_start"] - o["compile_ns"]
             s["device_ns"] += device.get(o["seq"], 0)
         if self.python is not None:
-            per = self.python.interval * 1e9
-            for site, count in self.python.sites.items():
-                sites[_site(site)]["sampled_ns"] += int(count * per)
+            sites_ns = getattr(self.python, "sites_ns", None)
+            if sites_ns:
+                for site, ns in sites_ns.items():
+                    sites[_site(site)]["sampled_ns"] += int(ns)
+            else:
+                per = self.python.interval * 1e9
+                for site, count in self.python.sites.items():
+                    sites[_site(site)]["sampled_ns"] += int(count * per)
         return dict(sites)
 
     def site_table(self, sort_by="sampled", row_limit=15):
@@ -318,6 +392,8 @@ class ProfileResult:
             ", %d steps" % len(self.steps) if self.steps else "")]
         if self.truncated:
             lines.append("  WARNING: the trace hit its record limit; later records are missing")
+        if self.dropped_device_records:
+            lines.append("  WARNING: CUPTI dropped %d device activity records" % self.dropped_device_records)
         lines.append("Host")
         for key, label in (("python_and_graph_build", "Python + graph construction"),
                            ("executor_planning", "executor planning"),

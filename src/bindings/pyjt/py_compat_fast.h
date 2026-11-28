@@ -90,6 +90,31 @@ void compat_fast_bind(PyObject* tracing, PyObject* concat_fallback=nullptr,
 // @pyjt(_fast_cat)
 PyObject* fast_cat(PyObject* tensors, int64 dim);
 
+// Recognize the two complementary storage slices in rotate-half while the
+// graph is locked. Return their source or None.
+// @pyjt(_rotate_half_source)
+PyObject* rotate_half_source(PyObject* negative, PyObject* positive, int64 dim);
+
+// Read the other factor of a pending multiplication by source, including
+// the paired transpose form used by strided rotary embedding inputs.
+// @pyjt(_neox_rope_cosine)
+PyObject* neox_rope_cosine(PyObject* product, PyObject* source);
+
+// Validate a fused NeoX rotation from live graph metadata. With a source
+// function, build the CodeOp in the same graph entry. A support query omits
+// that function and never creates new graph nodes.
+// @pyjt(_neox_rope)
+PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_fn=nullptr);
+
+// CUDA inference providers sometimes have a single same-shaped input and
+// no saved tensors. Build that CodeOp without the general Python overload.
+// @pyjt(_cuda_inference_unary_code)
+VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
+                                    bool plain_row_softmax=false);
+
+// @pyjt(_bind_masked_row_softmax)
+void bind_masked_row_softmax(const string& source);
+
 // `tensor[index]` for a basic index -- ints, slices, None and Ellipsis,
 // alone or in a tuple -- on a frontend tensor that carries no CPU residency
 // hint and no `.data` ownership record. A registered provider is tried once
@@ -98,6 +123,11 @@ PyObject* fast_cat(PyObject* tensors, int64 dim);
 // its recorded owner. Unsupported spellings use the Python path.
 // @pyjt(_fast_getitem)
 PyObject* fast_getitem(PyObject* self, PyObject* index);
+
+// Build regular slices in one graph entry. None leaves specialized and
+// empty splits with the Python slicing dispatcher.
+// @pyjt(_fast_split_slices)
+PyObject* fast_split_slices(PyObject* self, PyObject* sizes, int64 dim, int gopt_disable);
 
 // The native operators the binary fast path calls: `natives` holds the
 // jittor Var's own `__add__`, `__radd__`, `__sub__`, `__rsub__`, `__mul__`,
@@ -127,6 +157,10 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code);
 // @pyjt(_fast_gelu)
 PyObject* fast_gelu(PyObject* x);
 
+// Match a specified pending CodeOp before forwarding its inputs to a fusion.
+// @pyjt(_pending_cuda_code_is)
+bool pending_cuda_code_is(VarHolder* value, const string& source, const string& header);
+
 // `tensor.view(*shape)` / `reshape(*shape)` of a dense tensor, shape given as
 // ints or one tuple or list of them: the reshape op, recorded as a storage
 // view of `self`, as `jittor.view` does. None for anything else.
@@ -143,6 +177,9 @@ PyObject* fast_contiguous(PyObject* self, PyObject* tensor_type);
 // and invalid axes return None for the Python API's validation.
 // @pyjt(_fast_storage_transpose)
 PyObject* fast_storage_transpose(PyObject* self, PyObject* dims);
+
+// @pyjt(_fast_storage_permute)
+PyObject* fast_storage_permute(PyObject* self, PyObject* axes);
 
 // `tensor.unsqueeze(dim)` of a dense tensor, as the reshape above.
 // @pyjt(_fast_unsqueeze)

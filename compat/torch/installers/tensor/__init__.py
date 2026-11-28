@@ -481,6 +481,30 @@ def _index_select(input, dim, index, *, out=None):
     return result
 
 
+def _select(input, dim, index):
+    ndim = len(input.shape)
+    if ndim == 0:
+        raise IndexError("select() cannot be applied to a 0-dim tensor.")
+    d = int(dim)
+    if d < 0:
+        d += ndim
+    if d < 0 or d >= ndim:
+        raise IndexError(
+            f"Dimension out of range (expected to be in range of [{-ndim}, {ndim - 1}], but got {dim})"
+        )
+    idx = int(index)
+    size = int(input.shape[d])
+    if idx < 0:
+        idx += size
+    if idx < 0 or idx >= size:
+        raise IndexError(
+            f"select(): index {index} out of range for tensor of size {tuple(input.shape)} at dimension {d}"
+        )
+    slices = [slice(None)] * ndim
+    slices[d] = idx
+    return input[tuple(slices)]
+
+
 def _byte_tensor_constructor_data(data, *, nested=False):
     """Match torch.ByteTensor for bytes nested in sequence inputs."""
     if isinstance(data, bytes):
@@ -568,6 +592,18 @@ def _detached_values(data, Var, dtypes):
     return data
 
 
+def _cuda_scalar_sequence(data, Var, device):
+    if type(data) not in (list, tuple) or not data or not isinstance(data[0], Var):
+        return False
+    first = data[0]
+    source_device = first.device
+    if not _device_is_cuda(device) or source_device.type not in ("cpu", "cuda"):
+        return False
+    source_dtype = first.dtype
+    return all(isinstance(item, Var) and item.numel() == 1
+               and item.device == source_device and item.dtype == source_dtype for item in data)
+
+
 def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
     g = compatibility_owner(jt)
     Var = g.Var
@@ -594,6 +630,12 @@ def tensor(data, dtype=None, device=None, requires_grad=False, **kw):
         storage_dtype = ds if ds in numpy_dtypes else "float32" if ds == "bfloat16" else None
         if isinstance(data, jt.Var):
             v = jt.Var.copy(data).detach()
+        elif not kw and _cuda_scalar_sequence(data, Var, device):
+            # Concatenate one-element tensors without observing their device
+            # values on the host. The final constructor still detaches.
+            with jt.no_grad(), tensor_frontend(Var, device=data[0].device, like=data[0]):
+                parts = [item.reshape((1,)) for item in data]
+                v = parts[0].clone() if len(parts) == 1 else cat(parts)
         elif isinstance(data, (_np.ndarray, _np.generic)):
             # NumPy input carries its own dtype; explicit conversion happens
             # before the native array constructor can narrow it.
@@ -764,19 +806,18 @@ def cat(tensors, dim=0, out=None, axis=None):
 
 def _cat_impl(tensors, dim=0, out=None, axis=None):
     if out is None and axis is None and type(dim) is int:
-        # The native fast path allocates under the ambient module placement.
-        # A CPU input inside a CUDA module must instead use the generic concat
-        # path, which allocates its scratch buffer alongside the inputs.
-        conflicting_placement = False
-        if isinstance(tensors, (tuple, list)) and tensors and isinstance(tensors[0], jt.Var):
-            placement = jt.core._current_tensor_placement()
-            first = tensors[0]
-            backend = int(first.placement_backend)
-            if backend >= 0 and placement is not None:
-                conflicting_placement = placement != (backend, _builtins.max(int(first.device_id), 0))
-        fast = NotImplemented if conflicting_placement else (_FAST_CAT or _bind_fast_cat())(tensors, dim)
+        if (dim in (2, -2) and jt.flags.keep_graph == 2 and jt.flags.no_grad
+                and not jt.flags.amp_reg and type(tensors) in (list, tuple) and len(tensors) == 2
+                and isinstance(tensors[1], jt.Var) and tensors[1].ndim == 4
+                and hasattr(tensors[1], "_jt_pending_neox_rope") and isinstance(tensors[0], jt.Var)):
+            from jittor._runtime.dispatch import try_dispatch
+
+            fused = try_dispatch("nn.neox_rope_concat.inference", *tensors)
+            if fused is not None:
+                return fused
+        fast = (_FAST_CAT or _bind_fast_cat())(tensors, dim)
         if fast is not NotImplemented:
-            return _cat_grad_result(fast, tensors)
+            return _maybe_tag_rotate_half(_cat_grad_result(fast, tensors), tensors, dim)
         # The native fast path above declines whenever a backend registers its
         # own concat kernel (ACL does), so on ACL every `cat` falls through the
         # whole frontend below -- the `__torch_function__` scan, the `None`
@@ -805,7 +846,7 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
                 # so restore the common input dtype the frontend promises.
                 if _jittor_dtype_name(result.dtype) != name0:
                     result = result.cast(name0)
-                return _cat_grad_result(result, seq)
+                return _maybe_tag_rotate_half(_cat_grad_result(result, seq), seq, dim)
     g = compatibility_owner(jt)
     if axis is not None: dim = axis      # torch accepts axis= (mmrotate PSC head)
     # Honor the __torch_function__ protocol: tensordict (and other tensor-likes)
@@ -880,10 +921,25 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
 
 def _cat_grad_result(value, tensors):
     # Native concat may mark a new destination trainable for frozen inputs.
-    if isinstance(value, jt.Var) and (jt.flags.no_grad or not any(
+    if isinstance(value, jt.Var) and value.requires_grad and (jt.flags.no_grad or not any(
             isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
         return value.detach()
     return value
+
+
+def _maybe_tag_rotate_half(result, tensors, dim):
+    if (
+        isinstance(result, jt.Var)
+        and result.ndim == 4
+        and isinstance(tensors, (list, tuple))
+        and len(tensors) == 2
+        and (dim == -1 or dim == 3)
+    ):
+        from jittor.ops.concatenation import _detect_rotate_half_source
+        src = _detect_rotate_half_source(tensors, 3)
+        if src is not None:
+            result._jt_rotate_half_src = src
+    return result
 
 
 def _cat_result(value, out):
@@ -896,11 +952,14 @@ def _cat_result(value, out):
 
 def stack(tensors, dim=0, *, axis=None, out=None):
     if axis is not None: dim = axis
-    res = _jt_stack(list(tensors), dim)
+    from .interleaved_rope import tag_stack
+
+    values = list(tensors)
+    res = _jt_stack(values, dim)
     if out is not None:
         out.assign(res)
         return out
-    return res
+    return tag_stack(values, dim, res)
 
 
 class FloatTensor(metaclass=_TypedTensorMeta):
@@ -1039,6 +1098,7 @@ def install(ctx):
     Var = ctx.state["Var"]
     from ...frontend import frontend_factory
     g.index_select = _index_select
+    g.select = _select
     # torch.Tensor is both (a) the isinstance target and (b) a legacy constructor:
     # torch.Tensor(d0, d1, ...) makes an UNINITIALISED tensor of that shape (DETR's
     # _init_layers: torch.Tensor(num_levels, embed_dims)), while torch.Tensor(data)
@@ -1083,6 +1143,11 @@ def install(ctx):
     g.pi = _math.pi
     g.e = _math.e
     g.strided = "strided"
+    g.sparse_coo = "sparse_coo"
+    g.sparse_csr = "sparse_csr"
+    g.sparse_csc = "sparse_csc"
+    g.sparse_bsr = "sparse_bsr"
+    g.sparse_bsc = "sparse_bsc"
     g.jagged = "jagged"
     g.contiguous_format = "contiguous_format"
     g.preserve_format = "preserve_format"
@@ -1147,7 +1212,7 @@ def install(ctx):
     _install_reductions(g)
 
     register_api_bindings(g, 'torch',
-        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'channels_last_3d', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
+        ('Generator', 'Size', 'Tensor', 'as_tensor', 'broadcast_shapes', 'cat', 'channels_last', 'channels_last_3d', 'concat', 'concatenate', 'contiguous_format', 'corrcoef', 'e', 'enable_grad', 'from_numpy', 'frombuffer', 'grad', 'index_select', 'inf', 'inference_mode', 'jagged', 'layout', 'memory_format', 'nan', 'nested', 'no_grad', 'pi', 'preserve_format', 'select', 'sparse_bsc', 'sparse_bsr', 'sparse_coo', 'sparse_csc', 'sparse_csr', 'stack', 'strided', 'tensor') + tuple(_TYPED_TENSOR_CLASSES.keys()),
         Fidelity.APPROXIMATE, 'Native tensor allocation and conversion with Torch dtype, device, and frontend policies; supported argument and backend subsets apply')
 
 from .shape_api import (
@@ -1188,6 +1253,7 @@ from .shape_api import (
     _torch_reshape,
     _torch_permute,
     _torch_transpose,
+    _torch_unbind,
     _torch_t,
     _torch_view,
     _torch_view_base,
@@ -1212,6 +1278,11 @@ def install_methods(ctx):
     Var.transpose = g.transpose = _torch_transpose
     Var.t = g.t = _torch_t
     Var._base = property(_torch_view_base)
+    Var.unbind = g.unbind = _torch_unbind
+    register_api_bindings(g, "torch", ("unbind",), Fidelity.APPROXIMATE,
+                          "Return indexed storage views with a removed axis.")
+    register_api_bindings(Var, "torch.Tensor", ("unbind",), Fidelity.APPROXIMATE,
+                          "Return indexed storage views with a removed axis.")
 
     # jittor's core reshape/view reject a torch.Size (a tuple SUBCLASS) -> normalize
     # a single Size/tuple-subclass arg to a plain tuple so `x.reshape(other.size())`
@@ -1228,6 +1299,7 @@ def install_methods(ctx):
     _shape_api._FAST_VIEW = (getattr(jt.core, "_fast_view", None)
                              if _orig_reshape is _native_var.reshape else None)
     _shape_api._FAST_STORAGE_TRANSPOSE = getattr(jt.core, "_fast_storage_transpose", None)
+    _shape_api._FAST_STORAGE_PERMUTE = getattr(jt.core, "_fast_storage_permute", None)
     if _orig_reshape is _native_var.reshape:
         # Torch first tries a genuine strided view; the wrapper below copies
         # only when the native view explicitly rejects this target shape.

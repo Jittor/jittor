@@ -292,10 +292,11 @@ def rfftfreq(n, d=1.0, *, out=None, dtype=None, device=None,
                         device, requires_grad, out, kwargs)
 
 
-from .spectral import stft  # noqa: E402 - load after native FFT definitions
+from .spectral import istft, stft  # noqa: E402 - load after native FFT definitions
 
 
 __all__ = [
+    "istft",
     "stft",
     "fft",
     "ifft",

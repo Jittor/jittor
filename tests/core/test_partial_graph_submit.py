@@ -60,6 +60,22 @@ def test_ready_root_preserves_explicit_device_and_weak_syncs(sync_device):
     np.testing.assert_array_equal(ready.numpy(), [2., 3.])
 
 
+@pytest.mark.parametrize("include_ready_and_duplicate", [False, True])
+def test_batch_holds_survive_planning_and_release(sync_device, include_ready_and_duplicate):
+    source = jt.array(np.arange(6, dtype="float32"))
+    source.sync(False, False)
+    expected_location = "device" if sync_device == "cuda" else "cpu"
+    for step in range(3):
+        temp = source + step
+        first, second = temp * 2, temp + 5
+        del temp
+        roots = (source, first, first, second) if include_ready_and_duplicate else (first, second)
+        jt.submit_pending(*roots, device_sync=True)
+        assert first.location() == second.location() == expected_location
+        np.testing.assert_array_equal(first.numpy(), (np.arange(6) + step) * 2)
+        np.testing.assert_array_equal(second.numpy(), np.arange(6) + step + 5)
+
+
 def test_ready_kept_root_still_executes_after_scope_exit(sync_device):
     with jt.flag_scope(keep_graph=1):
         ready = jt.array(np.array([1., 2.], dtype="float32")) + 1

@@ -52,6 +52,43 @@ class TestBFloat16LinearRounding:
             np.testing.assert_array_equal(bias.grad.float().cpu().numpy(),
                                           [2.046875 * x.numel()])
 
+    def test_large_biased_linear_preserves_output_rounding(self, device):
+        rows, features, outputs = 512, 896, 384
+        with torch.no_grad():
+            values = np.zeros((2, rows // 2, features), dtype=np.float32)
+            values[..., 0] = 1.0078125
+            weights = np.zeros((outputs, features), dtype=np.float32)
+            weights[:, 0] = 1.0078125
+            x = torch.tensor(values, dtype=torch.bfloat16, device=device)
+            weight = torch.tensor(weights, dtype=x.dtype, device=device)
+            bias = torch.full((outputs,), 1 / 256, dtype=x.dtype, device=device)
+            from jittor._runtime.fallback import forbid_backend_fallbacks
+
+            with forbid_backend_fallbacks():
+                out = torch.nn.functional.linear(x, weight, bias)
+                assert out.dtype == x.dtype and out.device.type == device
+                if device == "cuda":
+                    assert out._producer_name() == "code"
+                np.testing.assert_array_equal(
+                    out.float().cpu().numpy(), np.full((2, rows // 2, outputs), 1.0234375))
+
+    def test_single_row_linear_preserves_output_rounding(self, device):
+        features, outputs = 2048, 256
+        x = np.zeros((1, features), dtype=np.float32)
+        w = np.zeros((outputs, features), dtype=np.float32)
+        x[0, 0] = w[:, 0] = 1.0078125
+        # Distant nonzero terms also exercise the reduction without changing
+        # where the exact result lies relative to the BF16 rounding midpoint.
+        x[0, -2:] = 1
+        w[:, -2:] = [0.5, -0.5]
+        with torch.no_grad():
+            x = torch.tensor(x, dtype=torch.bfloat16, device=device)
+            w = torch.tensor(w, dtype=x.dtype, device=device)
+            b = torch.full((outputs,), 1 / 256, dtype=x.dtype, device=device)
+            out = torch.nn.functional.linear(x, w, b)
+            assert out.dtype == x.dtype and out.device.type == device
+            np.testing.assert_array_equal(out.float().cpu().numpy(), np.full((1, outputs), 1.0234375))
+
     def test_biasless_module_training_keeps_all_native_gradients(self, device):
         for dtype in (torch.float32, torch.float16, torch.bfloat16):
             layer = torch.nn.Linear(2, 2, bias=False, dtype=dtype, device=device)

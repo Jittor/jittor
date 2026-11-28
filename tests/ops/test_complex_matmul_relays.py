@@ -57,6 +57,29 @@ class _ComplexRelays:
         raw = _sample(self.rng, shape, dtype)
         return raw, jt.array(raw, dtype=dtype)
 
+    def test_real_conj_forwards_the_input(self):
+        for dtype in ("float32", "int32", "bool"):
+            with self.subTest(dtype=dtype), jt.flag_scope(transpose_storage_view=1):
+                raw = np.array([[1, 0, -2], [3, 4, 0]], dtype=dtype)
+                base = jt.array(raw)
+                for x, expected in ((base, raw), (base.transpose(), raw.T)):
+                    result = x.conj()
+                    self.assertEqual(result.var_ptr, x.var_ptr)
+                    np.testing.assert_array_equal(result.numpy(), expected)
+                    if dtype == "float32":
+                        gradient = jt.grad(result.sum(), x)
+                        np.testing.assert_array_equal(gradient.numpy(), np.ones_like(expected))
+
+    def test_complex_conj_forward_and_backward(self):
+        for dtype in _COMPLEX:
+            with self.subTest(dtype=dtype):
+                raw, x = self._array((2, 3), dtype)
+                raw_g, g = self._array((2, 3), dtype)
+                result = x.conj()
+                gradient = jt.grad((result * g.conj()).real.sum(), x)
+                np.testing.assert_array_equal(result.numpy(), raw.conj())
+                np.testing.assert_array_equal(gradient.numpy(), raw_g.conj())
+
     def test_the_rows_take_one_shared_complex_dtype(self):
         for dtype in _COMPLEX:
             with self.subTest(dtype=dtype):

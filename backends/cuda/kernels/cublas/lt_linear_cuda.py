@@ -97,6 +97,9 @@ _HEADER = r"""
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#include <cstring>
+#include "cublas_row_product.h"
+#include <vector>
 #include "core/executor.h"
 #include "mem/allocator.h"
 #include "runtime/float32_precision.h"
@@ -144,13 +147,78 @@ __global__ static void jt_lt_add_bias(T* out, const T* bias,
     if (i < total) out[i] = out[i] + bias[i % cout];
 }
 
+template <typename T>
+__global__ static void jt_lt_round_bias(
+        const float* product, const T* bias, T* out, int64_t total, int cout) {
+    int64_t i = (int64_t)blockIdx.x * blockDim.x + threadIdx.x;
+    for (; i < total; i += (int64_t)gridDim.x * blockDim.x)
+        out[i] = T(product[i] + float(bias[i % cout]));
+}
+
 struct JtLtChoice {
     bool ready = false;
     bool usable = false;
+    bool bias_as_c = false;
     cublasLtMatmulAlgo_t algo;
     // What the chosen algorithm asks for; most ask for none.
     size_t workspace = 0;
 };
+
+struct JtLtCandidate {
+    cublasLtMatmulHeuristicResult_t result;
+    bool bias_as_c;
+};
+
+static void jt_lt_add_candidate(std::vector<JtLtCandidate>& candidates,
+        const cublasLtMatmulHeuristicResult_t& result, bool bias_as_c, size_t limit) {
+    if (result.state != CUBLAS_STATUS_SUCCESS || result.workspaceSize > limit)
+        return;
+    for (const auto& previous : candidates)
+        if (bias_as_c == previous.bias_as_c
+                && !std::memcmp(&result.algo, &previous.result.algo, sizeof(result.algo)))
+            return;
+    candidates.push_back({result, bias_as_c});
+}
+
+// The reduction mask limits the heuristic to FP32 partials. The remaining
+// shortlist can overrepresent a single tile, particularly for deep dot
+// products. Try supported stages for similarly sized Tensor Core tiles too.
+static void jt_lt_check_deep_dot_plans(cublasLtHandle_t lt, cublasLtMatmulDesc_t op,
+        cublasLtMatrixLayout_t a, cublasLtMatrixLayout_t b, cublasLtMatrixLayout_t d,
+        std::vector<JtLtCandidate>& candidates, size_t workspace) {
+    int ids[64], count = 0;
+    if (cublasLtMatmulAlgoGetIds(lt, CUBLAS_COMPUTE_32F, CUDA_R_32F,
+            CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF, 64, ids, &count))
+        return;
+    for (int i = 0; i < count; ++i) {
+        cublasLtMatmulAlgo_t algo;
+        if (cublasLtMatmulAlgoInit(lt, CUBLAS_COMPUTE_32F, CUDA_R_32F,
+                CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF, CUDA_R_16BF, ids[i], &algo))
+            continue;
+        uint32_t stages[32];
+        size_t stages_bytes = 0;
+        if (cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_STAGES_IDS,
+                stages, sizeof(stages), &stages_bytes) != CUBLAS_STATUS_SUCCESS)
+            continue;
+        for (uint32_t tile : {CUBLASLT_MATMUL_TILE_64x128, CUBLASLT_MATMUL_TILE_128x64,
+                              CUBLASLT_MATMUL_TILE_128x128}) {
+            if (cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_TILE_ID,
+                    &tile, sizeof(tile)) != CUBLAS_STATUS_SUCCESS)
+                continue;
+            const uint32_t swizzle = 1;
+            cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING,
+                                                &swizzle, sizeof(swizzle));
+            for (size_t stage = 0; stage < stages_bytes / sizeof(stages[0]); ++stage) {
+                if (cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_STAGES_ID,
+                        &stages[stage], sizeof(stages[stage])) != CUBLAS_STATUS_SUCCESS)
+                    continue;
+                cublasLtMatmulHeuristicResult_t result;
+                if (cublasLtMatmulAlgoCheck(lt, op, a, b, d, d, &algo, &result) == CUBLAS_STATUS_SUCCESS)
+                    jt_lt_add_candidate(candidates, result, false, workspace);
+            }
+        }
+    }
+}
 """
 
 _WGRAD_HEADER = _HEADER + r"""
@@ -302,15 +370,79 @@ def _supports(x, weight, bias, *args, **kwargs):
 
 
 @functools.lru_cache(maxsize=256)
-def _source(rows, cin, cout, dtype):
+def _source(rows, cin, cout, dtype, capture=False):
     # The one place the element type enters the kernel. The accumulate is
     # float32 for both -- `cublas_gemm_mode`'s choice for float16 -- so alpha
     # and beta stay floats either way.
     ct, kt = _LT_TYPES[dtype]
+    # A single generous workspace limit can fill the heuristic shortlist with
+    # split-K variants and omit faster unsplit kernels. Check lower limits for
+    # large BF16 products and captured FP16 products where the search amortizes.
+    tuned_half = (capture and dtype == "float16" and min(rows, cin, cout) >= 128
+                  and rows * cin * cout >= (1 << 30))
+    tune_large = (dtype == "bfloat16" and min(rows, cin, cout) >= 128
+                  and rows * cin * cout >= (1 << 27))
+    shortlist = 24 if (tune_large or tuned_half) else _CANDIDATES
+    repeats = 12 if tuned_half else 3
+    workspace = (32 << 20) if tuned_half else _WORKSPACE
+    workspace_tiers = """
+        add_candidates(op, lc, 1 << 20, false);
+        add_candidates(op, lc, 0, false);
+        if (bias_layout) add_candidates(broadcast_op, bias_layout, wsize, true);
+""" if tune_large else ("""
+        add_candidates(op, lc, 1 << 20, false);
+        add_candidates(op, lc, 0, false);
+""" if tuned_half else "")
+    deep_dot_plans = """
+        jt_lt_check_deep_dot_plans(lt, op, la, lb, lc, candidates, wsize);
+""" if tune_large and cin >= 2 * max(rows, cout) else ""
+    # In-place and output-type Split-K both round to BF16 before the full
+    # dot product is available. Some GEMV plans also round before the bias
+    # with compute-type Split-K, so use the unsplit kernels for single rows.
+    reduction = ("CUBLASLT_REDUCTION_SCHEME_NONE" if rows == 1
+                 else "CUBLASLT_REDUCTION_SCHEME_COMPUTE_TYPE")
+    reduction_policy = f"""
+        const uint32_t reduction = {reduction};
+        CHECK(cublasLtMatmulPreferenceSetAttribute(
+            pref, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &reduction,
+            sizeof(reduction)) == CUBLAS_STATUS_SUCCESS);
+""" if dtype == "bfloat16" or tuned_half else ""
+    if dtype == "bfloat16":
+        # Split-K may reduce partial sums into BF16. If no plan keeps the
+        # accumulator wide, preserve that rounding boundary with an FP32 GEMM
+        # result and a CUDA cast that adds the bias before rounding.
+        fallback = f"""
+        const int64_t total = (int64_t)rows * cout;
+        JtLtWorkspace product(total * sizeof(float));
+        const auto math = static_cast<cublasMath_t>(
+            CUBLAS_DEFAULT_MATH | CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION);
+        CHECK(cublasSetMathMode(h, math) == CUBLAS_STATUS_SUCCESS);
+        CHECK(cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
+                          in1_p, {ct}, cin, in0_p, {ct}, cin, &beta, product.ptr,
+                          CUDA_R_32F, cout, compute, CUBLAS_GEMM_DEFAULT)
+              == CUBLAS_STATUS_SUCCESS);
+        int blocks = std::min<int64_t>((total + 255) / 256, 65535);
+        jt_lt_round_bias<<<blocks, 256>>>(static_cast<const float*>(product.ptr),
+                                          in2_p, out0_p, total, cout);
+"""
+    else:
+        fallback = f"""
+        CHECK(cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
+                          in1_p, {ct}, cin, in0_p, {ct}, cin, &beta, out0_p,
+                          {ct}, cout, compute, CUBLAS_GEMM_DEFAULT) == CUBLAS_STATUS_SUCCESS);
+        int total = rows * cout;
+        jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
+"""
+    row_product = ""
+    if rows == 1 and dtype == "float32":
+        row_product = """
+    if (tier == jittor::F32_HIGHEST &&
+        jittor::row_product::launch<float, true>(in0_p, in1_p, in2_p, out0_p, cin, cout))
+        return;
+        """
     return f"""
     const int rows = {rows}, cin = {cin}, cout = {cout};
     const float alpha = 1.0f, beta = 0.0f;
-    cublasLtHandle_t lt = jt_lt_handle();
 
     // float32 follows the float32 matmul policy (`allow_tf32`,
     // `set_float32_matmul_precision`), as `cublas_gemm_mode` does for the
@@ -320,6 +452,8 @@ def _source(rows, cin, cout, dtype):
     // caller asked for. The tier is read when the op runs, so each tier keeps
     // its own measured algorithm.
     int tier = {"jittor::float32_matmul_tier()" if dtype == "float32" else "0"};
+    {row_product}
+    cublasLtHandle_t lt = jt_lt_handle();
     cublasComputeType_t compute = tier == jittor::F32_HIGH ? CUBLAS_COMPUTE_32F_FAST_TF32
         : tier == jittor::F32_MEDIUM ? CUBLAS_COMPUTE_32F_FAST_16BF : CUBLAS_COMPUTE_32F;
     int slot = tier < 0 || tier > 2 ? 0 : tier;
@@ -352,50 +486,82 @@ def _source(rows, cin, cout, dtype):
     // A[rows,cin] * B[cout,cin]^T is computed as B^T * A with the operands
     // swapped, so `la` describes the weight and `lb` the activations.
     static cublasLtMatrixLayout_t la = nullptr, lb = nullptr, lc = nullptr;
+    static cublasLtMatrixLayout_t bias_layout = nullptr;
+    static cublasLtMatmulDesc_t broadcast_op = nullptr;
     if (!la) {{
         cublasLtMatrixLayoutCreate(&la, {ct}, cin, cout, cin);
         cublasLtMatrixLayoutCreate(&lb, {ct}, cin, rows, cin);
         cublasLtMatrixLayoutCreate(&lc, {ct}, cout, rows, cout);
+        // Out-of-place matmul supports a column broadcast from C's zero
+        // leading dimension. With beta=1 it adds the bias in the accumulator
+        // and opens a different set of GEMM kernels from the bias epilogue.
+        if ({int(tune_large)} && cublasLtMatrixLayoutCreate(
+                &bias_layout, {ct}, cout, rows, 0) == CUBLAS_STATUS_SUCCESS) {{
+            CHECK(cublasLtMatmulDescCreate(&broadcast_op, compute, CUDA_R_32F)
+                  == CUBLAS_STATUS_SUCCESS);
+            cublasOperation_t ta = CUBLAS_OP_T;
+            CHECK(cublasLtMatmulDescSetAttribute(broadcast_op, CUBLASLT_MATMUL_DESC_TRANSA,
+                  &ta, sizeof(ta)) == CUBLAS_STATUS_SUCCESS);
+        }}
     }}
+    auto launch = [&](const cublasLtMatmulAlgo_t& algo, bool bias_as_c,
+                      void* ws, size_t size) {{
+        return cublasLtMatmul(lt, bias_as_c ? broadcast_op : op, &alpha,
+                              in1_p, la, in0_p, lb, bias_as_c ? &alpha : &beta,
+                              bias_as_c ? in2_p : out0_p, bias_as_c ? bias_layout : lc,
+                              out0_p, lc, &algo, ws, size, cudaStreamPerThread);
+    }};
 
     static JtLtChoice choices[3];
     JtLtChoice& choice = choices[slot];
     if (!choice.ready) {{
         choice.ready = true;
-        JtLtWorkspace probe({_WORKSPACE});
+        JtLtWorkspace probe({workspace});
         void* ws = probe.ptr;
-        size_t wsize = ws ? (size_t){_WORKSPACE} : 0;
+        size_t wsize = ws ? (size_t){workspace} : 0;
         cublasLtMatmulPreference_t pref = nullptr;
-        cublasLtMatmulPreferenceCreate(&pref);
-        cublasLtMatmulPreferenceSetAttribute(
-            pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
-        cublasLtMatmulHeuristicResult_t cand[{_CANDIDATES}];
-        int found = 0;
-        cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
-                                       {_CANDIDATES}, cand, &found);
+        CHECK(cublasLtMatmulPreferenceCreate(&pref) == CUBLAS_STATUS_SUCCESS);
+        {reduction_policy}
+        std::vector<JtLtCandidate> candidates;
+        auto add_candidates = [&](cublasLtMatmulDesc_t desc, cublasLtMatrixLayout_t c,
+                                  size_t limit, bool bias_as_c) {{
+            if (limit > wsize || cublasLtMatmulPreferenceSetAttribute(
+                    pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &limit, sizeof(limit))
+                    != CUBLAS_STATUS_SUCCESS)
+                return;
+            cublasLtMatmulHeuristicResult_t results[{shortlist}];
+            int count = 0;
+            if (cublasLtMatmulAlgoGetHeuristic(lt, desc, la, lb, c, lc, pref,
+                                              {shortlist}, results, &count)
+                    != CUBLAS_STATUS_SUCCESS)
+                return;
+            for (int i = 0; i < count; ++i)
+                jt_lt_add_candidate(candidates, results[i], bias_as_c, limit);
+        }};
+        add_candidates(op, lc, wsize, false);
+        {workspace_tiers}
+        {deep_dot_plans}
         cudaEvent_t beg, end;
         cudaEventCreate(&beg); cudaEventCreate(&end);
         float best = 1e30f;
-        for (int c = 0; c < found; c++) {{
+        for (const auto& candidate : candidates) {{
+            const auto& result = candidate.result;
             auto once = [&]() {{
-                // Explicit stream: jittor runs on `cudaStreamPerThread`, which
-                // does not synchronise with the legacy default stream.
-                return cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                                      out0_p, lc, out0_p, lc, &cand[c].algo,
-                                      ws, wsize, cudaStreamPerThread);
+                return launch(result.algo, candidate.bias_as_c, ws, result.workspaceSize);
             }};
             if (once() != CUBLAS_STATUS_SUCCESS) continue;
-            cudaDeviceSynchronize();
+            {"" if tuned_half else "cudaDeviceSynchronize();"}
             cudaEventRecord(beg, cudaStreamPerThread);
-            for (int r = 0; r < 3; r++) once();
+            for (int r = 0; r < {repeats}; r++) once();
             cudaEventRecord(end, cudaStreamPerThread);
             if (cudaEventSynchronize(end) != cudaSuccess) continue;
             float ms = 0.0f;
             cudaEventElapsedTime(&ms, beg, end);
             if (ms > 0.0f && ms < best) {{
                 best = ms;
-                choice.algo = cand[c].algo;
-                choice.workspace = cand[c].workspaceSize;
+                choice.algo = result.algo;
+                choice.workspace = result.workspaceSize;
+                choice.bias_as_c = candidate.bias_as_c;
                 choice.usable = true;
             }}
         }}
@@ -403,25 +569,20 @@ def _source(rows, cin, cout, dtype):
         cublasLtMatmulPreferenceDestroy(pref);
     }}
 
+    bool launched = false;
     if (choice.usable) {{
         JtLtWorkspace workspace(choice.workspace);
-        cublasLtMatmul(lt, op, &alpha, in1_p, la, in0_p, lb, &beta,
-                       out0_p, lc, out0_p, lc, &choice.algo,
-                       workspace.ptr, workspace.ptr ? choice.workspace : 0,
-                       cudaStreamPerThread);
-    }} else {{
-        // Nothing cuBLASLt offered was usable. The portable GEMM plus a bias
-        // add is still correct, so do that rather than answer with garbage.
+        launched = launch(choice.algo, choice.bias_as_c, workspace.ptr,
+                          workspace.ptr ? choice.workspace : 0) == CUBLAS_STATUS_SUCCESS;
+    }}
+    if (!launched) {{
+        // cuBLASLt may have no eligible plan for the operands' alignment.
         // The handle is hoisted: creating and destroying one per call here
         // turned a 17 s decode into a 48 s one, so a route that has fallen
         // back must at least not pay for that on every layer.
         cublasHandle_t h = jt_blas_handle();
-        cublasGemmEx(h, CUBLAS_OP_T, CUBLAS_OP_N, cout, rows, cin, &alpha,
-                     in1_p, {ct}, cin, in0_p, {ct}, cin, &beta,
-                     out0_p, {ct}, cout,
-                     compute, CUBLAS_GEMM_DEFAULT);
-        int total = rows * cout;
-        jt_lt_add_bias<{kt}><<<(total + 255) / 256, 256>>>(out0_p, in2_p, total, cout);
+        CHECK(cublasSetStream(h, cudaStreamPerThread) == CUBLAS_STATUS_SUCCESS);
+        {fallback}
     }}
     """
 
@@ -489,6 +650,7 @@ _GEMMS_IO = {
 def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=False,
                  transposed_weight=False, forward_bias=False):
     candidates = 32 if capture_tuning else _CANDIDATES
+    unsplit_candidates = 8 if capture_tuning else 0
     workspace = (32 << 20) if capture_tuning else _WORKSPACE
     passes, repeats = (3, 10) if capture_tuning else (1, 3)
     ct, kt = _LT_TYPES[dtype]
@@ -552,10 +714,20 @@ def _gemm_source(kind, rows, cin, cout, dtype, fold_bias=False, capture_tuning=F
         cublasLtMatmulPreferenceCreate(&pref);
         cublasLtMatmulPreferenceSetAttribute(
             pref, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsize, sizeof(wsize));
-        cublasLtMatmulHeuristicResult_t cand[{candidates}];
+        cublasLtMatmulHeuristicResult_t cand[{candidates + unsplit_candidates}];
         int found = 0;
         cublasLtMatmulAlgoGetHeuristic(lt, op, la, lb, lc, lc, pref,
                                        {candidates}, cand, &found);
+        if ({unsplit_candidates}) {{
+            const uint32_t scheme = CUBLASLT_REDUCTION_SCHEME_NONE;
+            int unsplit = 0;
+            if (cublasLtMatmulPreferenceSetAttribute(pref,
+                    CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK, &scheme, sizeof(scheme))
+                    == CUBLAS_STATUS_SUCCESS && cublasLtMatmulAlgoGetHeuristic(
+                    lt, op, la, lb, lc, lc, pref, {unsplit_candidates}, cand + found, &unsplit)
+                    == CUBLAS_STATUS_SUCCESS)
+                found += unsplit;
+        }}
         cudaEvent_t beg, end;
         cudaEventCreate(&beg); cudaEventCreate(&end);
         // Repeat the candidate sweep after the device and libraries warm up.
@@ -844,8 +1016,13 @@ def lt_linear_cuda(x, weight, bias):
         weight = weight.cast(dtype)
     if _jittor_dtype_name(bias.dtype) != dtype:
         bias = bias.cast(dtype)
-    return jt.code(shape[:-1] + [cout], dtype, [x, weight, bias],
-                   cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype))
+    capture = dtype == "float16" and jt.flags.keep_graph == 2
+    result = jt.code(shape[:-1] + [cout], dtype, [x, weight, bias],
+                     cuda_header=_HEADER, cuda_src=_source(rows, cin, cout, dtype, capture))
+    if jt.flags.keep_graph == 2:
+        from jittor._runtime.step_capture import _remember_pure_code
+        return _remember_pure_code(result)
+    return result
 
 
 __all__ = ["lt_linear_cuda", "lt_linear_train_cuda", "lt_linear_wgrad_cuda", "lt_addmm_train_cuda",

@@ -143,9 +143,22 @@ class TestChannelsLastCUDA(unittest.TestCase):
         bn = nn.BatchNorm2d(8)
         gn = nn.GroupNorm(2, 8)
         x = jt.array(self.rng.randn(2, 3, 6, 6).astype("float32"))
-        self.assertTrue(conv(x)._storage_is_contiguous())
-        self.assertTrue(_is_channels_last(bn(conv(x))))
-        self.assertTrue(gn(conv(x))._storage_is_contiguous())
+        with jt.flag_scope(float32_cudnn_precision="high"):
+            self.assertTrue(conv(x)._storage_is_contiguous())
+            self.assertTrue(_is_channels_last(bn(conv(x))))
+            self.assertTrue(gn(conv(x))._storage_is_contiguous())
+
+    def test_strict_fp32_training_keeps_the_input_layout(self):
+        conv = nn.Conv2d(3, 8, 3, padding=1)
+        bn = nn.BatchNorm2d(8)
+        a = self.rng.randn(2, 3, 6, 6).astype("float32")
+        x = jt.array(a)
+        source = jt.array(np.ascontiguousarray(a.transpose(0, 2, 3, 1)))
+        view = source._storage_permute((0, 3, 1, 2))
+        with jt.flag_scope(float32_cudnn_precision="highest",
+                           cuda_allow_cudnn_tf32=0, use_tensorcore=0):
+            self.assertTrue(bn(conv(x))._storage_is_contiguous())
+            self.assertTrue(_is_channels_last(bn(conv(view))))
 
     def test_a_training_group_norm_over_channels_last_storage(self):
         # Ten channels a group, so a float4 of channels straddles two groups;

@@ -146,7 +146,7 @@ class FunctionEvent(_Times):
     def self_cpu_time_total(self):
         if self.device_type != DeviceType.CPU:
             return 0.0
-        return self.time_range.elapsed_us() - self._nested_us
+        return max(self.time_range.elapsed_us() - self._nested_us, 0.0)
 
     @property
     def cpu_time_total(self):
@@ -372,7 +372,8 @@ def _build_table(events, sort_by=None, header=None, row_limit=100, max_src_colum
     if len(events) == 0:
         return ""
     has_device_time = any(event.self_device_time_total > 0 for event in events)
-    has_device_mem = any(event.self_device_memory_usage > 0 for event in events)
+    has_device_mem = any(event.self_device_memory_usage != 0 or event.device_memory_usage != 0
+                         for event in events)
     use_device = events[0].use_device
     if not use_device and has_device_time:
         raise RuntimeError("use_device is None, but there is device performance data.")
@@ -521,11 +522,15 @@ def _input_shapes(text):
 
 
 _JITTOR_ROOTS = []
+_JITTOR_FRAME_CACHE = {}
 
 
 def _jittor_frame(path):
     """Whether a frame is jittor's own: its package, the Torch layer and the
     backends, wherever the installation put them -- not their test suites."""
+    cached = _JITTOR_FRAME_CACHE.get(path)
+    if cached is not None:
+        return cached
     if not _JITTOR_ROOTS:
         import jittor
         package = os.path.realpath(os.path.dirname(jittor.__file__))
@@ -538,34 +543,70 @@ def _jittor_frame(path):
         _JITTOR_ROOTS.append([os.path.join(compat, "tests") + os.sep])
     real = os.path.realpath(path)
     roots, tests = _JITTOR_ROOTS
-    return any(real.startswith(r) for r in roots) and not any(real.startswith(t) for t in tests)
+    result = any(real.startswith(r) for r in roots) and not any(real.startswith(t) for t in tests)
+    _JITTOR_FRAME_CACHE[path] = result
+    return result
 
 
 _demangled = {}
+_demangle_fns = None
+
+
+def _get_demangle_fns():
+    """Load __cxa_demangle and libc free once per process without repeated
+    ctypes.util.find_library subprocess forks."""
+    global _demangle_fns
+    if _demangle_fns is not None:
+        return _demangle_fns
+    import ctypes
+    lib = None
+    for candidate in ("libstdc++.so.6", "libc++abi.so.1"):
+        try:
+            lib = ctypes.CDLL(candidate)
+            break
+        except OSError:
+            continue
+    if lib is None:
+        import ctypes.util
+        found = ctypes.util.find_library("stdc++")
+        if found:
+            try:
+                lib = ctypes.CDLL(found)
+            except OSError:
+                lib = None
+    if lib is None or not hasattr(lib, "__cxa_demangle"):
+        _demangle_fns = (None, None)
+        return _demangle_fns
+    demangle = lib.__cxa_demangle
+    demangle.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_void_p,
+                         ctypes.POINTER(ctypes.c_int)]
+    demangle.restype = ctypes.c_void_p
+    free_fn = ctypes.CDLL(None).free
+    free_fn.argtypes = [ctypes.c_void_p]
+    free_fn.restype = None
+    _demangle_fns = (demangle, free_fn)
+    return _demangle_fns
 
 
 def _demangle(name):
     """A kernel's C++ name as PyTorch's profiler shows it ("void ns::kernel<...>(...)")."""
     if not name.startswith("_Z"):
         return name
-    if name not in _demangled:
-        import ctypes
-        import ctypes.util
-        text = name
-        try:
-            lib = ctypes.CDLL(ctypes.util.find_library("stdc++") or "libstdc++.so.6")
-        except OSError:
-            lib = None
-        if lib is not None:
-            demangle = lib.__cxa_demangle
-            demangle.restype = ctypes.c_void_p
-            status = ctypes.c_int()
-            out = demangle(name.encode(), None, None, ctypes.byref(status))
-            if out and status.value == 0:
+    cached = _demangled.get(name)
+    if cached is not None:
+        return cached
+    import ctypes
+    text = name
+    demangle, free_fn = _get_demangle_fns()
+    if demangle is not None:
+        status = ctypes.c_int()
+        out = demangle(name.encode(), None, None, ctypes.byref(status))
+        if out:
+            if status.value == 0:
                 text = ctypes.string_at(out).decode("utf-8", "replace")
-                ctypes.CDLL(None).free(ctypes.c_void_p(out))
-        _demangled[name] = text
-    return _demangled[name]
+            free_fn(ctypes.c_void_p(out))
+    _demangled[name] = text
+    return text
 
 
 def _op_stacks(result, record, strings):
@@ -617,7 +658,7 @@ def _build_events(result, use_device, record_shapes, with_stack, profile_memory)
         chains = _op_stacks(result, record, strings) if with_stack else []
         event = FunctionEvent(record["seq"], strings[record["name"]], us(record["t_start"]),
                               us(record["t_end"]), DeviceType.CPU, shapes, _merged_stack(chains),
-                              use_device)
+                              use_device, is_user_annotation=(record["kind"] == 2))
         event._call_stacks = chains
         event._built_in = record["range"]
         host.append(event)
@@ -643,7 +684,7 @@ def _build_events(result, use_device, record_shapes, with_stack, profile_memory)
         if batch["t_planned"] and batch["t_compiled"] > batch["t_planned"]:
             compile_event(us(batch["t_planned"]), us(batch["t_compiled"]))
             next_id += 1
-    host.sort(key=lambda e: (e.time_range.start, -e.time_range.end))
+    host.sort(key=lambda e: (e.time_range.start, -e.time_range.end, e.id))
     # What ran inside an event is not its own time. Its children are what was
     # built inside it if it is a record_function range (wherever they ran),
     # otherwise what ran inside it; a compile belongs to its operator.
@@ -652,9 +693,11 @@ def _build_events(result, use_device, record_shapes, with_stack, profile_memory)
         while open_events and open_events[-1].time_range.end <= event.time_range.start:
             open_events.pop()
         inside = None
-        if open_events and event.time_range.end <= open_events[-1].time_range.end:
-            inside = open_events[-1]
-            inside._nested_us += event.time_range.elapsed_us()
+        for cand in reversed(open_events):
+            if event.time_range.end <= cand.time_range.end:
+                inside = cand
+                inside._nested_us += event.time_range.elapsed_us()
+                break
         parent = getattr(event, "_compiles", None) or by_seq.get(event._built_in) or inside
         if parent is not None:
             event.set_cpu_parent(parent)

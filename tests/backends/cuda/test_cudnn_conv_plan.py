@@ -107,6 +107,39 @@ class TestCudnnConvPlan(unittest.TestCase):
     def test_plain_fp32(self):
         self._check(2, 8, 16, 4, 3, padding=1)
 
+    def test_heuristic_short_filters_on_long_signals(self):
+        cudnn = jt.cudnn
+        self.addCleanup(cudnn.set_benchmark, cudnn.get_benchmark())
+        self.addCleanup(cudnn.cudnn_clear_plan_cache)
+        cudnn.set_benchmark(0)
+        rng = np.random.default_rng(19)
+        with jt.no_grad(), jt.runtime.scope(
+                cuda_allow_cudnn_tf32=0, float32_cudnn_precision="highest"):
+            for taps, dilation in ((5, 1), (9, 3)):
+                with self.subTest(taps=taps, dilation=dilation):
+                    x = rng.normal(0, 0.2, (1, 32, 6145)).astype(np.float32)
+                    w = rng.normal(0, 0.2, (24, 32, taps)).astype(np.float32)
+                    padding = (taps - 1) * dilation // 2
+                    padded = np.pad(x, ((0, 0), (0, 0), (padding, padding)))
+                    windows = np.lib.stride_tricks.sliding_window_view(
+                        padded, (taps - 1) * dilation + 1, axis=-1)[..., ::dilation]
+                    expected = np.einsum("nctk,ock->not", windows, w, dtype=np.float64)
+                    xd, wd = jt.array(x), jt.array(w)
+                    for _ in range(2):
+                        actual = jt.nn.conv1d(xd, wd, padding=padding, dilation=dilation)
+                        actual.sync()
+                        self.assertEqual(actual.location(), "device")
+                        np.testing.assert_allclose(actual.numpy(), expected, atol=2e-6, rtol=2e-5)
+
+    def test_heuristic_fp32_weight_gradients_match_cpu(self):
+        cudnn = jt.cudnn
+        self.addCleanup(cudnn.set_benchmark, cudnn.get_benchmark())
+        self.addCleanup(cudnn.cudnn_clear_plan_cache)
+        cudnn.set_benchmark(0)
+        for n, channels, spatial, filters in ((2, 64, 10, 64), (1, 80, 16, 96)):
+            with self.subTest(channels=channels, spatial=spatial, filters=filters):
+                self._check(n, channels, spatial, filters, 3, padding=1, tf32=False)
+
     def test_stride_dilation(self):
         self._check(2, 6, 20, 5, 3, stride=2, padding=2, dilation=2)
 

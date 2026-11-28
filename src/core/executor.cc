@@ -23,6 +23,7 @@
 #include "runtime/backend.h"
 #include "runtime/backend_fallback.h"
 #include "ops/op_register.h"
+#include "ops/composite/contiguous_op.h"
 #include "core/executor.h"
 #include "core/exec_plan.h"
 #include "core/exec_runner.h"
@@ -157,6 +158,13 @@ void Executor::auto_flush() {
         // `auto_flush_ops` 120 and 136. What such a var reads is launched
         // when something that must be written out -- a matmul, a
         // convolution, a reduction -- needs it.
+        // In inference a storage view can be consumed as a slice of a
+        // pending expression. Submitting the view early writes the entire
+        // expression even when all of its consumers read individual slices.
+        if (no_grad) {
+            while (op && op->is_storage_view() && op->inputs().size() == 1)
+                op = op->inputs().front()->input();
+        }
         if (op && (op->type() == OpType::element || op->type() == OpType::broadcast))
             return true;
         vars.push_back(var);
@@ -184,8 +192,9 @@ void Executor::flush_at_module_boundary() {
     // At a module's return rather than mid-module, so a block -- a residual
     // unit, a transformer layer -- stays in one batch where it can.
     auto& pipeline = runtime_submission_pipeline();
-    if (deferrable_flush()
-            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops) {
+    if (async_flush_ops > 0
+            && Op::number_of_created_ops - pipeline.last_run_ops >= async_flush_ops
+            && deferrable_flush()) {
         const auto previous = pipeline.last_run_ops;
         const int calls = exec_called;
         auto_flush();
@@ -231,8 +240,17 @@ void Executor::submit_pending(Var* target, bool force) {
     run_sync({target}, true);
 }
 
-void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
+Op* load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, int ll, int rr, int64 tt) {
     (void)tt;
+    if (rr - ll == 1) {
+        Op* op = ops[fuse_ops[ll]];
+        if (op->is_op(op_ids::contiguous()) && op->execution_backend() == BackendId::Cuda) {
+            const auto* contiguous = static_cast<ContiguousOp*>(op);
+            if (contiguous->cuda_copy_width > 1 || contiguous->cuda_transpose_axis >= 0)
+                return op;
+        }
+    }
+
     fused_op.ops.clear();
     fused_op.edges.clear();
     // Membership through the segment's own index rather than a traversal
@@ -245,6 +263,7 @@ void load_fused_op(FusedOp& fused_op, vector<int>& fuse_ops, vector<Op*>& ops, i
     }
     LOGvvv << "Prepare fused_op" << fused_op.ops;
     fused_op.update_ops_and_edges();
+    return &fused_op;
 }
 
 static void top_weak_sync(vector<Var*>& vars) {
@@ -596,9 +615,8 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // immediately, then let the planner extend this hold to every Var it
     // reaches before any graph rewrite can release their producer Ops.
     VarPtrBatch& planning_hold = state->planning_hold;
-    planning_hold.own_all(vars);
+    planning_hold = std::move(root_hold);
     build_exec_plan(vars, weak_sync, plan, planning_hold);
-    trace_batch.mark(stb_planned);
     // Hold the batch's vars for its duration -- and with them the ops that
     // produce them, since an op's liveness comes from its outputs, so an op
     // whose output var is held cannot be freed either.
@@ -622,9 +640,26 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     // edges released (`release_inputs`, which the shim uses to park tensors),
     // and the planner reads them.
     VarPtrBatch& batch_hold = state->batch_hold;
-    {
+    if (planning_hold.size() == plan.all_vars.size()
+            && std::equal(plan.all_vars.begin(), plan.all_vars.end(), planning_hold.vars.begin())) {
+        // The traversal can own exactly the runner's Vars in release-slot
+        // order. Transfer those claims without a second liveness pass.
+        batch_hold = std::move(planning_hold);
+    } else {
         std::lock_guard<GraphMutationMutex> guard(graph_mutation_mutex());
         batch_hold.own_all_locked(plan.all_vars);
+        if (vars.size() != static_cast<size_t>(plan.start_var_num)) {
+            // Waiting for the previous batch can finish some requested roots
+            // before planning starts. The runner still checks them at the
+            // end, after the caller has resumed and can rebind their holders.
+            auto& ready_roots = plan.scratch.new_planning_vars;
+            for (Var* v : vars)
+                if (!plan.epoch->marked(v)) ready_roots.push_back(v);
+            std::sort(ready_roots.begin(), ready_roots.end(), std::less<Var*>{});
+            ready_roots.erase(std::unique(ready_roots.begin(), ready_roots.end()), ready_roots.end());
+            batch_hold.own_all_locked(ready_roots);
+            ready_roots.clear();
+        }
         // The final batch hold now owns every pointer the plan keeps. Releasing
         // traversal-only holds may discard superseded nodes from earlier graph
         // optimization passes, but cannot invalidate this plan.
@@ -647,6 +682,7 @@ void Executor::run_sync(vector<Var*> vars, bool device_sync, bool weak_sync, boo
     fused_op.batch_plan = &plan;
 
     // compile all ops, prevent compiling during running
+    trace_batch.mark(stb_planned);
     try {
         parallel_compile_all_ops(plan.queue, plan.range, fused_op,
                                  plan.fuse_ops, plan.ops, plan.stamp);

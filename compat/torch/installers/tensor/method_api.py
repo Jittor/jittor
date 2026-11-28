@@ -12,6 +12,7 @@ from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocas
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
+from . import interleaved_rope
 
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
@@ -253,7 +254,8 @@ def _torch_setitem(self, slices, value):
     # without an autograd edge, so the vision tower and connector receive no
     # gradients. Torch's masked-scatter expresses the same update as ``where``
     # and is differentiable with respect to ``value``.
-    if (isinstance(slices, _NativeVar)
+    if (not _owner.jt.flags.no_grad
+            and isinstance(slices, _NativeVar)
             and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
             and isinstance(value, _NativeVar)
             and len(slices.shape) < len(self.shape)
@@ -313,7 +315,11 @@ def _torch_setitem(self, slices, value):
     if _owner.jt.flags.no_grad or not self.requires_grad:
         # Detached indexed stores must keep shared allocations (NumPy,
         # DLPack and retained aliases), like copy_ and the other in-place ops.
-        return _ip(self, self.setitem(slices, value), preserve_storage=True)
+        fused, pair_tag = interleaved_rope.try_pair_assignment(self, slices, value)
+        result = _ip(self, fused if fused is not None else self.setitem(slices, value),
+                     preserve_storage=True)
+        interleaved_rope.remember_pair_assignment(self, pair_tag)
+        return result
     result = _orig_setitem(self, slices, value)
     return result
 
@@ -961,6 +967,11 @@ def _align_advanced_index(data, index):
 
 
 def _torch_getitem(self, slices):
+    fast_getitem = _owner.jt.core._fast_getitem
+    fast = fast_getitem(self, slices)
+    if fast is not NotImplemented:
+        return fast
+    original = slices
     slices = _normalize_index_sequence(slices)
     # Convert advanced masks before the native fast path or dispatcher.
     def normalize(index):
@@ -990,10 +1001,11 @@ def _torch_getitem(self, slices):
         if isinstance(out, _NativeVar) and _owner._var_has_cpu_residency_hint(self):
             out = _owner._mark_cpu_like(out, self)
         return out
-    # A basic index, natively (`src/bindings/pyjt/py_compat_fast.h`).
-    fast = _owner.jt.core._fast_getitem(self, slices)
-    if fast is not NotImplemented:
-        return fast
+    # A legacy indexing sequence can normalize to a basic tuple.
+    if slices is not original:
+        fast = fast_getitem(self, slices)
+        if fast is not NotImplemented:
+            return fast
     _context = get_install_context(_owner.jt)
     _native = _context.state["tensor_native_api"]
     _orig_getitem = _native['_orig_getitem']
@@ -1114,11 +1126,16 @@ def _to(self, *args, **kwargs):
     # A dtype-only no-op is common between model layers. Explicit placement
     # already names this tensor's device, so there is no target to resolve.
     # A device tensor parked on the host must still take the migration path.
-    if (len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype)
-            and _jittor_dtype_name(self.dtype) == args[0].name):
-        placement = self.placement_backend
-        if placement == 0 or (placement > 0 and self.location() != "cpu"):
-            return self
+    if len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype):
+        tag = getattr(self, "_jt_interleaved_rope", None)
+        if tag is not None:
+            fused = interleaved_rope.cast(self, args[0].name, tag)
+            if fused is not None:
+                return _owner._mark_cpu_like(fused, self)
+        if _jittor_dtype_name(self.dtype) == args[0].name:
+            placement = self.placement_backend
+            if placement == 0 or (placement > 0 and self.location() != "cpu"):
+                return self
     # Matching another tensor need not turn its explicit placement into a
     # Python device and resolve it again. Keep copies, casts, meta tensors and
     # accelerator storage parked on the host on the ordinary conversion path.
@@ -1304,16 +1321,15 @@ def _var_numpy(self, *args, **kwargs):
 
 
 def _var_item(self):
-    """Read one scalar through an independent native host copy.
+    """Read one scalar while keeping the tensor and its aliases on their device."""
+    if _owner.jt.flags.keep_graph == 2 and self.numel() == 1:
+        from jittor._runtime.step_capture import guarded_predicate, guarded_scalar
 
-    Native Var.item migrates its input storage to the host. A Torch scalar
-    read must preserve the original tensor and every alias on their device.
-    """
-    native = get_install_context(_owner.jt).state["tensor_native_api"]
-    item = native["_native_item"]
-    if self.numel() != 1:
-        return item(self)
-    return item(native["_native_cpu_copy"](self))
+        scalar = (guarded_predicate(self) if _jittor_dtype_name(self.dtype) == "bool"
+                  else guarded_scalar(self))
+        if scalar is not None:
+            return scalar
+    return self._item_without_migration()
 
 
 def _var_cpu(self, *a, **k):
@@ -1351,7 +1367,28 @@ def _var_cuda(self, device=None, *a, **k):
 
 
 def _cast_if_needed(tensor, dtype):
-    return tensor if _jittor_dtype_name(tensor.dtype) == dtype else tensor.cast(dtype)
+    if _jittor_dtype_name(tensor.dtype) == dtype:
+        return tensor
+    if dtype in ("float16", "bfloat16") and _owner.jt.flags.no_grad:
+        offer = getattr(tensor, "_jt_modulated_ln_cast", None)
+        if offer is not None and not tensor.is_finished:
+            out_stamp, operands, stamps, eps, one_plus = offer
+            if (dtype == _jittor_dtype_name(operands[0].dtype)
+                    and _modulated_ln_stamp(tensor) == out_stamp
+                    and tuple(map(_modulated_ln_stamp, operands)) == stamps):
+                from jittor._runtime.dispatch import try_dispatch
+
+                narrowed = try_dispatch("nn.layer_norm.modulated.mixed", *operands, eps,
+                                        one_plus=one_plus, output_dtype=dtype)
+                if narrowed is not None:
+                    return narrowed
+    if dtype in ("float16", "bfloat16") and _owner.jt.flags.no_grad:
+        offer = getattr(tensor, "_jt_narrow_layer_norm", None)
+        if offer is not None and not tensor.is_finished and tensor._saved_storage_version() == offer[0]:
+            result = offer[1](dtype)
+            if result is not None:
+                return result
+    return tensor.cast(dtype)
 
 
 def _var_type(self, dst_type=None, non_blocking=False, **kw):
@@ -2112,22 +2149,142 @@ _FAST_BINARY_OPERATORS = ('__add__', '__radd__', '__sub__', '__rsub__',
                           '__mul__', '__rmul__', '__truediv__', '__rtruediv__')
 
 
+def _try_fused_neox_rope_add(cos_term, src, sin_tensor):
+    """Fuse ``(x * cos) + (rotate_half(x) * sin)`` into one CUDA RoPE kernel."""
+    cos_tensor = _owner.jt.core._neox_rope_cosine(cos_term, src)
+    if cos_tensor is None:
+        return None
+    from jittor._runtime.dispatch import try_dispatch
+    fused = try_dispatch("nn.neox_rope.inference", src, cos_tensor, sin_tensor)
+    if fused is None:
+        return None
+    return _owner._mark_cpu_like(fused, src)
+
+
+def _modulated_ln_stamp(tensor):
+    return tensor.var_ptr, tensor._saved_storage_version()
+
+
+def _try_fused_mod_ln_add(mod_ln, shift):
+    """Fuse ``layer_norm(x) * (1 + scale) + shift`` into one CUDA kernel."""
+    jt_mod = _owner.jt
+    if not isinstance(shift, jt_mod.Var):
+        return None
+    x, eps, scale_expr = mod_ln
+    if not isinstance(x, jt_mod.Var) or not isinstance(scale_expr, jt_mod.Var):
+        return None
+    one_plus_src = getattr(scale_expr, "_jt_one_plus_src", None)
+    if isinstance(one_plus_src, jt_mod.Var) and str(one_plus_src.dtype) == str(x.dtype):
+        scale_tensor = one_plus_src
+        one_plus = True
+    else:
+        scale_tensor = scale_expr
+        one_plus = False
+    from jittor._runtime.dispatch import try_dispatch
+
+    if jt_mod.flags.no_grad and x._producer_unary() == "float32":
+        inputs = x._inputs()
+        if len(inputs) == 1 and _jittor_dtype_name(inputs[0].dtype) in ("float16", "bfloat16"):
+            operands = inputs[0], scale_tensor, shift
+            fused = try_dispatch("nn.layer_norm.modulated.mixed", *operands, eps,
+                                 one_plus=one_plus, output_dtype="float32")
+            if fused is not None:
+                fused._jt_modulated_ln_cast = (
+                    _modulated_ln_stamp(fused), operands,
+                    tuple(map(_modulated_ln_stamp, operands)), eps, one_plus,
+                )
+                return _owner._mark_cpu_like(fused, x)
+    fused = try_dispatch(
+        "nn.layer_norm.modulated", x, scale_tensor, shift, eps, one_plus=one_plus,
+    )
+    if fused is None:
+        return None
+    return _owner._mark_cpu_like(fused, x)
+
+
+def _tag_one_plus(var_operand, scalar_operand, out):
+    if type(scalar_operand) in (int, float) and scalar_operand == 1:
+        out._jt_one_plus_src = var_operand
+    return out
+
+
+def _try_rope_add(self, other, cos_term, sin_term, tag, reflected=False):
+    if len(tag) == 2:
+        return _try_fused_neox_rope_add(cos_term, tag[0], tag[1])
+    if _autocast_state.order:
+        return None
+    operands = interleaved_rope.sum_operands(cos_term, sin_term, tag)
+    if operands is None:
+        return None
+    if _jittor_dtype_name(operands[0].dtype) == "float32":
+        fused = interleaved_rope.fuse(operands)
+        return None if fused is None else _owner._mark_cpu_like(fused, cos_term)
+    # The wide sum is a regular Tensor. Lower it if a caller narrows it back
+    # to the original input dtype, keeping a single output rounding.
+    fast = _FAST_BINARY
+    out = fast(self, other, int(reflected)) if fast is not None else None
+    if out is None:
+        name = "__radd__" if reflected else "__add__"
+        out = _promoting_binary(self, other, name, reflected)
+    return interleaved_rope.tag_sum(out, operands)
+
+
 def _tensor_add(self, other):
+    rope_sin = getattr(other, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_rope_add(self, other, self, other, rope_sin)
+        if fused is not None:
+            return fused
+    rope_sin = getattr(self, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_rope_add(self, other, other, self, rope_sin)
+        if fused is not None:
+            return fused
+    mod_ln = getattr(self, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, other)
+        if fused is not None:
+            return fused
+    mod_ln = getattr(other, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, self)
+        if fused is not None:
+            return fused
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 0)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__add__', False)
+            return _tag_one_plus(self, other, out)
+    return _tag_one_plus(self, other, _promoting_binary(self, other, '__add__', False))
 
 
 def _tensor_radd(self, other):
+    rope_sin = getattr(self, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_rope_add(self, other, other, self, rope_sin, reflected=True)
+        if fused is not None:
+            return fused
+    rope_sin = getattr(other, "_jt_rope_sin", None)
+    if rope_sin is not None:
+        fused = _try_rope_add(self, other, self, other, rope_sin, reflected=True)
+        if fused is not None:
+            return fused
+    mod_ln = getattr(self, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, other)
+        if fused is not None:
+            return fused
+    mod_ln = getattr(other, "_jt_mod_ln_mul", None)
+    if mod_ln is not None:
+        fused = _try_fused_mod_ln_add(mod_ln, self)
+        if fused is not None:
+            return fused
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 1)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__radd__', True)
+            return _tag_one_plus(self, other, out)
+    return _tag_one_plus(self, other, _promoting_binary(self, other, '__radd__', True))
 
 
 def _tensor_sub(self, other):
@@ -2169,34 +2326,152 @@ def _cuda_scalar_multiply(self, other):
     return _owner._mark_cpu_like(result, self)
 
 
+def _tag_rope_sin_mul(left, right, out):
+    rh_src = getattr(left, "_jt_rotate_half_src", None)
+    if rh_src is not None and isinstance(right, _owner.jt.Var):
+        out._jt_rope_sin = (rh_src, right)
+    elif isinstance(right, _owner.jt.Var):
+        rh_src = getattr(right, "_jt_rotate_half_src", None)
+        if rh_src is not None:
+            out._jt_rope_sin = (rh_src, left)
+    plain_ln = getattr(left, "_jt_plain_ln", None)
+    if plain_ln is not None and isinstance(right, _owner.jt.Var):
+        out._jt_mod_ln_mul = (plain_ln[0], plain_ln[1], right)
+    elif isinstance(right, _owner.jt.Var):
+        plain_ln = getattr(right, "_jt_plain_ln", None)
+        if plain_ln is not None:
+            out._jt_mod_ln_mul = (plain_ln[0], plain_ln[1], left)
+    rotated = getattr(left, "_jt_interleaved_rope", None)
+    if rotated is not None:
+        return interleaved_rope.tag_product(left, right, out, rotated)
+    rotated = getattr(right, "_jt_interleaved_rope", None)
+    if rotated is not None:
+        return interleaved_rope.tag_product(right, left, out, rotated)
+    return out
+
+
+def _try_split_silu_mul(activated, value, tag):
+    gate, gate_ptr, gate_version, activation_ptr, activation_version = tag
+    if (not isinstance(value, _NativeVar) or _autocast_state.order
+            or gate.var_ptr != gate_ptr or gate._saved_storage_version() != gate_version
+            or activated.var_ptr != activation_ptr
+            or activated._saved_storage_version() != activation_version):
+        return None
+    from jittor._runtime.dispatch import try_dispatch
+    from jittor.backends.cuda.kernels.nn import swiglu_cuda  # noqa: F401
+
+    return try_dispatch("nn.silu_and_mul.split", gate, value)
+
+
+def _split_silu_mul(left, right):
+    tag = getattr(left, "_jt_silu_operand", None)
+    if tag is not None:
+        return _try_split_silu_mul(left, right, tag)
+    tag = getattr(right, "_jt_silu_operand", None)
+    if tag is not None:
+        return _try_split_silu_mul(right, left, tag)
+    return None
+
+
+def _read_broadcast_add_slice(tensor, other):
+    if (not isinstance(other, _NativeVar) or tensor.ndim != 3
+            or _jittor_dtype_name(tensor.dtype) != "float32"
+            or tensor._storage_is_contiguous() or not _owner.jt.flags.no_grad
+            or _owner.jt.flags.amp_reg or tensor.placement_backend != 1):
+        return tensor
+    from jittor.ops.shape_ops import _pending_slice_of_float_add
+
+    operands = _pending_slice_of_float_add(tensor)
+    if operands is None:
+        return tensor
+    a, b = operands
+    return a.float() + b.float()
+
+
+def _try_gelu_mul(activated, value, offer):
+    gate, gate_version, activation_version, dense_gate = offer
+    if (not _owner.jt.flags.no_grad or _autocast_state.order
+            or not isinstance(value, _NativeVar) or activated.is_finished
+            or gate._saved_storage_version() != gate_version
+            or activated._saved_storage_version() != activation_version):
+        return None
+    from jittor._runtime.dispatch import try_dispatch
+    from jittor.backends.cuda.kernels.nn import swiglu_cuda  # noqa: F401
+
+    return try_dispatch("nn.gelu_and_mul.inference", gate, value, dense_gate=dense_gate)
+
+
+def _gelu_mul(left, right):
+    offer = getattr(left, "_jt_gelu_operand", None)
+    if offer is not None:
+        return _try_gelu_mul(left, right, offer)
+    offer = getattr(right, "_jt_gelu_operand", None)
+    return None if offer is None else _try_gelu_mul(right, left, offer)
+
+
+def _pointwise_sigmoid_mul(left, right):
+    offer = getattr(right, "_jt_pointwise_sigmoid_mul", None)
+    if offer is None:
+        left, right = right, left
+        offer = getattr(right, "_jt_pointwise_sigmoid_mul", None)
+    if (offer is None or _autocast_state.order or right.is_finished
+            or not isinstance(left, _NativeVar) or right._saved_storage_version() != offer[0]):
+        return None
+    return offer[1](left)
+
+
 def _tensor_mul(self, other):
+    gated = _split_silu_mul(self, other)
+    if gated is not None:
+        return gated
+    gated = _gelu_mul(self, other)
+    if gated is not None:
+        return gated
+    gated = _pointwise_sigmoid_mul(self, other)
+    if gated is not None:
+        return gated
     scalar = _cuda_scalar_multiply(self, other)
     if scalar is not None:
         return scalar
     if type(other) in (int, float) and _preserve_autocast_arithmetic():
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__mul__', False)
+    self = _read_broadcast_add_slice(self, other)
+    if isinstance(other, _NativeVar):
+        other = _read_broadcast_add_slice(other, self)
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 4)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__mul__', False)
+            return _tag_rope_sin_mul(self, other, out)
+    return _tag_rope_sin_mul(self, other, _promoting_binary(self, other, '__mul__', False))
 
 
 def _tensor_rmul(self, other):
+    gated = _split_silu_mul(other, self)
+    if gated is not None:
+        return gated
+    gated = _gelu_mul(other, self)
+    if gated is not None:
+        return gated
+    gated = _pointwise_sigmoid_mul(other, self)
+    if gated is not None:
+        return gated
     scalar = _cuda_scalar_multiply(self, other)
     if scalar is not None:
         return scalar
     if type(other) in (int, float) and _preserve_autocast_arithmetic():
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__rmul__', True)
+    self = _read_broadcast_add_slice(self, other)
+    if isinstance(other, _NativeVar):
+        other = _read_broadcast_add_slice(other, self)
     fast = _FAST_BINARY
     if fast is not None and not _autocast_state.order:
         out = fast(self, other, 5)
         if out is not None:
-            return out
-    return _promoting_binary(self, other, '__rmul__', True)
+            return _tag_rope_sin_mul(other, self, out)
+    return _tag_rope_sin_mul(other, self, _promoting_binary(self, other, '__rmul__', True))
 
 
 def _tensor_floordiv(self, other):
@@ -2215,11 +2490,37 @@ def _tensor_rmod(self, other):
     return _promoting_binary(self, other, '__rmod__', True)
 
 
+class _ScalarCube(_owner.jt.Function):
+    def _run_call(self, value):
+        self.base = _owner.jt.ops.reshape(value, value.shape)
+        return super()._run_call(value)
+
+    def execute(self, value):
+        return (value * value) * value
+
+    def grad(self, upstream):
+        # Torch differentiates scalar pow using the ordinary power rule,
+        # independently of the rounded multiplications in the forward.
+        return upstream * (3 * self.base.pow(2))
+
+
 def _tensor_pow(self, other):
     if _preserve_autocast_arithmetic():
         self, other = _cuda_autocast_fp32_input(self), _cuda_autocast_fp32_input(other)
         with _owner.jt.flag_scope(amp_reg=0):
             return _promoting_binary(self, other, '__pow__', False)
+    if isinstance(other, (int, float, _owner.np.integer, _owner.np.floating)) and other == 3:
+        dtype = _jittor_dtype_name(self.dtype)
+        if dtype in ('float16', 'bfloat16'):
+            from jittor._runtime.dispatch import dispatch_context
+
+            backend = dispatch_context(self).backend
+            if backend == 'cuda' or (backend == 'cpu' and dtype == 'bfloat16'):
+                # ATen's scalar-cube specialization rounds the square and
+                # the final multiplication in the tensor's storage dtype.
+                if _owner.jt.flags.no_grad or not self.requires_grad:
+                    return (self * self) * self
+                return _ScalarCube.apply(self)
     return _promoting_binary(self, other, '__pow__', False)
 
 
@@ -2659,7 +2960,15 @@ def _api_exponential(self, lambd=1.0, *, generator=None):
 
 
 def _api_tolist(self):
-    return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
+    if getattr(self, '_torch_0d', False):
+        return self.item()
+    if _owner.jt.flags.keep_graph == 2:
+        from jittor._runtime.step_capture import guarded_array
+
+        array = guarded_array(self)
+        if array is not None:
+            return array.tolist()
+    return self.numpy().tolist()
 
 
 _FAST_CONTIGUOUS = None
@@ -2691,6 +3000,18 @@ def _api_contiguous(self, memory_format="contiguous_format"):
         return self
     fast = _FAST_CONTIGUOUS
     if fast is not None and _owner.jt.contiguous is _NATIVE_CONTIGUOUS:
+        if self.ndim == 4 and _owner.jt.flags.no_grad and self.placement_backend == 1:
+            if _owner.jt.flags.keep_graph == 2:
+                from jittor.backends.cuda.kernels.nn.cudnn_attention_cuda import contiguous_attention_output
+
+                ready = contiguous_attention_output(self)
+                if ready is not None:
+                    return ready
+            from jittor.backends.cuda.kernels.nn.short_attention_cuda import try_contiguous
+
+            ready = try_contiguous(self)
+            if ready is not None:
+                return ready
         context = get_install_context(_owner.jt)
         result = fast(self, context.state["Var"])
         if result is not None:
@@ -2898,7 +3219,7 @@ def _cast_half(self):
 
 
 def _cast_float(self):
-    return _cast_if_needed(self, 'float32')
+    return interleaved_rope.tag_float(self, _cast_if_needed(self, 'float32'))
 
 
 def _cast_double(self):

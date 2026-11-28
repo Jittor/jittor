@@ -1118,7 +1118,7 @@ register_fidelity(
     "layout, and requires_grad semantics are not implemented",
 )
 
-from .signal import stft
+from .signal import istft, stft
 
 register_fidelity(
     "torch.stft",
@@ -1127,6 +1127,14 @@ register_fidelity(
     "native STFT on the input's device with waveform/window gradients and "
     "complex64 or real/imag output; CPU and CUDA verified; float16, bfloat16 "
     "and float64 inputs are transformed in float32 and return complex64",
+)
+register_fidelity(
+    "torch.istft",
+    istft,
+    Fidelity.APPROXIMATE,
+    "native ISTFT on the input's device with overlap-add window normalization; "
+    "CPU and CUDA verified; float16, bfloat16 and float64 inputs are "
+    "transformed in float32",
 )
 
 def _bind_missing(target, name, implementation):
@@ -1390,6 +1398,7 @@ def install(ctx):
     # how `torch.masked_fill` raised AttributeError while `jt.masked_fill` worked.
     g.masked_fill = masked_fill
     _bind_missing(g, "split_with_sizes", split_with_sizes)
+    _bind_missing(Var, "split_with_sizes", split_with_sizes)
     _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
     _bind_missing(g, "nan_to_num_", nan_to_num_)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks
@@ -1496,6 +1505,8 @@ def install_parity(ctx):
             setattr(special, name, value)
     special.expit = getattr(g, "sigmoid")
     special.entr = _special_entr
+    from .elementwise import logit
+    special.logit = logit
     g.special = special
 
 def _special_entr(input):
@@ -1522,3 +1533,5 @@ def install_signal(ctx):
         g.kaiser_window = kaiser_window
     if not hasattr(g, "stft"):
         g.stft = stft
+    if not hasattr(g, "istft"):
+        g.istft = istft

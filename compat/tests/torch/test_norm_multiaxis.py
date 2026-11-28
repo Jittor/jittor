@@ -25,6 +25,22 @@ class TestMultiAxisNorm(cu.JittorTestCase):
                 self.assertEqual(value.location(), 'device')
             np.testing.assert_allclose(value.cpu().numpy(), expected, rtol=2e-6, atol=1e-6)
 
+    def test_dense_column_norm_accepts_negative_axis_and_offset(self, device):
+        shape = (3, 96, 1024)
+        source = np.random.default_rng(91).normal(size=np.prod(shape) + 1).astype("float32")
+        source[1] = np.nan
+        source[-1] = np.inf
+        array = source[1:].reshape(shape)
+        expected = np.sqrt(np.square(array.astype("float64")).sum(1))
+        with torch.no_grad():
+            x = torch.tensor(source, device=device)[1:].reshape(shape)
+            norm = x.norm(p=2, dim=-2)
+            norm.sync()
+            self.assertEqual(norm.device.type, device.split(":")[0])
+            if norm.device.type == "cuda":
+                self.assertEqual(norm.location(), "device")
+            np.testing.assert_allclose(norm.cpu().numpy(), expected, rtol=2e-6, atol=1e-6)
+
     def test_axes_refer_to_the_original_tensor_rank(self, device):
         array = np.arange(1, 361, dtype='float32').reshape(3, 4, 5, 6) / 100
         for dtype in (torch.float32, torch.float64):

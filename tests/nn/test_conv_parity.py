@@ -71,6 +71,23 @@ class _ConvParity:
     def setUp(self):
         self.rng = np.random.default_rng(20260903)
 
+    def test_integer_like_convolution_geometry(self):
+        for rank in (1, 2, 3):
+            with self.subTest(rank=rank), jt.flag_scope(use_cuda=self.use_cuda), jt.no_grad():
+                tail = (1,) * (rank - 1)
+                x = jt.array(np.arange(9, dtype=np.float32)).reshape((1, 1, 9) + tail)
+                weight = jt.ones((1, 1, 3) + tail)
+                geometry = dict(
+                    stride=(np.int64(2),) + tail,
+                    padding=(np.int64(1),) + (0,) * (rank - 1),
+                    dilation=(np.int64(1),) + tail,
+                    groups=np.int64(1),
+                )
+                result = getattr(jt.nn, f"conv{rank}d")(x, weight, **geometry)
+                result.sync()
+                self.assertEqual(result.location(), "device" if self.use_cuda else "cpu")
+                np.testing.assert_array_equal(result.numpy().reshape(-1), [1, 6, 12, 18, 15])
+
     def test_conv1d_spatial_sequences_match_numpy(self):
         # Even kernels with dilation must retain asymmetric 'same' padding.
         x = self.rng.standard_normal((2, 2, 11)).astype("float32")

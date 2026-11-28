@@ -64,11 +64,19 @@ unordered_map<int64, VarPtr>* _grad_backup_ptr = nullptr;
 void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     int p = 3;
     Log log(fileline, red_color?'e':'i', 0);
+    size_t gpu_free = 0, _gpu_total = 0;
+    (void)gpu_free; (void)_gpu_total;
+    #ifdef HAS_ACCELERATOR
+    if (get_device_count() > 0)
+        backend_ops(accelerator_backend_id()).memory_info(
+            current_device(), gpu_free, _gpu_total);
+    #endif
+    int64 total_device_ram = _gpu_total ? (int64)_gpu_total : mem_info.total_cuda_ram;
     log << "\n=== display_memory_info ===\n";
     log << "total_cpu_ram:" << 
         FloatOutput{(double)mem_info.total_cpu_ram, " KMG", 1024, "B"};
     log << "total_device_ram:" << 
-        FloatOutput{(double)mem_info.total_cuda_ram, " KMG", 1024, "B"} >> "\n";
+        FloatOutput{(double)total_device_ram, " KMG", 1024, "B"} >> "\n";
     // .load(): streaming a std::atomic<int64> directly is ambiguous under
     // libstdc++ 11 -- atomic<T>'s implicit conversion to T (here, long long)
     // ties between ostream's built-in operator<<(long) and operator<<(unsigned
@@ -152,14 +160,17 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     }
     int64 all_total = 0, gpu_total = 0, cpu_total = 0;
     for (auto& a : SFRLAllocator::sfrl_allocators) {
+        std::unique_lock<std::recursive_mutex> lock(a->mutex);
         auto total = a->used_memory + a->unused_memory;
         all_total += total;
         a->is_cuda() ? gpu_total += total : cpu_total += total;
+        double used_pct = total > 0 ? a->used_memory * 100.0 / total : 0.0;
+        double unused_pct = total > 0 ? a->unused_memory * 100.0 / total : 0.0;
         log << "name:" << a->name() << "is_device:" << a->is_cuda()
             << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
-                >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
-            << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
-                >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)";
+                >> "(" >> std::setprecision(p) >> used_pct >> "%)"
+            << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"}
+                >> "(" >> std::setprecision(p) >> unused_pct >> "%)";
                 
             if (a->large_blocks.blocks.size()) {
                 size_t largest_block = 0;
@@ -189,14 +200,17 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     }
     if (use_temp_allocator && runtime_executor().temp_allocator) {
         for (auto& a : TempAllocator::temp_allocators) {
+            std::unique_lock<std::recursive_mutex> lock(a->mutex);
             auto total = a->used_memory + a->unused_memory;
             all_total += total;
             a->is_cuda() ? gpu_total += total : cpu_total += total;
+            double used_pct = total > 0 ? a->used_memory * 100.0 / total : 0.0;
+            double unused_pct = total > 0 ? a->unused_memory * 100.0 / total : 0.0;
             log << "name:" << a->name() << "is_device:" << a->is_cuda()
                 << "used:" << FloatOutput{(double)a->used_memory, " KMG", 1024, "B"}
-                    >> "(" >> std::setprecision(p) >> a->used_memory*100.0 / total >> "%)"
-                << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"} 
-                    >> "(" >> std::setprecision(p) >> a->unused_memory*100.0 / total >> "%)"
+                    >> "(" >> std::setprecision(p) >> used_pct >> "%)"
+                << "unused:" << FloatOutput{(double)a->unused_memory, " KMG", 1024, "B"}
+                    >> "(" >> std::setprecision(p) >> unused_pct >> "%)"
                 << "total:" << FloatOutput{(double)total, " KMG", 1024, "B"} >> "\n";
         }
     }
@@ -216,13 +230,6 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
         }
     }
 #endif
-    size_t gpu_free = 0, _gpu_total = 0;
-    (void)gpu_free; (void)_gpu_total;
-    #ifdef HAS_ACCELERATOR
-    if (get_device_count() > 0)
-        backend_ops(accelerator_backend_id()).memory_info(
-            current_device(), gpu_free, _gpu_total);
-    #endif
     log << "free: cpu(">>FloatOutput{(double)cpu_free, " KMG", 1024, "B"}
         >> ") gpu(">>FloatOutput{(double)gpu_free, " KMG", 1024, "B"} >> ")\n";
     static int64 swap_total_last = 0;
@@ -253,10 +260,12 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
                 auto v = (Var*)queue[i];
                 if (v->size>=0 && v->mem_ptr) {
                     cum += v->size;
+                    double var_pct = all_total > 0 ? v->size * 100.0 / all_total : 0.0;
+                    double cum_pct = all_total > 0 ? cum * 100.0 / all_total : 0.0;
                     log << FloatOutput{(double)v->size, " KMG", 1024, "B"}
-                        >> "(" >> std::setprecision(p) >> v->size*100.0 / all_total >> "%)"
+                        >> "(" >> std::setprecision(p) >> var_pct >> "%)"
                         << FloatOutput{(double)cum, " KMG", 1024, "B"}
-                        >> "(" >> std::setprecision(p) >> cum*100.0 / all_total >> "%)"
+                        >> "(" >> std::setprecision(p) >> cum_pct >> "%)"
                         << v >> "\n";
                     if (v->size == 100*64*112*112*4) {
                         for (auto op : v->outputs())
@@ -269,14 +278,14 @@ void display_memory_info(const char* fileline, bool dump_var, bool red_color) {
     log >> "===========================\n";
 
     if (red_color) {
-        bool gpu_overflow = (double)gpu_total>(double)mem_info.total_cuda_ram*0.95;
+        bool gpu_overflow = total_device_ram > 0 && (double)gpu_total > (double)total_device_ram * 0.95;
         bool cpu_overflow = (double)cpu_total>(double)mem_info.total_cpu_ram*0.95;
         // cpu total too small, not possible
         if (mem_info.total_cpu_ram < 100000)
             cpu_overflow = false;
         if(gpu_overflow || cpu_overflow) {
             double used = gpu_overflow ? (double)gpu_total : (double)cpu_total;
-            double total = gpu_overflow ? (double)mem_info.total_cuda_ram : (double)mem_info.total_cpu_ram;
+            double total = gpu_overflow ? (double)total_device_ram : (double)mem_info.total_cpu_ram;
             log.end();
             // LOGe, not LOGf: this runs while another error is being reported,
             // and throwing here would replace it.
@@ -339,6 +348,7 @@ static void device_pool_bytes(int device, int64& used, int64& reserved) {
         if (a->is_cuda() == host) continue;
         // The host pools answer to device -1 whatever index they report.
         if (!host && a->device() != device) continue;
+        std::unique_lock<std::recursive_mutex> lock(a->mutex);
         used += a->used_memory;
         reserved += a->used_memory + a->unused_memory;
     }
