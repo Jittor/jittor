@@ -593,9 +593,16 @@ def _draw_bounding_boxes(image, boxes, labels=None, colors=None, fill=False,
     return _frontend_tensor(_jt.array(out))
 
 
+def _roi_align(*args, **kwargs):
+    from jittor.compat.torch.vision import roi_align
+
+    return roi_align(*args, **kwargs)
+
+
 class _OpsModule(types.ModuleType):
     __path__ = []   # package marker so torchvision.<ns>.<sub> imports descend
     box_convert = staticmethod(_box_convert)
+    roi_align = staticmethod(_roi_align)
 
 
 class _ModelsModule(types.ModuleType):
