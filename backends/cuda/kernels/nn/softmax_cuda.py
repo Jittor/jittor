@@ -76,7 +76,8 @@ masked_row_softmax<<<in0->num / in0_shape3, 128, in0_shape3 * sizeof(float)>>>(
     broadcast_shape(in1), broadcast_shape(in2), data.at("scale"), data.at("fill"));
 CHECK(0 == cudaGetLastError());
 """
-jt.core._bind_masked_row_softmax(_MASKED_ROW_SOFTMAX)
+if hasattr(jt.core, "_bind_masked_row_softmax"):
+    jt.core._bind_masked_row_softmax(_MASKED_ROW_SOFTMAX)
 
 
 def _supports_softmax(a, log=False, zero_all_neg_inf=False, dim=-1):
