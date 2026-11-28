@@ -967,13 +967,13 @@ __global__ void __launch_bounds__(THREADS) backward(
 _TILED_SHORT_KERNELS = _KERNELS + r"""
 namespace mea_fwd {
 template <bool CAUSAL, int MASK>
-__global__ void __launch_bounds__(128) forward_short_tile(
+__global__ void __launch_bounds__(256) forward_short_tile(
         const float* __restrict__ q, const float* __restrict__ k,
         const float* __restrict__ v, float* __restrict__ o,
         int lq, int lk, float scale, mea::Mask mask, mea::Rows ql, mea::Rows kl,
         mea::Rows vl, mea::Rows ol) {
     constexpr int D = 64, KeyPad = 64;
-    constexpr int Rows = 4;
+    constexpr int Rows = 8;
     constexpr int DPT = (D + 31) / 32;
     const int bh = blockIdx.y;
     const int tid = threadIdx.x, warp = tid / 32, lane = tid % 32;
@@ -984,15 +984,28 @@ __global__ void __launch_bounds__(128) forward_short_tile(
     // Store K transposed so each warp can score 32 keys in parallel.
     // The extra column keeps the cooperative transpose free of bank conflicts.
     __shared__ float keys[D][KeyPad + 1];
-    __shared__ float values[KeyPad][D];
+    __shared__ __align__(16) float values[KeyPad][D];
     __shared__ float probabilities[Rows][KeyPad];
 
     for (int i = lane; i < D; i += 32)
         query[warp][i] = row < lq ? qb[row][i] * scale : 0.f;
-    for (int i = tid; i < lk * D; i += 128) {
-        const int key = i / D, dim = i % D;
-        keys[dim][key] = kb[key][dim];
-        values[key][dim] = vb[key][dim];
+    const bool vector = ((reinterpret_cast<uintptr_t>(kb.p) | reinterpret_cast<uintptr_t>(vb.p)) & 15u) == 0
+        && ((kb.stride | vb.stride) & 3) == 0;
+    if (vector) {
+        for (int i = tid * 4; i < lk * D; i += Rows * 128) {
+            const int key = i / D, dim = i % D;
+            float4 raw_k = *reinterpret_cast<const float4*>(kb[key] + dim);
+            keys[dim][key] = raw_k.x; keys[dim + 1][key] = raw_k.y;
+            keys[dim + 2][key] = raw_k.z; keys[dim + 3][key] = raw_k.w;
+            *reinterpret_cast<float4*>(values[key] + dim) =
+                *reinterpret_cast<const float4*>(vb[key] + dim);
+        }
+    } else {
+        for (int i = tid; i < lk * D; i += Rows * 32) {
+            const int key = i / D, dim = i % D;
+            keys[dim][key] = kb[key][dim];
+            values[key][dim] = vb[key][dim];
+        }
     }
     __syncthreads();
     if (row >= lq) return;
@@ -1291,8 +1304,8 @@ def _short_forward_kernel(d, lq, lk, causal, mask_kind):
     # For very few keys the original register-only kernel avoids setup.
     flags = f"{str(bool(causal)).lower()}, {mask_kind}"
     if d == 64 and 16 <= lq <= 64 and 24 <= lk <= 64:
-        return f"mea_fwd::forward_short_tile<{flags}>", _TILED_SHORT_KERNELS
-    return f"mea_fwd::forward_short<{d}, {flags}>", _KERNELS
+        return f"mea_fwd::forward_short_tile<{flags}>", _TILED_SHORT_KERNELS, 8
+    return f"mea_fwd::forward_short<{d}, {flags}>", _KERNELS, 4
 
 
 def _dense_storage_layout(tensor):
@@ -1345,10 +1358,10 @@ def _forward_view(query, key, value, scale, causal, mask):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
     if _use_short_forward(lq, lk):
-        kernel, header = _short_forward_kernel(d, lq, lk, causal, mask[0])
+        kernel, header, rows_per_block = _short_forward_kernel(d, lq, lk, causal, mask[0])
         src = (
             kernel +
-            f"<<<dim3({(lq + 3) // 4}, {b * h}), mea_fwd::SHORT_THREADS>>>("
+            f"<<<dim3({-(-lq // rows_per_block)}, {b * h}), {rows_per_block * 32}>>>("
             f"{', '.join(pointers)}, out0_p, {lq}, {lk}, {scale!r}f, "
             f"{_mask_args(mask, str(h), 3 if mask[0] else 0)}, {', '.join(rows)}, "
             f"{_rows_args('out0', False, str(h), 1)});\n"
@@ -1438,7 +1451,7 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
         b, h, lq, d = (int(size) for size in query.shape)
     lk = int(key.shape[1] if call.seq[1] else key.shape[2])
     if not need_normalizer and call.seed is None and _use_short_forward(lq, lk):
-        kernel, header = _short_forward_kernel(d, lq, lk, call.causal, call.mask[0])
+        kernel, header, rows_per_block = _short_forward_kernel(d, lq, lk, call.causal, call.mask[0])
         key_ = (kernel, call.mask[2], call.seq, call.group, float(call.scale))
         src = _SHORT_FORWARD_SOURCES.get(key_)
         if src is None:
@@ -1449,7 +1462,8 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
             lq_expr, lk_expr = call.lengths()
             src = _SHORT_FORWARD_SOURCES[key_] = (
                 kernel +
-                f"<<<dim3(({lq_expr} + 3) / 4, in0->shape[0] * {heads}), mea_fwd::SHORT_THREADS>>>("
+                f"<<<dim3(({lq_expr} + {rows_per_block - 1}) / {rows_per_block}, "
+                f"in0->shape[0] * {heads}), {rows_per_block * 32}>>>("
                 f"in0_p, in1_p, in2_p, out0_p, {lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
                 f"{mask_arg}, {', '.join(rows)}, "
                 f"{_rows_args('out0', call.seq[0], heads, 1)});\n"

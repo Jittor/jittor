@@ -639,6 +639,19 @@ class TestFusedAttentionF32(unittest.TestCase):
                     self.assertIsNotNone(out_s)
                     np.testing.assert_allclose(out_s.numpy(), expected, rtol=1e-4, atol=1e-5)
 
+    def test_short_inference_reads_misaligned_key_and_value_rows(self):
+        rng = np.random.default_rng(21)
+        q = rng.normal(size=(2, 3, 37, 64)).astype("float32")
+        k, v = [rng.normal(size=(2, 3, 41, 65)).astype("float32") for _ in range(2)]
+        expected = _reference(q, k[..., 1:], v[..., 1:], False, np.zeros_like(q), None)[0]
+        with jt.no_grad():
+            jq, jk, jv = (jt.array(a).stop_grad() for a in (q, k, v))
+            out = self.kernel._fused_attention_f32(jq, jk[..., 1:], jv[..., 1:])
+            self.assertIsNotNone(out)
+            out.sync()
+            self.assertEqual(out.location(), "device")
+            np.testing.assert_allclose(out.numpy(), expected, rtol=1e-4, atol=1e-5)
+
     def test_the_scores_are_never_built(self):
         heads, tokens, width = 8, 4096, 40
         scores = 2 * heads * tokens * tokens * 4          # 1 GiB
