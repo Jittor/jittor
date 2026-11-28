@@ -10,6 +10,9 @@ import copy as _copy
 import copy as _copy2
 import types as _types_nn_private
 import warnings
+from ...checkpoint_linear import (
+    deferred_linear_initialization_active, make_deferred_linear_parameter,
+)
 from ...context import get_install_context
 from ...types import _dtype_to_str
 from jittor._runtime.dispatch import try_dispatch as _try_dispatch
@@ -914,9 +917,18 @@ def linear_init(self, in_features, out_features, bias=True,
                 device=None, dtype=None):
     _context = get_install_context(jt)
     _torch_target = _context.target_namespace
+    target_dtype = dtype if dtype is not None else _torch_target.get_default_dtype()
+    if (deferred_linear_initialization_active() and type(self) is _torch_target.nn.Linear
+            and device is None and in_features > 0 and out_features > 0):
+        self.in_features = in_features
+        self.out_features = out_features
+        self.weight = make_deferred_linear_parameter(
+            _torch_target, (out_features, in_features), target_dtype)
+        self.bias = (make_deferred_linear_parameter(_torch_target, (out_features,), target_dtype)
+                     if bias else None)
+        return
     native_linear_init = _context.state["nn_extra_native"]['native_linear_init']
     native_linear_init(self, in_features, out_features, bias)
-    target_dtype = dtype if dtype is not None else _torch_target.get_default_dtype()
     self.to(device=device, dtype=target_dtype)
 
 
