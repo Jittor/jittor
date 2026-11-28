@@ -147,3 +147,39 @@ def batched_nms(boxes, scores, idxs, iou_threshold):
             keep_ranks.append(rows[selected])
         _, ranks = jt.argsort(jt.concat(keep_ranks), stable=True)
         return order[ranks].int64()
+
+
+def resize_regions(input, regions, output_size):
+    """Resize each [C, H, W] input into its rectangle on a zero-filled canvas.
+
+    Regions contain integer [left, top, right, bottom] coordinates, with
+    exclusive right and bottom edges. Resize uses bilinear half-pixel
+    coordinates. The canvas clips each rectangle without changing its scale.
+    """
+    if input.ndim != 4 or tuple(regions.shape) != (input.shape[0], 4):
+        raise ValueError("resize_regions expects [N, C, H, W] input and [N, 4] regions")
+    if dtype_name(regions.dtype) not in ("int32", "int64"):
+        raise TypeError("resize_regions expects integer region coordinates")
+    height, width = output_size = tuple(map(index, output_size))
+    if min(height, width) < 0:
+        raise ValueError("resize_regions output dimensions must be nonnegative")
+    with tensor_frontend(type(input), like=input):
+        shape = (*input.shape[:2], height, width)
+        if not all(shape) or not all(input.shape):
+            return (input.sum() * 0).broadcast(shape)
+        from jittor.backends.cuda.kernels.nn import resize_regions_cuda  # noqa: F401
+
+        result = try_dispatch("vision.resize_regions", input, regions, output_size)
+        if result is not None:
+            return result
+        dtype = "float64" if dtype_name(input.dtype) == "float64" else "float32"
+        x = jt.index((1, 1, width), 2, dtype=dtype)
+        y = jt.index((1, height, 1), 1, dtype=dtype)
+        left, top, right, bottom = (regions[:, i].cast(dtype).reshape((-1, 1, 1)) for i in range(4))
+        x_valid, y_valid = (x >= left) & (x < right), (y >= top) & (y < bottom)
+        x_grid = (x - left + 0.5) * 2 / (right - left).maximum(1) - 1
+        y_grid = (y - top + 0.5) * 2 / (bottom - top).maximum(1) - 1
+        grid_shape = (input.shape[0], height, width)
+        grid = jt.stack((x_grid.broadcast(grid_shape), y_grid.broadcast(grid_shape)), dim=-1)
+        output = jt.nn.grid_sample(input.cast(dtype), grid, padding_mode="border", align_corners=False)
+        return jt.ternary((x_valid & y_valid).unsqueeze(1), output, 0).cast(input.dtype)
