@@ -374,6 +374,9 @@ def _remember_silu_operand(x, output):
     return output
 
 
+_FAST_SILU = getattr(jt.core, "_fast_silu", None)
+
+
 def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
     r''' Applies the element-wise function:
 
@@ -403,6 +406,10 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
         return fast if inplace else _remember_silu_operand(x, fast)
+    if _FAST_SILU is not None:
+        fast = _FAST_SILU(x)
+        if fast is not None:
+            return fast if inplace else _remember_silu_operand(x, fast)
     if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
         # SiLU rounds once at its public boundary. A narrow sigmoid followed
         # by a narrow multiply adds a rounding step absent from the opmath

@@ -1433,6 +1433,23 @@ class TestNativeGelu(unittest.TestCase):
             jt.flags.auto_graph_replay = flags
 
 
+class TestFastSilu(unittest.TestCase):
+    def test_narrow_inference_matches_the_widened_expression(self):
+        from jittor.nn.functional import activation
+
+        values = np.linspace(-12.0, 12.0, 51, dtype=np.float32).reshape(3, 17)
+        for device in ("cpu", _cuda()) if _CUDA_KERNELS else ("cpu",):
+            for dtype in (torch.float16, torch.bfloat16):
+                with self.subTest(device=device, dtype=dtype), torch.no_grad():
+                    x = torch.tensor(values, device=device, dtype=dtype).transpose(0, 1)
+                    got = activation.silu(x)
+                    wide = x.float()
+                    want = (wide * wide.sigmoid()).to(dtype)
+                    self.assertEqual(got.device.type, device)
+                    self.assertEqual(got.dtype, dtype)
+                    np.testing.assert_array_equal(got.float().cpu().numpy(), want.float().cpu().numpy())
+
+
 class TestSdpaRoutes(unittest.TestCase):
     @unittest.skipUnless(_CUDA_KERNELS, "the routes remembered are CUDA kernels")
     def test_a_remembered_route_gives_the_walk_s_answer(self):

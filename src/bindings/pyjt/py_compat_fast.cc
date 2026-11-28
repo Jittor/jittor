@@ -937,11 +937,6 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
         PyObjHolder fallback_args(PyTuple_Pack(3, normalized.obj, axis.obj, dtype_name.obj));
         return PyObject_CallObject(continuation.obj, fallback_args.obj);
     }
-    PyObject* capture = PyObject_CallObject(tracing_fn, nullptr);
-    if (!capture) return nullptr;
-    PyObjHolder capturing(capture);
-    int active = PyObject_IsTrue(capture);
-    if (active < 0) return nullptr;
     // The frontend and placement the generated bindings of `empty` and
     // `setitem` would each have entered.
     NanoVector out_shape;
@@ -965,11 +960,16 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
             | vars[0]->storage_offset_bytes | vars[1]->storage_offset_bytes;
         if (vars[0]->num + vars[1]->num <= max_scalar_elements || (alignment & 15) == 0) {
             DataMap widths{{"left_width", double(left)}, {"right_width", double(right)}};
-            auto result = make_code(out_shape, dtype, move(vars), {}, {}, {},
-                                    cat_pair_cuda_source, {}, cat_pair_cuda_header, move(widths), "cuda");
+            static const auto& source = code_source_token(cat_pair_cuda_header, cat_pair_cuda_source);
+            auto result = make_prepared_code(out_shape, dtype, move(vars),
+                                             &source, move(widths), "cuda");
             return to_py_object<VarHolder*>(new VarHolder(move(result)));
         }
     }
+    PyObjHolder capturing(PyObject_CallObject(tracing_fn, nullptr));
+    if (!capturing.obj) return nullptr;
+    int active = PyObject_IsTrue(capturing.obj);
+    if (active < 0) return nullptr;
     if (active) return not_implemented();
     VarPtr out = make_empty(out_shape, dtype);
     // The scratch allocation is not a differentiable input to concatenation.
@@ -1479,16 +1479,10 @@ void bind_masked_row_softmax(const string& source) {
     masked_softmax_code = &code_source_token("", source);
 }
 
-VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
-                                    bool plain_row_softmax) {
-    USER_CHECK(no_grad) << "unary inference code requires no_grad";
+namespace {
+const string* inference_code_source(PyObject* source, PyObject* header) {
     USER_CHECK(PyUnicode_CheckExact(source) && PyUnicode_CheckExact(header))
         << "inference code sources and headers must be strings";
-    auto* value = input->grad_input();
-    if (plain_row_softmax && !graph_capture_active()) {
-        if (auto fused = try_masked_row_softmax(value))
-            return new VarHolder(move(fused));
-    }
     struct Entry {
         PyObject* source = nullptr;
         PyObject* header = nullptr;
@@ -1520,7 +1514,30 @@ VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObjec
         entry = {source, header, token};
         next = (next + 1) % 16;
     }
+    return token;
+}
+} // namespace
+
+VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
+                                    bool plain_row_softmax) {
+    USER_CHECK(no_grad) << "unary inference code requires no_grad";
+    auto* value = input->grad_input();
+    if (plain_row_softmax && !graph_capture_active()) {
+        if (auto fused = try_masked_row_softmax(value))
+            return new VarHolder(move(fused));
+    }
+    const auto* token = inference_code_source(source, header);
     return new VarHolder(make_prepared_code(value->shape, value->dtype(), {value}, token, {}, ""));
+}
+
+VarHolder* cuda_inference_code(NanoVector shape, NanoString dtype,
+                              vector<VarHolder*>&& inputs, PyObject* source, PyObject* header) {
+    USER_CHECK(no_grad) << "inference code requires no_grad";
+    vector<Var*> values;
+    values.reserve(inputs.size());
+    for (auto* input : inputs) values.push_back(input->grad_input());
+    const auto* token = inference_code_source(source, header);
+    return new VarHolder(make_prepared_code(shape, dtype, move(values), token, {}, ""));
 }
 
 namespace {
@@ -2146,13 +2163,19 @@ PyObject* fast_gelu(PyObject* x) {
     // also set on ACL).
     if (own != ns_float64 && !amp_reg && runtime_flag_use_cuda()
             && accelerator_backend_id() == BackendId::Cuda && producer
-            && producer->is_op(op_ids::code()) && var->num > 0 && var->is_contiguous()
+            && construction_target_backend(var) == BackendId::Cuda
+            && var->num > 0 && var->is_contiguous()
             && (no_grad || var->is_stop_grad())) {
-        PyTensorFrontendScope scope(x, nullptr, 0, false);
-        unique_ptr<VarHolder> out(new VarHolder(make_code(var->shape, own, {var},
-            "", {}, "", string(gelu_source()), {}, "", {}, "")));
-        out->stop_grad();
-        return to_py_object<VarHolder*>(out.release());
+        const bool code_output = producer->is_op(op_ids::code());
+        auto matmul = code_output ? nullptr : get_op_definition("cublas_matmul", false);
+        if (code_output || (matmul && producer->is_op(matmul->id))) {
+            PyTensorFrontendScope scope(x, nullptr, 0, false);
+            static const auto& source = code_source_token("", gelu_source());
+            unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(var->shape, own, {var},
+                &source, {}, "")));
+            out->stop_grad();
+            return to_py_object<VarHolder*>(out.release());
+        }
     }
     static PyObject* half = PyFloat_FromDouble(0.5);
     static PyObject* one = PyFloat_FromDouble(1.0);
@@ -2193,6 +2216,23 @@ PyObject* fast_gelu(PyObject* x) {
     }
     return wrap_like(out.obj, new VarHolder(
         make_unary(GET_RAW_PTR(VarHolder, out.obj)->var, own)));
+}
+
+PyObject* fast_silu(PyObject* x) {
+    if (!no_grad || amp_reg || !is_var(x) || kernel_op_registered("tensor.sigmoid"))
+        return none();
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    Var* value = holder->var;
+    const NanoString dtype = value->dtype();
+    if ((dtype != ns_float16 && dtype != ns_bfloat16)
+            || construction_target_backend(value) != BackendId::Cuda)
+        return none();
+    static auto multiply = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    VarPtr wide = make_unary(holder->grad_input(), ns_float32);
+    VarPtr sigmoid = make_unary(wide, ns_sigmoid);
+    VarPtr product = multiply(wide, sigmoid, ns_multiply);
+    return to_py_object<VarHolder*>(new VarHolder(make_unary(product, dtype)));
 }
 
 namespace {

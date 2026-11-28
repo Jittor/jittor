@@ -112,8 +112,8 @@ void collect(PyObject* value, SmallVector<VarHolder*, 8>& tensors, int depth) {
     }
 }
 
-PyObject* canonical_dtype(VarHolder* holder) {
-    const char* raw = holder->var->dtype().to_cstring();
+PyObject* canonical_dtype(NanoString dtype) {
+    const char* raw = dtype.to_cstring();
     auto found = dtype_names.find(raw);
     if (found != dtype_names.end()) return found->second;
     PyObjHolder text(PyUnicode_FromString(raw));
@@ -332,7 +332,7 @@ bool kernel_op_registered(const char* op) {
     return present != 0;
 }
 
-bool kernel_selects_cublas_fp32(const char* op, PyObject* provider) {
+bool kernel_selects_cublas(const char* op, PyObject* provider, NanoString dtype) {
     if (!registered_ops || !kernel_op_registered(op)) return false;
     const auto& entries = lookup(op, "cuda");
     if (entries.size() != 1) return false;
@@ -342,8 +342,7 @@ bool kernel_selects_cublas_fp32(const char* op, PyObject* provider) {
             || entry.rule.op != "cublas_matmul" || !has_op(entry.rule.op))
         return false;
     if (!entry.dtypes) return true;
-    static PyObject* float32 = PyUnicode_InternFromString("float32");
-    return float32 && PySet_Contains(entry.dtypes, float32) == 1;
+    return PySet_Contains(entry.dtypes, canonical_dtype(dtype)) == 1;
 }
 
 void kernel_select_bind(PyObject* candidates, PyObject* dtype_name) {
@@ -407,7 +406,7 @@ PyObject* kernel_select(PyObject* op, PyObject* args, PyObject* kwargs) {
         }
         if (entry.dtypes) {
             if (names.empty() && !tensors.empty())
-                for (auto* t : tensors) names.push_back(canonical_dtype(t));
+                for (auto* t : tensors) names.push_back(canonical_dtype(t->var->dtype()));
             bool all = true;
             for (auto* name : names) {
                 int in = PySet_Contains(entry.dtypes, name);

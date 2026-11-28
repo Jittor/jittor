@@ -91,6 +91,8 @@ def _build(frontend):
 
 def _library():
     """The loaded library, or None when the cudnn frontend is not installed."""
+    if "library" in _state and _state.get("checked"):
+        return _state["library"]
     with _lock:
         if "library" not in _state:
             frontend = _frontend_include()
@@ -329,18 +331,22 @@ def _forward(query, key, value, scale, causal, training, bias=None, layout=0):
     if _HEADER_TEXT[0] is None:
         _HEADER_TEXT[0] = _header()
     inputs = ([query] if packed else [query, key, value]) + ([] if bias is None else [bias])
+    source = _forward_source(dtype, layout, float(scale), bool(causal), bool(training),
+                             bias is not None, bias_b, bias_h)
+    if _INFERENCE_CODE is not None and not training and jt.flags.no_grad:
+        return _INFERENCE_CODE(out_shape, query.dtype, inputs, source, _HEADER_TEXT[0]), None
     outputs = jt.code(
         [out_shape, stats_shape] if training else [out_shape],
         [query.dtype, "float32"] if training else [query.dtype],
         inputs,
         cuda_header=_HEADER_TEXT[0],
-        cuda_src=_forward_source(dtype, layout, float(scale), bool(causal), bool(training),
-                                 bias is not None, bias_b, bias_h))
+        cuda_src=source)
     return outputs[0], (outputs[1] if training else None)
 
 
 #: `_header()`, formatted once: the descriptor's path does not move.
 _HEADER_TEXT = [None]
+_INFERENCE_CODE = getattr(jt.core, "_cuda_inference_code", None)
 
 
 @functools.lru_cache(maxsize=256)
@@ -511,24 +517,27 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     """
     if float(dropout_p or 0.0) != 0.0:
         return None
-    if len(query.shape) != 4 or len(key.shape) != 4 or len(value.shape) != 4:
+    query_shape, key_shape, value_shape = query.shape, key.shape, value.shape
+    if len(query_shape) != 4 or len(key_shape) != 4 or len(value_shape) != 4:
         return None
-    if tuple(key.shape) != tuple(value.shape) or query.shape[0] != key.shape[0] \
-            or query.shape[3] != key.shape[3]:
+    if tuple(key_shape) != tuple(value_shape) or query_shape[0] != key_shape[0] \
+            or query_shape[3] != key_shape[3]:
         return None
     # Equal head counts through `nn.fused_attention`: it has no enable_gqa, so
     # a mismatch there is the caller's error to raise on the path below.
-    heads, key_heads = int(query.shape[1]), int(key.shape[1])
+    heads, key_heads = int(query_shape[1]), int(key_shape[1])
     if key_heads != heads and not ((grouped or enable_gqa) and key_heads > 0 and heads % key_heads == 0):
         return None
     dtype = _jittor_dtype_name(query.dtype)
     if dtype not in _DTYPES or _jittor_dtype_name(key.dtype) != dtype \
             or _jittor_dtype_name(value.dtype) != dtype:
         return None
-    reduced_precision = (allow_reduced_precision and _reduced_precision_admitted(
-        query, key, value, attn_mask, dropout_p, is_causal))
-    if not (_accuracy_admitted(query) or reduced_precision):
-        return None
+    reduced_precision = False
+    if not _accuracy_admitted(query):
+        reduced_precision = allow_reduced_precision and _reduced_precision_admitted(
+            query, key, value, attn_mask, dropout_p, is_causal)
+        if not reduced_precision:
+            return None
     training = _output_requires_grad(query, key, value)
     if attn_mask is not None:
         if _output_requires_grad(attn_mask):
@@ -546,14 +555,17 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     if io_bias and _jittor_dtype_name(attn_mask.dtype) not in ("bool", dtype):
         # The public mask may carry more precision than Q/K/V.
         return None
-    scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
-    packed_qkv = None if training else _packed_qkv_view(query, key, value)
+    scale = float(scale) if scale is not None else float(query_shape[3]) ** -0.5
+    packed_qkv = (None if training or query_shape != key_shape
+                  else _packed_qkv_view(query, key, value))
     if packed_qkv is not None:
         query = key = value = packed_qkv
         q_seq = k_seq = v_seq = True
         layout = _PACKED_QKV
     else:
-        (query, q_seq), (key, k_seq), (value, v_seq) = (_physical(t) for t in (query, key, value))
+        query, q_seq = _physical(query)
+        key, k_seq = _physical(key)
+        value, v_seq = _physical(value)
         layout = (_Q if q_seq else 0) | (_K if k_seq else 0) | (_V if v_seq else 0)
 
     def logical(out):

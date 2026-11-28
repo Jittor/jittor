@@ -65,8 +65,8 @@ static inline void check_input_is_backed(Var* v, Op* op) {
 }
 
 
-static void propagate_needed_flags(const vector<Op*>& ops, const FusedOp& fused) {
-    for (int i=ops.size()-1; i>=0; i--) {
+static void propagate_needed_flags(Op* const* ops, size_t count, const FusedOp& fused) {
+    for (size_t i = count; i-- > 0;) {
         bool has_need = 0;
         auto op = ops[i];
         for (auto o : op->outputs())
@@ -82,7 +82,7 @@ static void propagate_needed_flags(const vector<Op*>& ops, const FusedOp& fused)
 }
 
 static inline void propergate_needed_flags(FusedOp& fused_op) {
-    propagate_needed_flags(fused_op.ops, fused_op);
+    propagate_needed_flags(fused_op.ops.data(), fused_op.ops.size(), fused_op);
 }
 
 
@@ -658,8 +658,9 @@ static bool has_stream_candidate(FusedOp& fused) {
 // What finishing a segment does to the graph: the outputs it wrote stop
 // keeping their inputs pending. Shared by the calling thread, which does it as
 // each segment ends, and the async worker, which queues it (see below).
-static void finish_fused_outputs(const vector<Var*>& outputs) {
-    for (Var* var : outputs) {
+static void finish_fused_outputs(Var* const* outputs, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Var* var = outputs[i];
         if (var->flag(VarFlags::_kept)) continue;
         var->finish_pending_liveness();
     }
@@ -712,12 +713,15 @@ struct DeferredGraphWork {
     struct Item {
         int released_segment = -1;  // the batch's hold on what this segment used last
         Op* op = nullptr;           // an operator to finish
-        vector<Op*> fused_ops;      // or a fused segment to finish: its operators
-        vector<Var*> outputs;       // and the outputs it wrote
+        size_t first_op = 0, op_count = 0;
+        size_t first_output = 0, output_count = 0;
     };
     ExecPlan& plan;
     FusedOp& fused;
     vector<Item> items;
+    // One reusable buffer per batch, including all of its pending segments.
+    vector<Op*> fused_ops;
+    vector<Var*> fused_outputs;
     size_t front = 0;
     int64 lag_bytes = 0;
     vector<Var*> outputs_bk;
@@ -737,9 +741,14 @@ struct DeferredGraphWork {
         items.back().op = op;
     }
     void finish(FusedOp& segment) {
-        items.emplace_back();
-        items.back().fused_ops = segment.ops;
-        for (Var* var : segment.outputs()) items.back().outputs.push_back(var);
+        Item item;
+        item.first_op = fused_ops.size();
+        item.op_count = segment.ops.size();
+        fused_ops.insert(fused_ops.end(), segment.ops.begin(), segment.ops.end());
+        item.first_output = fused_outputs.size();
+        for (Var* var : segment.outputs()) fused_outputs.push_back(var);
+        item.output_count = fused_outputs.size() - item.first_output;
+        items.push_back(item);
     }
     // The caller holds the graph lock.
     void apply() {
@@ -750,11 +759,14 @@ struct DeferredGraphWork {
             } else if (item.op) {
                 finish_unfused(item.op, outputs_bk);
             } else {
-                propagate_needed_flags(item.fused_ops, fused);
-                finish_fused_outputs(item.outputs);
+                propagate_needed_flags(fused_ops.data() + item.first_op, item.op_count, fused);
+                if (item.output_count)
+                    finish_fused_outputs(fused_outputs.data() + item.first_output, item.output_count);
             }
         }
         items.clear();
+        fused_ops.clear();
+        fused_outputs.clear();
         front = 0;
         lag_bytes = 0;
     }
@@ -907,7 +919,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             if (is_fused_op) {
                 fused_outputs_buf.clear();
                 for (Var* var : op->outputs()) fused_outputs_buf.push_back(var);
-                finish_fused_outputs(fused_outputs_buf);
+                finish_fused_outputs(fused_outputs_buf.data(), fused_outputs_buf.size());
             } else finish_unfused(op, outputs_bk);
             continue;
         }
@@ -937,6 +949,32 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         trace_op.named(op, is_fused_op,
                        requested_backend == BackendId::Cpu ? -1 : execution_device);
+        #if !defined(JT_CHECK_NAN) && !defined(JT_SYNC)
+        // A resident alias performs no compute, transfer, or driver call.
+        // Keep the ordinary runner for views that cross an allocator boundary.
+        if (storage_view && !save_mem && !keep_graph && !trace_py_var
+                && !profile_memory_enable && !graph_capture_recording
+                && requested_backend == execution_backend
+                && op->_inputs.size() == 1 && op->_outputs.size() == 1) {
+            Var* source = op->input(0);
+            Var* view = op->output(0);
+            const bool device_storage = execution_backend != BackendId::Cpu;
+            if (view->share_src == source && source->mem_ptr && source->allocator == allocator
+                    && allocator->is_cuda() == device_storage
+                    && (!device_storage || allocator->device() == execution_device)) {
+                CHECK(view->alloc(allocator)) << "Unable to allocate memory for" << view;
+                trace_op.allocated();
+                exe.last_is_cuda = device_storage;
+                if (on_worker) {
+                    deferred.finish(op);
+                    deferred.step();
+                } else {
+                    finish_unfused(op, outputs_bk);
+                }
+                continue;
+            }
+        }
+        #endif
         const bool need_launch_record = execution_backend != BackendId::Cpu
             || requested_backend != BackendId::Cpu
             || op->flag(OpFlags::_manual_device);
@@ -1195,7 +1233,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
             fused_outputs_buf.clear();
             for (Var* var : op->outputs()) fused_outputs_buf.push_back(var);
-            finish_fused_outputs(fused_outputs_buf);
+            finish_fused_outputs(fused_outputs_buf.data(), fused_outputs_buf.size());
             continue;
         }
         // Leave everything alive and re-runnable; see the `keep_graph` flag

@@ -234,6 +234,8 @@ def _effective_autocast_device():
     enabled device does -- which is what keeps ``torch.autocast("cuda")`` on a
     CPU-only build doing what the script asked for.
     """
+    if not _autocast_state.order:
+        return None
     running = _running_device_type()
     if _autocast_state.enabled.get(running):
         return running

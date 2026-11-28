@@ -102,7 +102,7 @@ PyObject* cublas_matmul_frontend(PyObject* a, PyObject* b,
     if (rank < 3 || rank != bs.size() || as[rank - 1] != bs[rank - 2]) Py_RETURN_NONE;
     for (int i = 0; i + 2 < rank; ++i)
         if (as[i] != bs[i]) Py_RETURN_NONE;
-    if (!kernel_selects_cublas_fp32("batched_matmul", provider)) {
+    if (!kernel_selects_cublas("batched_matmul", provider, ns_float32)) {
         if (PyErr_Occurred()) return nullptr;
         Py_RETURN_NONE;
     }

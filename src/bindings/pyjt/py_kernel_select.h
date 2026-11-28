@@ -2,6 +2,7 @@
 
 #include <Python.h>
 #include "core/common.h"
+#include "type/nano_string.h"
 
 namespace jittor {
 
@@ -28,9 +29,9 @@ void kernel_select_invalidate(PyObject* op_names);
 // Whether any backend has a registration under `op` (C++ callers).
 bool kernel_op_registered(const char* op);
 
-// A regular FP32 cuBLAS call can bypass the Python provider only when its
-// registered native rule owns selection for this backend.
-bool kernel_selects_cublas_fp32(const char* op, PyObject* provider);
+// The caller checks the operands' common CUDA placement and dtype. Returns
+// true only if the built-in registered provider would take that dtype.
+bool kernel_selects_cublas(const char* op, PyObject* provider, NanoString dtype);
 
 // Declares that the Python `supports` predicate `fn` answers what the named
 // native rule answers, so the loop below can evaluate the rule instead of

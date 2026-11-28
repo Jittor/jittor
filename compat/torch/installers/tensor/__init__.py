@@ -929,11 +929,11 @@ def _cat_grad_result(value, tensors):
 
 def _maybe_tag_rotate_half(result, tensors, dim):
     if (
-        isinstance(result, jt.Var)
+        (dim == -1 or dim == 3)
+        and isinstance(result, jt.Var)
         and result.ndim == 4
         and isinstance(tensors, (list, tuple))
         and len(tensors) == 2
-        and (dim == -1 or dim == 3)
     ):
         from jittor.ops.concatenation import _detect_rotate_half_source
         src = _detect_rotate_half_source(tensors, 3)

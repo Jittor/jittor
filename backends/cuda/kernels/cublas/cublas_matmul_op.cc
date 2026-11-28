@@ -154,7 +154,48 @@ void CublasMatmulOp::infer_shape() {
     }
 }
 
+void CublasMatmulOp::run() {
+    if (!c->num) return;
+    auto handle = cublas_bind_stream();
+    if (!a->num || !b->num) {
+        cudaStream_t stream;
+        checkCudaErrors(cublasGetStream(handle, &stream));
+        checkCudaErrors(cudaMemsetAsync(c->mem_ptr, 0, c->size, stream));
+        return;
+    }
+
+    int64 a_rows, a_cols, b_rows, b_cols;
+    flatten_2d(a->shape, a_rows, a_cols);
+    flatten_2d(b->shape, b_rows, b_cols);
+    const int64 n = trans_a ? a_cols : a_rows;
+    const int64 m = trans_a ? a_rows : a_cols;
+    const int64 k = trans_b ? b_rows : b_cols;
+    const auto dtype = a->dtype();
+    const auto mode = cublas_gemm_mode(dtype == ns_float16, dtype == ns_bfloat16, false);
+    const float alpha = 1.0f, beta = 0.0f;
+    LOGvvv << "cublas_matmul algo select:"
+        << "precision=" >> float32_precision_tier_name(mode.tier)
+        << "computeType=" >> cublas_compute_type_name(mode.compute)
+        << "algo=" >> cublas_gemm_algo_name(mode.algo);
+    checkCudaErrors(cublasGemmEx(handle,
+        trans_b ? CUBLAS_OP_T : CUBLAS_OP_N, trans_a ? CUBLAS_OP_T : CUBLAS_OP_N,
+        k, n, m, &alpha, b->mem_ptr, get_dtype(b->dtype()), b_cols,
+        a->mem_ptr, get_dtype(dtype), a_cols, &beta,
+        c->mem_ptr, get_dtype(c->dtype()), k, mode.compute, mode.algo));
+}
+
 void CublasMatmulOp::jit_prepare(JK& jk) {
+#if defined(IS_CUDA) && !defined(IS_ROCM) && !defined(IS_COREX)
+    // The cuBLAS ABI accepts opaque data pointers and runtime dtypes. Ordinary
+    // products can therefore use the same relay without forming a JIT key.
+    const auto dtype = a->dtype();
+    if (dtype == ns_float16 || dtype == ns_bfloat16) return;
+    if (dtype == ns_float32) {
+        const bool single_row = !trans_a && trans_b && a->num == a->shape[a->shape.size() - 1];
+        if (!single_row || !c->is_stop_grad() || float32_matmul_tier() != F32_HIGHEST)
+            return;
+    }
+#endif
     jk << "«T:" << a->dtype();
     if (c->dtype() != a->dtype()) jk << "«Tc:" << c->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');

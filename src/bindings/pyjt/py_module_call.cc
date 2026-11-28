@@ -422,10 +422,16 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     // `matmul_transpose` hands a batched input over flattened in place only
     // when its buffer is dense.
     if (rank > 2 && !a->is_contiguous()) return nullptr;
-    PyObjHolder zero(PyLong_FromLong(0)), one(PyLong_FromLong(1));
-    PyObjHolder call_args(PyTuple_Pack(4, x, weight, zero.obj, one.obj));
-    PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
-    if (kernel.obj != matmul_kernel) return nullptr;
+    const bool native_provider = no_grad && a->placement.explicit_backend
+        && a->placement.device.backend == BackendId::Cuda && a->placement == w->placement
+        && kernel_selects_cublas("matmul", matmul_kernel, a->dtype());
+    if (PyErr_Occurred()) return nullptr;
+    if (!native_provider) {
+        PyObjHolder zero(PyLong_FromLong(0)), one(PyLong_FromLong(1));
+        PyObjHolder call_args(PyTuple_Pack(4, x, weight, zero.obj, one.obj));
+        PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
+        if (kernel.obj != matmul_kernel) return nullptr;
+    }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
 }

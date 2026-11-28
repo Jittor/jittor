@@ -112,6 +112,12 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
 VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
                                     bool plain_row_softmax=false);
 
+// Built-in inference providers can share interned source across calls with
+// different inputs or extents without copying the Python source strings.
+// @pyjt(_cuda_inference_code)
+VarHolder* cuda_inference_code(NanoVector shape, NanoString dtype,
+                              vector<VarHolder*>&& inputs, PyObject* source, PyObject* header);
+
 // @pyjt(_bind_masked_row_softmax)
 void bind_masked_row_softmax(const string& source);
 
@@ -156,6 +162,11 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code);
 // not floating, a kernel is registered for "nn.gelu", or any step declines.
 // @pyjt(_fast_gelu)
 PyObject* fast_gelu(PyObject* x);
+
+// Build the CUDA half-precision SiLU fallback in one binding while keeping
+// its FP32 intermediate nodes available to the elementwise fuser.
+// @pyjt(_fast_silu)
+PyObject* fast_silu(PyObject* x);
 
 // Match a specified pending CodeOp before forwarding its inputs to a fusion.
 // @pyjt(_pending_cuda_code_is)
