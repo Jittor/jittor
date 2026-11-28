@@ -5,6 +5,7 @@ changing the compatibility semantics.
 """
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from functools import lru_cache
 from typing import List, Tuple, Union
 
 import jittor as jt
@@ -633,6 +634,13 @@ def segment_reduce(data, reduce="sum", *, lengths=None, **kw):
     return jt.concat(segs, dim=0)
 
 
+@lru_cache(maxsize=32)
+def _numpy_finfo_fields(dtype_name):
+    info = _np.finfo(_np.dtype(dtype_name))
+    return (float(info.min), float(info.max), float(info.eps),
+            float(info.tiny), float(info.resolution), info.bits)
+
+
 class finfo:
     def __init__(self, dt):
         # A range query computes nothing: resolve the name without demanding
@@ -651,14 +659,8 @@ class finfo:
             self.bits, self.dtype = (bits, ds)
             self.resolution = eps
             return
-        info = _np.finfo(_np.dtype(ds))
-        self.min = float(info.min)
-        self.max = float(info.max)
-        self.eps = float(info.eps)
-        self.tiny = float(info.tiny)
-        self.smallest_normal = float(info.tiny)
-        self.resolution = float(info.resolution)
-        self.bits = info.bits
+        self.min, self.max, self.eps, self.tiny, self.resolution, self.bits = _numpy_finfo_fields(ds)
+        self.smallest_normal = self.tiny
         self.dtype = ds
 
 
