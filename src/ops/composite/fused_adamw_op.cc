@@ -1,6 +1,7 @@
 #include "ops/composite/fused_adamw_op.h"
 #include "core/var.h"
 #include <algorithm>
+#include <cfloat>
 
 namespace jittor {
 
@@ -94,12 +95,18 @@ struct AdamwLaunch {
     // float tensors whose four pointers are 16-byte aligned and whose size is
     // a multiple of four: a thread moves a float4 of each at once.
     bool vector[kTensors];
+    bool skip_zero_moments[kTensors];
     int count;
 };
 
 struct AdamwStep {
     float step_size, correction, decay, beta1, beta2, eps;
 };
+
+__device__ __forceinline__ bool positive_zero(float4 value) {
+    return (__float_as_uint(value.x) | __float_as_uint(value.y)
+            | __float_as_uint(value.z) | __float_as_uint(value.w)) == 0;
+}
 
 // One element. The casts round through the parameter's type exactly where the
 // per-parameter path stores and reloads, so the two agree bit for bit.
@@ -122,7 +129,7 @@ __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float 
     // took 46 ms where its memory traffic needs 18.
     __shared__ float shared_step_size, shared_correction, shared_decay;
     __shared__ float shared_beta1, shared_beta2, shared_eps;
-    __shared__ bool shared_skip;
+    __shared__ bool shared_skip, shared_zero_update;
     if (threadIdx.x == 0) {
         // A two-element step carries the learning rate as well: a captured
         // step is replayed without the optimizer running, so whatever changes
@@ -145,6 +152,11 @@ __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float 
         shared_step_size = (float)(rate / (1.0 - ::pow((double)shared_beta1, n)));
         shared_correction = (float)sqrt(1.0 - ::pow((double)shared_beta2, n));
         shared_decay = 1.f - rate * decay;
+        shared_zero_update = shared_beta1 >= 0.f && shared_beta1 <= 1.f
+            && shared_beta2 >= 0.f && shared_beta2 <= 1.f
+            && isfinite(shared_step_size) && !signbit(shared_step_size)
+            && isfinite(shared_correction) && shared_correction >= FLT_MIN
+            && isfinite(shared_eps) && shared_eps >= FLT_MIN;
     }
     __syncthreads();
     if (shared_skip) return;
@@ -177,6 +189,15 @@ __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float 
             float4 pv = reinterpret_cast<float4*>(p)[i];
             float4 mv = reinterpret_cast<float4*>(m)[i];
             float4 vv = reinterpret_cast<float4*>(v)[i];
+            // A dense gradient can be zero over untouched regions. If both
+            // moments are also still +0, only the parameter decay is due.
+            if (launch.skip_zero_moments[t] && shared_zero_update &&
+                positive_zero(gv) && positive_zero(mv) && positive_zero(vv)) {
+                reinterpret_cast<float4*>(p)[i] = make_float4(
+                    pv.x * scalars.decay, pv.y * scalars.decay,
+                    pv.z * scalars.decay, pv.w * scalars.decay);
+                continue;
+            }
             adamw_element(scalars, gv.x, pv.x, mv.x, vv.x);
             adamw_element(scalars, gv.y, pv.y, mv.y, vv.y);
             adamw_element(scalars, gv.z, pv.z, mv.z, vv.z);
@@ -231,6 +252,13 @@ void FusedAdamwOp::jit_run() {
         launch.vector[c] = sizeof(T) == 4 && numel % 4 == 0
             && (((size_t)launch.p[c] | (size_t)launch.m[c] | (size_t)launch.v[c]
                  | (size_t)launch.g[c]) & 15) == 0;
+        auto disjoint = [numel](T* a, T* b) {
+            auto lhs = reinterpret_cast<uintptr_t>(a), rhs = reinterpret_cast<uintptr_t>(b);
+            const auto distance = lhs > rhs ? lhs - rhs : rhs - lhs;
+            return distance / sizeof(T) >= static_cast<uint64_t>(numel);
+        };
+        launch.skip_zero_moments[c] = launch.vector[c] && numel >= (1 << 20)
+            && disjoint(launch.p[c], launch.m[c]) && disjoint(launch.p[c], launch.v[c]);
         launch.first_block[c] = blocks;
         blocks += (int)need;
     }
