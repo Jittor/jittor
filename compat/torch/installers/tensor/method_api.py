@@ -1310,22 +1310,14 @@ def _var_numpy(self, *args, **kwargs):
 
 
 def _var_item(self):
-    """Read one scalar through an independent native host copy.
-
-    Native Var.item migrates its input storage to the host. A Torch scalar
-    read must preserve the original tensor and every alias on their device.
-    """
-    native = get_install_context(_owner.jt).state["tensor_native_api"]
-    item = native["_native_item"]
-    if self.numel() != 1:
-        return item(self)
-    if _owner.jt.flags.keep_graph == 2:
+    """Read one scalar while keeping the tensor and its aliases on their device."""
+    if _owner.jt.flags.keep_graph == 2 and self.numel() == 1:
         from jittor._runtime.step_capture import guarded_scalar
 
         scalar = guarded_scalar(self)
         if scalar is not None:
             return scalar
-    return item(native["_native_cpu_copy"](self))
+    return self._item_without_migration()
 
 
 def _var_cpu(self, *a, **k):

@@ -735,6 +735,8 @@ public:
      */
     // @pyjt(item)
     ItemData item();
+    // @pyjt(_item_without_migration)
+    ItemData item_without_migration();
     ItemData read_item(bool migrate);
 
     // @pyjt(_step_guarded_scalar)

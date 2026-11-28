@@ -265,8 +265,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
     _owner = _import_module(__package__)
     _bind_native_fast_paths(_owner.jt)
     _NativeVar = _owner.jt.Var
-    _native_item = _type_attribute(_NativeVar, "item")
-    _native_cpu_copy = _type_attribute(_NativeVar, "cpu")
     _install_expand_shape_adapter(Var)
     _install_expand_as_grad_adapter(Var)
     _native_operators = {name: getattr(Var, name, None)
@@ -788,8 +786,6 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
         '_native_norm': locals().get('_native_norm'),
         '_native_numpy': locals().get('_native_numpy'),
         '_native_array': locals().get('_native_array'),
-        '_native_item': _native_item,
-        '_native_cpu_copy': _native_cpu_copy,
         '_native_requires_grad': locals().get('_native_requires_grad'),
         '_native_inplace_version': _type_attribute(Var, 'inplace_version'),
         '_native_squeeze': locals().get('_native_squeeze'),

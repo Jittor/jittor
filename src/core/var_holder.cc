@@ -2413,6 +2413,11 @@ ItemData VarHolder::item() {
     return read_item(true);
 }
 
+ItemData VarHolder::item_without_migration() {
+    note_readback();
+    return read_item(false);
+}
+
 vector<uint64> VarHolder::step_guarded_storage_version() {
     if (!var->is_finished() || !var->mem_ptr || !var->allocator
             || dynamic_cast<ForeignAllocator*>(var->allocator)) return {};
