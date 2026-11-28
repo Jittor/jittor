@@ -1224,6 +1224,24 @@ class TestNativeModuleDispatch(unittest.TestCase):
         with torch.no_grad(), self.assertRaises(Exception):
             torch.nn.Sequential(torch.nn.LayerNorm(16).cuda())(torch.randn(3, 8, device="cuda"))
 
+    @unittest.skipUnless(_CUDA_KERNELS, "the native LayerNorm build is CUDA's")
+    def test_bias_free_layer_norm_at_inference(self):
+        from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
+        from jittor.nn.functional import normalization
+
+        for rows in (4, 1024):
+            with self.subTest(rows=rows), torch.no_grad():
+                norm = torch.nn.LayerNorm(32, bias=False).cuda()
+                norm.weight.fill_(0.75)
+                outer = torch.nn.Sequential(norm)
+                x = torch.arange(rows * 32, device="cuda", dtype=torch.float32).view(rows, 32)
+                outer(x)
+                expected = _layer_norm_no_grad_cuda(x, (32,), norm.weight, 0.0, norm.eps)
+                with _refusing(normalization, "_layer_norm_no_grad_cuda"):
+                    actual = outer(x)
+                self.assertTrue(actual.is_cuda)
+                np.testing.assert_array_equal(actual.cpu().numpy(), expected.cpu().numpy())
+
 
 class TestNativeGelu(unittest.TestCase):
     def test_the_native_build_matches_the_python_one(self):

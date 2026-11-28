@@ -1238,24 +1238,9 @@ def _layer_norm_no_grad_cuda(
             y._jt_plain_ln = (x, eps_value)
         return y
     if has_weight and not has_bias:
-        offset_value = float(bias)
-        offset_literal = f"{offset_value:.9e}f"
-        if _warp_rows(x, hidden):
-            affine = ("in1_type* weight, ",
-                      f"* static_cast<float>(weight[j]) + {offset_literal}",
-                      f"* static_cast<double>(weight[j]) + {offset_value!r}")
-            y = jt.code(
-                x.shape, x.dtype, [x, weight],
-                cuda_src=_warp_rows_source(hidden, affine)
-                + _warp_rows_launch(hidden, "in0_p, in1_p, out0_p"),
-                data={"eps": eps_value})
-            return _stop_grad_outputs(y)
-        y = jt.code(
-            x.shape, x.dtype, [x, weight],
-            cuda_src=_block_rows_source(
-                hidden, has_bias=False,
-                offset_literal=offset_literal, offset_value=offset_value),
-            data={"eps": eps_value})
+        y = jt.code(x.shape, x.dtype, [x, weight],
+                    cuda_src=_weight_only_source(hidden, _warp_rows(x, hidden), float(bias)),
+                    data={"eps": eps_value})
         return _stop_grad_outputs(y)
     nchw_src = _nchw_physical(x)
     if nchw_src is not None:
@@ -1268,6 +1253,18 @@ def _layer_norm_no_grad_cuda(
                 cuda_src=_affine_source(hidden, _warp_rows(x, hidden)),
                 data={"eps": eps_value})
     return _stop_grad_outputs(y)
+
+
+def _weight_only_source(hidden, warp, offset_value=0.0):
+    offset_literal = f"{offset_value:.9e}f"
+    if warp:
+        affine = ("in1_type* weight, ",
+                  f"* static_cast<float>(weight[j]) + {offset_literal}",
+                  f"* static_cast<double>(weight[j]) + {offset_value!r}")
+        return (_warp_rows_source(hidden, affine)
+                + _warp_rows_launch(hidden, "in0_p, in1_p, out0_p"))
+    return _block_rows_source(hidden, has_bias=False,
+                              offset_literal=offset_literal, offset_value=offset_value)
 
 
 @functools.lru_cache(maxsize=256)

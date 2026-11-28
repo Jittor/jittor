@@ -185,8 +185,9 @@ std::map<int64, string> rms_sources;
 PyObject* layer_norm_execute = nullptr;
 PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
+PyObject* layer_norm_weight_only_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
-std::map<std::pair<int64, bool>, string> layer_norm_sources;
+std::map<std::tuple<int64, bool, bool>, string> layer_norm_sources;
 
 // Keep fixed dictionary keys, never the values: hooks and module attributes
 // may change between calls and must be read from the live dictionary.
@@ -1112,7 +1113,7 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     return to_py_object<VarHolder*>(out.release());
 }
 
-// `nn.LayerNorm` with a weight and a bias on an inference call: the operator
+// Affine `nn.LayerNorm` on an inference call: the operator
 // `_layer_norm_no_grad_cuda` builds, when the dispatcher picks it -- asked with
 // the arguments `layer_norm` asks with, which its native rule answers without
 // a Python predicate. Anything else -- a shape `layer_norm` rejects, a call that
@@ -1127,9 +1128,10 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     PyObject* affine = PyDict_GetItemString(dict, "elementwise_affine");
     PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* bias = PyDict_GetItem(dict, name_bias());
+    const bool has_bias = bias && is_var(bias);
     if (!shape || !PyTuple_Check(shape) || PyTuple_GET_SIZE(shape) != 1 || affine != Py_True
             || !eps || !PyFloat_Check(eps) || !weight || !is_var(weight)
-            || !bias || !is_var(bias))
+            || (!has_bias && bias != Py_None))
         return nullptr;
     PyObject* size = PyTuple_GET_ITEM(shape, 0);
     if (!PyLong_CheckExact(size)) return nullptr;
@@ -1138,25 +1140,35 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
     if (PyErr_Occurred()) { PyErr_Clear(); return nullptr; }
     Var* a = GET_RAW_PTR(VarHolder, x)->var;
     Var* gamma = GET_RAW_PTR(VarHolder, weight)->var;
-    Var* beta = GET_RAW_PTR(VarHolder, bias)->var;
+    Var* beta = has_bias ? GET_RAW_PTR(VarHolder, bias)->var : nullptr;
     int rank = a->shape.size();
-    if (!rank || a->shape[rank - 1] != hidden || a->num < 0) return nullptr;
+    if (hidden <= 0 || !rank || a->shape[rank - 1] != hidden || a->num < 0) return nullptr;
     if (gamma->shape.size() != 1 || gamma->shape[0] != hidden
-            || beta->shape.size() != 1 || beta->shape[0] != hidden)
+            || (beta && (beta->shape.size() != 1 || beta->shape[0] != hidden)))
         return nullptr;
-    if (!no_grad && (!a->is_stop_grad() || !gamma->is_stop_grad() || !beta->is_stop_grad()))
+    if (!no_grad && (!a->is_stop_grad() || !gamma->is_stop_grad()
+            || (beta && !beta->is_stop_grad())))
         return nullptr;
-    PyObjHolder call_args(PyTuple_Pack(5, x, shape, weight, bias, eps));
+    // The functional normalizes an absent bias before running the selector.
+    PyObjHolder zero_bias;
+    if (!has_bias) {
+        zero_bias.obj = PyFloat_FromDouble(0.0);
+        if (!zero_bias.obj) return nullptr;
+    }
+    PyObjHolder call_args(PyTuple_Pack(5, x, shape, weight, has_bias ? bias : zero_bias.obj, eps));
+    if (!call_args.obj) return nullptr;
     PyObjHolder chosen(kernel_select(layer_norm_name, call_args.obj, nullptr));
     if (!chosen.obj || chosen.obj != layer_norm_impl) {
         if (!chosen.obj) PyErr_Clear();
         return nullptr;
     }
     bool warp = hidden <= 1024 && a->num / hidden >= 1024;
-    auto key = std::make_pair(hidden, warp);
+    auto key = std::make_tuple(hidden, warp, has_bias);
     auto found = layer_norm_sources.find(key);
     if (found == layer_norm_sources.end()) {
-        PyObjHolder src(PyObject_CallFunction(layer_norm_source_fn, "LO",
+        PyObject* source_fn = has_bias ? layer_norm_source_fn : layer_norm_weight_only_source_fn;
+        if (!source_fn) return nullptr;
+        PyObjHolder src(PyObject_CallFunction(source_fn, "LO",
             (long long)hidden, warp ? Py_True : Py_False));
         if (!src.obj) return nullptr;
         Py_ssize_t length;
@@ -1165,7 +1177,8 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
         found = layer_norm_sources.emplace(key, string(text, length)).first;
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma, beta},
+    auto inputs = beta ? vector<Var*>{a, gamma, beta} : vector<Var*>{a, gamma};
+    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), move(inputs),
         "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
@@ -1344,6 +1357,7 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(layer_norm_execute, "layer_norm_execute");
     part(layer_norm_impl, "layer_norm_inference");
     part(layer_norm_source_fn, "layer_norm_source");
+    part(layer_norm_weight_only_source_fn, "layer_norm_weight_only_source");
     if (!layer_norm_name) layer_norm_name = PyUnicode_InternFromString("nn.layer_norm.inference");
     layer_norm_sources.clear();
     part(bn_coefficients_key, "bn_coefficients_key");
