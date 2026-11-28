@@ -137,6 +137,10 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code);
 // @pyjt(_fast_gelu)
 PyObject* fast_gelu(PyObject* x);
 
+// Match a specified pending CodeOp before forwarding its inputs to a fusion.
+// @pyjt(_pending_cuda_code_is)
+bool pending_cuda_code_is(VarHolder* value, const string& source, const string& header);
+
 // `tensor.view(*shape)` / `reshape(*shape)` of a dense tensor, shape given as
 // ints or one tuple or list of them: the reshape op, recorded as a storage
 // view of `self`, as `jittor.view` does. None for anything else.

@@ -273,6 +273,13 @@ def _torch_var_sum(self, *a, **k):
         raise IndexError(
             "Dimension out of range (expected to be in range of [-1, 0], "
             "but got %d)" % int(dims[0]))
+    if out is None and dt is None and self.ndim == 4 and jt.flags.no_grad:
+        if (a == (-1,) and not k) or (not a and k == {"dim": -1}):
+            from jittor.backends.cuda.kernels.nn.grid_sample_cuda import try_reduce_sampled_grids
+
+            fused = try_reduce_sampled_grids(self)
+            if fused is not None:
+                return fused
     result = _autocast_fp32_call(_orig_var_sum, self, *a, eligible=dt is None and out is None, **k)
     if dt is not None and _jittor_dtype_name(result.dtype) != _dtype_to_str(dt):
         result = result.cast(_dtype_to_str(dt))

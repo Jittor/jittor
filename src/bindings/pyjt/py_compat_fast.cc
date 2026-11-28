@@ -24,6 +24,14 @@
 
 namespace jittor {
 
+bool pending_cuda_code_is(VarHolder* value, const string& source, const string& header) {
+    auto* var = value->var;
+    auto* op = var->input();
+    if (var->is_finished() || !op || !op->is_op(get_op_id("code"))) return false;
+    const auto* code = static_cast<const CodeOp*>(op);
+    return code->cuda_src == source && code->cuda_header == header;
+}
+
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
 

@@ -155,9 +155,7 @@ def _stack_no_grad_cuda_fast(xs, dim, cpu_source=None):
     if _output_requires_grad(xs):
         return None
     n = len(xs)
-    if n not in (2, 3):
-        return None
-    if not xs:
+    if not 2 <= n <= 4:
         return None
     for x in xs:
         if not isinstance(x, jt.Var) or getattr(x, "_jittor_torch_force_cpu", False):
