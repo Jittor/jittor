@@ -254,7 +254,8 @@ def _torch_setitem(self, slices, value):
     # without an autograd edge, so the vision tower and connector receive no
     # gradients. Torch's masked-scatter expresses the same update as ``where``
     # and is differentiable with respect to ``value``.
-    if (isinstance(slices, _NativeVar)
+    if (not _owner.jt.flags.no_grad
+            and isinstance(slices, _NativeVar)
             and _jittor_dtype_name(slices.dtype) in ("bool", "uint8")
             and isinstance(value, _NativeVar)
             and len(slices.shape) < len(self.shape)

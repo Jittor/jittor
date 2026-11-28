@@ -228,7 +228,11 @@ class TestCompileReplayCuda(_Case, unittest.TestCase):
             self.assertEqual(compiled(values).item(), 9217)
             self.assertEqual(compiled.stats["captured"], 2)
 
-    def apply(values, mask):
+    def test_no_grad_boolean_row_assignment_replays(self):
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            update = torch.tensor([[7., 8.], [9., 10.]], device=self.device)
+
+            def apply(values, mask):
                 result = values + 1
                 result[mask, :] = update
                 return result
