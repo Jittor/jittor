@@ -621,7 +621,7 @@ __global__ void __launch_bounds__(SHORT_THREADS) forward_short(
             VecRow<D, DPT>::load(kb[k0 + c], lane, k_al, kv);
             float dot = 0.f;
             #pragma unroll
-            for (int i = 0; i < DPT; ++i) dot += qv[i] * kv[i];
+            for (int i = 0; i < DPT; ++i) dot = fmaf(qv[i], kv[i], dot);
             float sc = warp_sum(dot);
             if (MASK == 2) sc += bias[c];
             s[c] = sc;
@@ -652,7 +652,7 @@ __global__ void __launch_bounds__(SHORT_THREADS) forward_short(
                 float vv[DPT];
                 VecRow<D, DPT>::load(vb[k0 + c], lane, v_al, vv);
                 #pragma unroll
-                for (int i = 0; i < DPT; ++i) acc[i] += p[c] * vv[i];
+                for (int i = 0; i < DPT; ++i) acc[i] = fmaf(p[c], vv[i], acc[i]);
             }
         }
     }
