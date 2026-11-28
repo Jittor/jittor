@@ -191,8 +191,10 @@ PyObject* layer_norm_execute = nullptr;
 PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
 PyObject* layer_norm_weight_only_source_fn = nullptr;
+PyObject* residual_layer_norm_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
 std::map<std::tuple<int64, bool, bool>, const string*> layer_norm_sources;
+std::map<std::tuple<int64, bool, bool>, std::pair<string, string>> residual_layer_norm_sources;
 
 // Keep fixed dictionary keys, never the values: hooks and module attributes
 // may change between calls and must be read from the live dictionary.
@@ -1139,6 +1141,100 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
     return to_py_object<VarHolder*>(out.release());
 }
 
+Op* pending_binary(Var* value, NanoString operation) {
+    auto* op = value->is_finished() ? nullptr : value->input();
+    return op && op->is_op(op_ids::binary()) && op->ns == operation
+        && op->_inputs.size() == 2 ? op : nullptr;
+}
+
+Var* scalar_bound(Var* bound) {
+    while (auto* op = bound->is_finished() ? nullptr : bound->input()) {
+        if (!op->is_op(op_ids::broadcast_to()) || op->_inputs.size() != 1) break;
+        bound = op->input(0);
+    }
+    return bound->num == 1 ? bound : nullptr;
+}
+
+PyObject* residual_layer_norm(PyObject* x, Var* gamma, Var* beta, int64 hidden, double eps) {
+    if (!residual_layer_norm_source_fn || !beta || !no_grad || keep_graph != 2
+            || accelerator_backend_id() != BackendId::Cuda || hidden < 128
+            || hidden > 4096 || hidden % 8)
+        return nullptr;
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    Var* residual = holder->var;
+    // The fused op supplies the residual for subsequent readers. Keep every
+    // existing reader and visible storage alias on the original graph.
+    if (residual->holder != holder || holder->view || holder->views || holder->capture_record
+            || residual->is_finished() || residual->mem_ptr || residual->share_src
+            || residual->share_next || !residual->_outputs.empty()
+            || residual->liveness.backward.count() != 1 || residual->num <= 0
+            || (hidden <= 1024 && residual->num / hidden >= 1024))
+        return nullptr;
+    auto version = residual->peek_storage_version();
+    if (version && (version->value.load(std::memory_order_relaxed)
+            || version->externally_visible.load(std::memory_order_relaxed)))
+        return nullptr;
+
+    auto dtype = residual->dtype();
+    Var* sum = residual;
+    Var* lower = nullptr;
+    Var* upper = nullptr;
+    if (auto* minimum = pending_binary(residual, ns_minimum)) {
+        auto* maximum = pending_binary(minimum->input(1), ns_maximum);
+        if (!maximum) return nullptr;
+        lower = scalar_bound(maximum->input(0));
+        upper = scalar_bound(minimum->input(0));
+        if (!lower || !upper || lower->dtype() != dtype || upper->dtype() != dtype)
+            return nullptr;
+        sum = maximum->input(1);
+    }
+    auto* addition = pending_binary(sum, ns_add);
+    if (!addition || sum->dtype() != dtype || sum->shape != residual->shape)
+        return nullptr;
+    Var* left = addition->input(0);
+    Var* right = addition->input(1);
+    for (Var* value : {left, right, gamma, beta})
+        if (value->dtype() != dtype || !value->is_contiguous()) return nullptr;
+    if (left->shape != residual->shape || right->shape != residual->shape)
+        return nullptr;
+
+    bool narrow = dtype != ns_float32;
+    auto key = std::make_tuple(hidden, lower != nullptr, narrow);
+    auto found = residual_layer_norm_sources.find(key);
+    if (found == residual_layer_norm_sources.end()) {
+        PyObjHolder source(PyObject_CallFunction(residual_layer_norm_source_fn, "LOO",
+            static_cast<long long>(hidden), lower ? Py_True : Py_False,
+            narrow ? Py_True : Py_False));
+        if (!source.obj || !PyTuple_Check(source.obj) || PyTuple_GET_SIZE(source.obj) != 2)
+            return nullptr;
+        const char* header = PyUnicode_AsUTF8(PyTuple_GET_ITEM(source.obj, 0));
+        const char* launch = PyUnicode_AsUTF8(PyTuple_GET_ITEM(source.obj, 1));
+        if (!header || !launch) return nullptr;
+        found = residual_layer_norm_sources.emplace(key, std::make_pair(header, launch)).first;
+    }
+
+    static auto make_code_multi = op_constructor<vector<VarPtr>, vector<NanoVector>&&,
+        vector<NanoString>&&, vector<Var*>&&, string&&, vector<string>&&, string&&,
+        string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+    vector<Var*> inputs{left, right, gamma, beta};
+    if (lower) {
+        inputs.push_back(lower);
+        inputs.push_back(upper);
+    }
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    auto outputs = make_code_multi({residual->shape, residual->shape}, {dtype, dtype},
+        move(inputs), "", {}, "", string(found->second.second), {}, string(found->second.first),
+        {{"eps", eps}}, "cuda");
+    unique_ptr<VarHolder> normalized(new VarHolder(move(outputs[0])));
+    normalized->stop_grad();
+    PyObject* result = to_py_object<VarHolder*>(normalized.release());
+    if (!result) return nullptr;
+    VarHolder replacement(move(outputs[1]));
+    replacement.var->set_storage_version(move(version));
+    holder->swap(&replacement);
+    return result;
+}
+
 // Affine `nn.LayerNorm` on an inference call: the operator
 // `_layer_norm_no_grad_cuda` builds, when the dispatcher picks it -- asked with
 // the arguments `layer_norm` asks with, which its native rule answers without
@@ -1188,6 +1284,8 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
         if (!chosen.obj) PyErr_Clear();
         return nullptr;
     }
+    PyObject* fused = residual_layer_norm(x, gamma, beta, hidden, epsilon);
+    if (fused || PyErr_Occurred()) return fused;
     bool warp = hidden <= 1024 && a->num / hidden >= 1024;
     auto key = std::make_tuple(hidden, warp, has_bias);
     auto found = layer_norm_sources.find(key);
@@ -1378,8 +1476,10 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
     part(layer_norm_impl, "layer_norm_inference");
     part(layer_norm_source_fn, "layer_norm_source");
     part(layer_norm_weight_only_source_fn, "layer_norm_weight_only_source");
+    part(residual_layer_norm_source_fn, "residual_layer_norm_source");
     if (!layer_norm_name) layer_norm_name = PyUnicode_InternFromString("nn.layer_norm.inference");
     layer_norm_sources.clear();
+    residual_layer_norm_sources.clear();
     part(bn_coefficients_key, "bn_coefficients_key");
     if (!conv2d_name) conv2d_name = PyUnicode_InternFromString("conv2d");
     if (!depthwise_kwargs) {

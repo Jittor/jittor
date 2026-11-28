@@ -1299,6 +1299,143 @@ def _weight_only_source(hidden, warp, offset_value=0.0):
                               offset_literal=offset_literal, offset_value=offset_value)
 
 
+@functools.lru_cache(maxsize=128)
+def _residual_layer_norm_source(hidden, clipped, narrow):
+    pack = 8 if narrow else 4
+    vectors, threads, warps = _ln_vec_threads(hidden, pack)
+    clipping = (
+        "const float lower = float(in4_p[0]), upper = float(in5_p[0]);"
+        if clipped else ""
+    )
+    clamp_value = """
+                value = isnan(lower) || value < lower ? lower : value;
+                value = isnan(upper) || value > upper ? upper : value;
+    """ if clipped else ""
+    bound_parameters = ", const in4_type* in4_p, const in5_type* in5_p" if clipped else ""
+    bounds = ", in4_p, in5_p" if clipped else ""
+    accumulation = "sum += value;" if narrow else ""
+    vector_sum = "" if narrow else "sum += cached[i][0] + cached[i][1] + cached[i][2] + cached[i][3];"
+    header = f"""
+    namespace jittor {{
+    template<class Acc>
+    __device__ __forceinline__ Acc residual_ln_sum(Acc value, Acc* scratch) {{
+        for (int stride = 16; stride > 0; stride >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, stride);
+        const int lane = threadIdx.x & 31;
+        if ({warps} == 1)
+            return __shfl_sync(0xffffffff, value, 0);
+        if (lane == 0) scratch[threadIdx.x >> 5] = value;
+        __syncthreads();
+        value = lane < {warps} ? scratch[lane] : Acc(0);
+        for (int stride = 16; stride > 0; stride >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, stride);
+        return __shfl_sync(0xffffffff, value, 0);
+    }}
+
+    __global__ __launch_bounds__({threads}) static void residual_layer_norm(
+            const in0_type* left, const in1_type* right, const in2_type* weight,
+            const in3_type* bias, out0_type* output, out1_type* residual,
+            double eps{bound_parameters}) {{
+        constexpr int vecs = {vectors}, pack = {pack}, threads = {threads};
+        constexpr int per_thread = (vecs + threads - 1) / threads;
+        const int64_t first = int64_t(blockIdx.x) * {hidden};
+        const uint4* left_vec = reinterpret_cast<const uint4*>(left + first);
+        const uint4* right_vec = reinterpret_cast<const uint4*>(right + first);
+        uint4* residual_vec = reinterpret_cast<uint4*>(residual + first);
+        uint4* output_vec = reinterpret_cast<uint4*>(output + first);
+        __shared__ float sums[{warps}], variances[{warps}];
+        __shared__ double wide_sums[{warps}], wide_variances[{warps}];
+        float cached[per_thread][pack];
+        float sum = 0.0f;
+        {clipping}
+        #pragma unroll
+        for (int i = 0; i < per_thread; ++i) {{
+            const int v = threadIdx.x + i * threads;
+            if (v >= vecs) break;
+            uint4 a, b;
+            if (((reinterpret_cast<uintptr_t>(left) | reinterpret_cast<uintptr_t>(right)) & 15) == 0) {{
+                a = left_vec[v];
+                b = right_vec[v];
+            }} else {{
+                auto* av = reinterpret_cast<in0_type*>(&a);
+                auto* bv = reinterpret_cast<in1_type*>(&b);
+                #pragma unroll
+                for (int k = 0; k < pack; ++k) {{
+                    av[k] = left[first + v * pack + k];
+                    bv[k] = right[first + v * pack + k];
+                }}
+            }}
+            const auto* av = reinterpret_cast<const in0_type*>(&a);
+            const auto* bv = reinterpret_cast<const in1_type*>(&b);
+            uint4 result;
+            auto* values = reinterpret_cast<out1_type*>(&result);
+            #pragma unroll
+            for (int k = 0; k < pack; ++k) {{
+                float value = float(in0_type(float(av[k]) + float(bv[k])));
+                {clamp_value}
+                values[k] = out1_type(value);
+                cached[i][k] = value;
+                {accumulation}
+            }}
+            {vector_sum}
+            residual_vec[v] = result;
+        }}
+        const float mean = residual_ln_sum(sum, sums) / {hidden}.0f;
+        float variance = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < per_thread; ++i) {{
+            if (threadIdx.x + i * threads >= vecs) break;
+            #pragma unroll
+            for (int k = 0; k < pack; ++k) {{
+                const float centered = cached[i][k] - mean;
+                variance += centered * centered;
+            }}
+        }}
+        variance = residual_ln_sum(variance, variances);
+        if (isfinite(variance)) {{
+            const float inv_std = rsqrtf(variance / {hidden}.0f + float(eps));
+            #pragma unroll
+            for (int i = 0; i < per_thread; ++i) {{
+                const int v = threadIdx.x + i * threads;
+                if (v >= vecs) break;
+                uint4 result;
+                auto* values = reinterpret_cast<out0_type*>(&result);
+                #pragma unroll
+                for (int k = 0; k < pack; ++k) {{
+                    const int j = v * pack + k;
+                    values[k] = out0_type((cached[i][k] - mean) * inv_std * float(weight[j]) + float(bias[j]));
+                }}
+                output_vec[v] = result;
+            }}
+        }} else {{
+            __syncthreads();
+            double double_sum = 0.0;
+            for (int j = threadIdx.x; j < {hidden}; j += threads)
+                double_sum += double(residual[first + j]);
+            const double double_mean = residual_ln_sum(double_sum, wide_sums) / {hidden}.0;
+            double double_var = 0.0;
+            for (int j = threadIdx.x; j < {hidden}; j += threads) {{
+                const double centered = double(residual[first + j]) - double_mean;
+                double_var += centered * centered;
+            }}
+            double_var = residual_ln_sum(double_var, wide_variances);
+            const double inv_std = 1.0 / sqrt(double_var / {hidden}.0 + eps);
+            for (int j = threadIdx.x; j < {hidden}; j += threads) {{
+                const double centered = double(residual[first + j]) - double_mean;
+                output[first + j] = out0_type(centered * inv_std * double(weight[j]) + double(bias[j]));
+            }}
+        }}
+    }}
+    }} // namespace jittor
+    """
+    source = f"""
+    residual_layer_norm<<<in0->num / {hidden}, {threads}>>>(
+        in0_p, in1_p, in2_p, in3_p, out0_p, out1_p, data["eps"]{bounds});
+    CHECK(cudaGetLastError() == cudaSuccess);
+    """
+    return header, source
+
+
 @functools.lru_cache(maxsize=256)
 def _affine_source_cached(hidden, warp):
     if warp:
