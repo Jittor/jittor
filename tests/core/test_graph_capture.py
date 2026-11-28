@@ -75,6 +75,42 @@ class TestGraphCapture(unittest.TestCase):
     def test_supported_on_cuda(self):
         self.assertTrue(jt.graph_capture_supported())
 
+    def test_capture_between_worker_batches_preserves_stream_order(self):
+        from _helpers.child_process import run_child_script
+
+        result = run_child_script(r"""
+import numpy as np
+import jittor as jt
+
+with jt.flag_scope(use_cuda=1, async_execution=1, auto_graph_replay=0,
+                   auto_flush_ops=1, async_flush_ops=1, async_min_caller_us=0), jt.no_grad():
+    x = jt.ones((128, 128))
+    x.sync()
+    before = jt.core.async_exec_batches()
+    inputs = [jt.matmul(x, x) for _ in range(4)]
+    jt.sync_all(True)
+    assert jt.core.async_exec_batches() > before
+
+    with jt.flag_scope(auto_flush_ops=0):
+        y = jt.matmul(inputs[-1], x)
+        assert jt.core.graph_capture_begin()
+        try:
+            jt.sync([y], False, False)
+        finally:
+            graph = jt.core.graph_capture_end()
+    assert graph
+    try:
+        jt.core.graph_launch(graph)
+        before = jt.core.async_exec_batches()
+        outputs = [jt.matmul(y, x) for _ in range(4)]
+        jt.sync_all(True)
+        assert jt.core.async_exec_batches() > before
+        np.testing.assert_array_equal(outputs[-1].numpy(), np.full((128, 128), 128**3))
+    finally:
+        jt.core.graph_release(graph)
+""", timeout=120, text=True, merge_stderr=True, without_torch_mode=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     def test_a_recorded_replay_answers_exactly_like_eager(self):
         replay = graph_replay(self.model)
         for x in self.feed:
@@ -86,6 +122,27 @@ class TestGraphCapture(unittest.TestCase):
         # it has to have been used -- otherwise this test proves nothing about
         # graphs at all and would keep passing if recording never happened.
         self.assertGreater(replay.stats["graph"], 0)
+
+    def test_float32_linear_with_large_contraction_replays(self):
+        rng = np.random.default_rng(47)
+        matrix = rng.standard_normal((768, 3072), dtype=np.float32) / 8
+        inputs = [rng.standard_normal((2, 72, 3072), dtype=np.float32) / 8 for _ in range(2)]
+        weight64 = matrix.astype(np.float64)
+        reference = [x.astype(np.float64) @ weight64.T for x in inputs]
+        with jt.no_grad(), jt.runtime.scope(auto_graph_replay=0, float32_matmul_precision="highest",
+                                            use_tensorcore=0, cuda_allow_tf32=0):
+            weight = jt.array(matrix)
+            feed = [jt.array(x) for x in inputs]
+            jt.sync([weight, *feed], True)
+            replay = graph_replay(lambda x: nn.linear(x, weight))
+            for index in range(8):
+                slot = index % len(feed)
+                output = replay(feed[slot])
+                output.sync()
+                self.assertEqual(output.location(), "device")
+                self.assertEqual(output.dtype, "float32")
+                np.testing.assert_allclose(output.numpy(), reference[slot], atol=2e-5, rtol=3e-5)
+            self.assertGreater(replay.stats["graph"], 0)
 
     def test_each_input_gets_its_own_answer(self):
         # The failure this rules out is the loudest-looking and the most

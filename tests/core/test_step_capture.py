@@ -598,6 +598,44 @@ class TestStepCaptureCuda(TestStepCapture):
             self.assertTrue(jt.core._try_stage_cuda_step_inputs([second], [source]))
             np.testing.assert_array_equal(second.numpy(), np.arange(8) + 20)
 
+    def test_cuda_training_replay_stages_inputs_with_prologue(self):
+        weights = jt.array([1., 2.]).start_grad()
+        prologue_calls = []
+        staged = []
+        stage_inputs = jt.core._try_stage_cuda_step_inputs
+
+        def observe_staging(*args):
+            result = stage_inputs(*args)
+            if result:
+                staged.append(len(prologue_calls))
+            return result
+
+        def step(left, right):
+            step_capture.on_replay(lambda: prologue_calls.append(True))
+            loss = (weights * left + right).sum()
+            weights.update(weights - jt.grad(loss, weights) * .125)
+            return loss.detach()
+
+        feeds = [(jt.array([float(index), 2.]).stop_grad(),
+                  jt.array([3., float(index)]).stop_grad()) for index in range(1, 9)]
+        jt.sync([value for pair in feeds for value in pair], False, False)
+        runner = jt.capture_step(step)
+        expected_weights = np.array([1., 2.], dtype=np.float32)
+        try:
+            jt.core._try_stage_cuda_step_inputs = observe_staging
+            for index, (left, right) in enumerate(feeds, 1):
+                inputs = np.array([float(index), 2.], dtype=np.float32)
+                output = runner(left, right)
+                self.assertAlmostEqual(output.item(), (expected_weights * inputs).sum() + 3 + index)
+                expected_weights -= inputs * .125
+            self.assertGreater(runner.stats['graph'], 0)
+            self.assertEqual(len(staged), runner.stats['graph'])
+            self.assertTrue(all(call > 0 for call in staged))
+            np.testing.assert_array_equal(weights.numpy(), expected_weights)
+        finally:
+            jt.core._try_stage_cuda_step_inputs = stage_inputs
+            runner.invalidate()
+
     def test_cuda_input_staging_materializes_only_independent_sources(self):
         with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, auto_flush_ops=0,
                                          async_flush_ops=0, backend_fallback="error"):

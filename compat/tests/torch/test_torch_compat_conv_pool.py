@@ -472,6 +472,28 @@ class TestAdaptivePool(Base):
 # nn.Conv2d / nn.MaxPool2d / nn.AvgPool2d module forward
 # ---------------------------------------------------------------------------
 class TestModuleForward(Base):
+    def test_conv_transpose1d_reset_parameters(self):
+        def body(dev):
+            layer = torch.nn.ConvTranspose1d(4, 8, 3, stride=(2,), padding=1,
+                                              output_padding=1, groups=2)
+            self.assertEqual(layer.kernel_size, (3,))
+            self.assertEqual(layer.stride, (2,))
+            weight, bias = layer.weight, layer.bias
+            with torch.no_grad():
+                weight.zero_()
+                bias.zero_()
+            layer.reset_parameters()
+            self.assertIs(layer.weight, weight)
+            self.assertIs(layer.bias, bias)
+            bound = 1 / math.sqrt(12)
+            for param in (weight, bias):
+                values = param.numpy()
+                self.assertTrue(np.any(values != 0), msg=dev)
+                self.assertLessEqual(np.abs(values).max(), bound)
+            self.assertEqual(tuple(layer(torch.ones(1, 4, 4)).shape), (1, 8, 8))
+
+        both_devices(body)
+
     def test_conv2d_module_list_geometry(self):
         """JSON-configured models pass lists for all spatial arguments."""
         rs = np.random.RandomState(20261020)
@@ -718,6 +740,33 @@ class TestNormModules(Base):
 # F.interpolate
 # ---------------------------------------------------------------------------
 class TestInterpolate(Base):
+    def test_interpolate_linear_fractional_scale(self):
+        def body(dev):
+            x = torch.tensor([[[0., 2., 4., 6.]]])
+            interpolate = torch.nn.functional.interpolate
+            g = interpolate(x, scale_factor=1.6, mode="linear").numpy()
+            self.ac(g, [[[0., .875, 2.125, 3.375, 4.625, 5.875]]], msg=dev)
+            g = interpolate(x, scale_factor=1.6, mode="linear",
+                            recompute_scale_factor=True).numpy()
+            self.ac(g, [[[0., 1., 7 / 3, 11 / 3, 5., 6.]]], msg=dev)
+            g = interpolate(x, size=7, mode="linear", align_corners=True).numpy()
+            self.ac(g, np.arange(7).reshape(1, 1, 7), msg=dev)
+
+        both_devices(body)
+
+    def test_antialias_accepts_scalar_tensor_sizes(self):
+        def body(device):
+            source = torch.arange(48, device=device, dtype=torch.float32).reshape(1, 2, 4, 6)
+            height, width = torch.tensor([3, 5], device=device)
+            expected = torch.nn.functional.interpolate(source, size=(3, 5),
+                                                       mode="bilinear", antialias=True)
+            result = torch.nn.functional.interpolate(source, size=(height, width),
+                                                     mode="bilinear", antialias=True)
+            self.assertEqual(result.device, source.device)
+            self.ac(result.cpu().numpy(), expected.cpu().numpy(), msg=device)
+
+        both_devices(body)
+
     def test_interpolate_nearest_upsample(self):
         x = np.random.RandomState(40).randn(1, 2, 3, 3).astype("float32")
         def body(dev):

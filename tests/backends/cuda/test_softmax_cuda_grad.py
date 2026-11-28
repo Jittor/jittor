@@ -116,6 +116,21 @@ def _grad_tolerance(prob, cot_np, grad_ref, log, sum_error):
 
 @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No cuda found")
 class TestSoftmaxCudaGrad(unittest.TestCase):
+    def test_register_inference_matches_the_autograd_forward(self):
+        rng = np.random.default_rng(142)
+        values = rng.standard_normal((2, 3, 7, 263)).astype(np.float32)
+        with jt.flag_scope(use_cuda=1, backend_fallback="error"):
+            for dtype in ("float32", "float16", "bfloat16"):
+                for log in (False, True):
+                    value = jt.array(values).cast(dtype).start_grad()
+                    reference = softmax_v1(value, log=log)
+                    with jt.no_grad():
+                        result = softmax_v1(value, log=log)
+                        result.sync()
+                        self.assertEqual(result.location(), "device")
+                        self.assertFalse(result.requires_grad)
+                        np.testing.assert_array_equal(result.float32().numpy(), reference.float32().numpy())
+
     def test_row_floor_preserves_wide_softmax_bits(self):
         rng = np.random.default_rng(891)
         with jt.flag_scope(use_cuda=1, no_grad=1, backend_fallback="error"):
@@ -214,6 +229,33 @@ class TestSoftmaxCudaGrad(unittest.TestCase):
                                                _tree_sum_error)
                     self.assertLessEqual(float(np.abs(grad_got - grad_ref).max()),
                                          grad_tol)
+
+    def test_many_short_half_rows_match_cpu(self):
+        rng = np.random.RandomState(176)
+        values = rng.uniform(-4, 4, (1025, 53)).astype("float16").astype("float32")
+        weights = rng.uniform(0.1, 1.5, values.shape).astype("float32")
+        for log in (False, True):
+            with self.subTest(log=log):
+                expected, _ = self._cpu(values, weights, log)
+                with jt.flag_scope(use_cuda=1):
+                    source = jt.array(values).float16()
+                    out = softmax_v1(source, log=log)
+                    grad = jt.grad((out.float32() * jt.array(weights)).sum(), source)
+                    got, got_grad = jt.fetch_sync([out.float32(), grad.float32()])
+                    self.assertEqual(out.location(), "device")
+                    self.assertEqual(grad.location(), "device")
+                np.testing.assert_allclose(got, expected, rtol=2e-3, atol=1e-6)
+                cot = weights.astype(np.float16).astype(np.float64)
+                prob = np.exp(got.astype(np.float64)) if log else got.astype(np.float64)
+                if log:
+                    product = prob * cot.sum(axis=-1, keepdims=True)
+                    expected_grad = cot - product
+                    budget = np.finfo(np.float16).eps * (np.abs(product) + np.abs(expected_grad))
+                else:
+                    dot = (prob * cot).sum(axis=-1, keepdims=True)
+                    expected_grad = prob * (cot - dot)
+                    budget = np.finfo(np.float16).eps * (2 * prob * dot + 2 * np.abs(expected_grad))
+                self.assertTrue(np.all(np.abs(got_grad - expected_grad) <= budget + 3e-8))
 
     def test_short_rows_preserve_nan_and_masked_row_semantics(self):
         x_np = np.zeros((4097, 33), dtype="float32")

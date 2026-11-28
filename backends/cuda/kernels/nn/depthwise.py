@@ -1,10 +1,190 @@
 """CUDA depthwise convolution forward and gradient kernels."""
 
 import jittor as jt
+from jittor._core.dtypes import dtype_name
 from jittor._runtime.backend_libraries import library_resource
 
 
+def depthwise_forward_nhwc(x_nhwc, weight, output_shape_nhwc, stride, padding, dilation,
+                           *, affine=None, silu=False):
+    """Channels-last (NHWC) depthwise conv2d kernel avoiding NCHW<->NHWC copies."""
+    Kh, Kw = int(weight.shape[-2]), int(weight.shape[-1])
+    sh, sw = int(stride[0]), int(stride[1])
+    ph, pw = int(padding[0]), int(padding[1])
+    dh, dw = int(dilation[0]), int(dilation[1])
+    inputs = [x_nhwc, weight]
+    if affine is not None:
+        inputs.extend(affine)
+    scale, shift = ("in2_p", "in3_p") if affine is not None else ("nullptr", "nullptr")
+    return jt.code(
+        output_shape_nhwc,
+        x_nhwc.dtype,
+        inputs,
+        cuda_header="""
+        template <typename T, int KH, int KW, int SH, int SW, int DH, int DW,
+                  bool AFFINE, bool SILU>
+        __global__ void KernelDepthwiseConvNHWC(
+            const T* __restrict__ input_data,
+            const T* __restrict__ filter_data,
+            const T* __restrict__ scale,
+            const T* __restrict__ shift,
+            int N, int H, int W, int C,
+            int OH, int OW, int PH, int PW,
+            T* __restrict__ output_data) {
+            int total = N * OH * OW * C;
+            int idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= total) return;
+            int c = idx % C;
+            int tmp = idx / C;
+            int ow = tmp % OW;
+            tmp /= OW;
+            int oh = tmp % OH;
+            int n = tmp / OH;
+            int h_in_start = oh * SH - PH;
+            int w_in_start = ow * SW - PW;
+            const T* w_ptr = filter_data + c * (KH * KW);
+            const T* x_batch = input_data + ((size_t)n * H * W) * C + c;
+            float acc = 0.0f;
+            #pragma unroll
+            for (int kh = 0; kh < KH; ++kh) {
+                int h_in = h_in_start + kh * DH;
+                if ((unsigned)h_in < (unsigned)H) {
+                    const T* x_row = x_batch + ((size_t)h_in * W) * C;
+                    #pragma unroll
+                    for (int kw = 0; kw < KW; ++kw) {
+                        int w_in = w_in_start + kw * DW;
+                        if ((unsigned)w_in < (unsigned)W) {
+                            acc = fmaf(
+                                static_cast<float>(w_ptr[kh * KW + kw]),
+                                static_cast<float>(x_row[(size_t)w_in * C]),
+                                acc);
+                        }
+                    }
+                }
+            }
+            T result = static_cast<T>(acc);
+            if (AFFINE) {
+                // Retain the convolution, multiply and add dtype boundaries.
+                T scaled = static_cast<T>(static_cast<float>(result) * static_cast<float>(scale[c]));
+                result = static_cast<T>(static_cast<float>(scaled) + static_cast<float>(shift[c]));
+            }
+            if (SILU) {
+                float value = static_cast<float>(result);
+                result = static_cast<T>(value * (1.0f / (1.0f + expf(-value))));
+            }
+            output_data[idx] = result;
+        }
+        """,
+        cuda_src=f"""
+            const int N = in0_shape0;
+            const int H = in0_shape1;
+            const int W = in0_shape2;
+            const int C = in0_shape3;
+            const int OH = out0_shape1;
+            const int OW = out0_shape2;
+            const int total = N * OH * OW * C;
+            if (total > 0) {{
+                const int threads = 256;
+                const int blocks = (total + threads - 1) / threads;
+                KernelDepthwiseConvNHWC<in0_type, {Kh}, {Kw}, {sh}, {sw}, {dh}, {dw},
+                                         {str(affine is not None).lower()}, {str(silu).lower()}>
+                    <<<blocks, threads>>>(
+                        in0_p, in1_p, {scale}, {shift}, N, H, W, C, OH, OW, {ph}, {pw}, out0_p);
+            }}
+        """,
+    )
+
+
+_DEPTHWISE_ROWS_KERNEL = r"""
+template <int KH, int KW, int ROWS, bool BIAS>
+__global__ void depthwise_reuse_rows(
+        const float* __restrict__ x, const float* __restrict__ weight,
+        const float* __restrict__ bias, float* __restrict__ out,
+        int channels, int height, int width,
+        int oh, int ow, int ph, int pw) {
+    const int item = blockIdx.x * blockDim.x + threadIdx.x;
+    const int column_tiles = (ow + 1) / 2;
+    const int row = (item / column_tiles) * ROWS;
+    if (row >= oh) return;
+    const int column = (item % column_tiles) * 2;
+    const int channel = blockIdx.y;
+    const size_t plane = (size_t)blockIdx.z * channels + channel;
+    x += plane * height * width;
+    out += plane * oh * ow;
+    weight += channel * KH * KW;
+    float filter[KH * KW];
+    #pragma unroll
+    for (int i = 0; i < KH * KW; ++i) filter[i] = weight[i];
+
+    float result[ROWS][2] = {};
+    #pragma unroll
+    for (int i = 0; i < KH + ROWS - 1; ++i) {
+        const int h = row - ph + i;
+        if ((unsigned)h >= (unsigned)height) continue;
+        #pragma unroll
+        for (int j = 0; j <= KW; ++j) {
+            const int w = column - pw + j;
+            if ((unsigned)w >= (unsigned)width) continue;
+            const float pixel = x[h * width + w];
+            #pragma unroll
+            for (int r = 0; r < ROWS; ++r) {
+                if (i >= r && i < r + KH) {
+                    if (j < KW)
+                        result[r][0] = fmaf(filter[(i - r) * KW + j], pixel, result[r][0]);
+                    if (j > 0)
+                        result[r][1] = fmaf(filter[(i - r) * KW + j - 1], pixel, result[r][1]);
+                }
+            }
+        }
+    }
+    const float shift = BIAS ? bias[channel] : 0.f;
+    #pragma unroll
+    for (int r = 0; r < ROWS; ++r) {
+        if (row + r < oh) {
+            float* pair = out + (row + r) * ow + column;
+            pair[0] = BIAS ? result[r][0] + shift : result[r][0];
+            if (column + 1 < ow)
+                pair[1] = BIAS ? result[r][1] + shift : result[r][1];
+        }
+    }
+}
+"""
+
+
+def _depthwise_forward_rows(x, weight, output_shape, padding, bias=None):
+    batch, channels, height, width = x.shape
+    kh, kw = weight.shape[-2:]
+    oh, ow = output_shape[-2:]
+    rows = 4 if oh >= 8 else 2
+    items = ((oh + rows - 1) // rows) * ((ow + 1) // 2)
+    threads = 32 if items <= 64 else 128
+    blocks = (items + threads - 1) // threads
+    inputs = [x, weight] if bias is None else [x, weight, bias]
+    bias_pointer = "nullptr" if bias is None else "in2_p"
+    return jt.code(output_shape, x.dtype, inputs, cuda_header=_DEPTHWISE_ROWS_KERNEL, cuda_src=f"""
+        depthwise_reuse_rows<{kh}, {kw}, {rows}, {str(bias is not None).lower()}>
+            <<<dim3({blocks}, {channels}, {batch}), {threads}>>>(
+                in0_p, in1_p, {bias_pointer}, out0_p, {channels}, {height}, {width},
+                {oh}, {ow}, {padding[0]}, {padding[1]});
+    """)
+
+
+def _supports_depthwise_rows(x, weight, output_shape, stride, dilation):
+    kh, kw = weight.shape[-2:]
+    # Large filters reuse input pixels across adjacent output rows and
+    # columns. Each output still accumulates in row-major order. The bounds
+    # keep this unrolled kernel within a practical register budget.
+    return (stride == dilation == (1, 1) and 49 <= kh * kw and max(kh, kw) <= 9
+            and dtype_name(x.dtype) == dtype_name(weight.dtype) == "float32"
+            and x.shape[0] <= 65535 and x.shape[1] <= 65535
+            and 4 <= output_shape[2] and output_shape[2] * output_shape[3] < (1 << 30)
+            and x.shape[2] * x.shape[3] < (1 << 30)
+            and x.numel() >= (1 << 18))
+
+
 def depthwise_forward(x, weight, output_shape, stride, padding, dilation):
+    if _supports_depthwise_rows(x, weight, output_shape, stride, dilation):
+        return _depthwise_forward_rows(x, weight, output_shape, padding)
     Kh, Kw = weight.shape[-2:]
     return jt.code(
             output_shape,

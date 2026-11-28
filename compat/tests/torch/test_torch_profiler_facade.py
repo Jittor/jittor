@@ -83,6 +83,57 @@ class TestTorchProfiler(unittest.TestCase):
         self.assertIn("cublas_matmul", prof.table(row_limit=50))
 
 
+class TestTorchProfilerHost(unittest.TestCase):
+    def test_disabled_profiler_returns_empty_event_list(self):
+        with jt.flag_scope(use_cuda=0):
+            with torch.profiler.profile(enabled=False) as prof:
+                (torch.randn(8, 8) + 1).sum().item()
+            with torch.autograd.profiler.profile(enabled=False) as aprof:
+                (torch.randn(8, 8) + 1).sum().item()
+        self.assertEqual(len(prof.events()), 0)
+        self.assertEqual(len(prof.key_averages()), 0)
+        self.assertEqual(prof.key_averages().table(), "")
+        self.assertIsInstance(aprof.key_averages(), torch.autograd.profiler.EventList)
+        self.assertEqual(len(aprof.key_averages()), 0)
+
+    def test_exception_inside_profile_skips_on_trace_ready_and_cleans_up(self):
+        called = []
+        with jt.flag_scope(use_cuda=0):
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU],
+                                            on_trace_ready=lambda p: called.append(p)):
+                    raise RuntimeError("boom")
+        self.assertEqual(called, [])
+        self.assertEqual(jt.core.step_trace_active(), 0)
+
+    def test_negative_skip_first_wait_rejected(self):
+        with self.assertRaises(ValueError):
+            torch.profiler.schedule(wait=0, warmup=0, active=1, skip_first_wait=-1)
+
+    def test_user_annotation_flag_and_demangle(self):
+        from jittor.compat.torch import profiler_events
+        self.assertEqual(profiler_events._demangle("_Z8kernel_0PfS_i"),
+                         "kernel_0(float*, float*, int)")
+        with jt.flag_scope(use_cuda=0):
+            x = torch.randn(16, 16)
+            x.sum().item()
+            with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU],
+                                        profile_memory=True) as prof:
+                with torch.profiler.record_function("cpu_step"):
+                    (x * 2 + 1).sum().item()
+        events = prof.events()
+        ann = [e for e in events if e.name == "cpu_step"]
+        self.assertEqual(len(ann), 1)
+        self.assertTrue(ann[0].is_user_annotation)
+        self.assertTrue(all(not c.is_user_annotation for c in ann[0].cpu_children))
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "sub", "trace.json")
+            prof.export_chrome_trace(path)
+            trace = json.load(open(path, encoding="utf-8"))["traceEvents"]
+        for me in (e for e in trace if e.get("name") == "[memory]"):
+            self.assertLessEqual(me["args"]["Total Allocated"], me["args"]["Total Reserved"], me)
+
+
 @unittest.skipIf(not HAS_CUDA, "needs a CUDA device")
 class TestTorchCudaMemoryReadings(unittest.TestCase):
     def test_max_memory_reserved_is_the_reserved_high_water(self):

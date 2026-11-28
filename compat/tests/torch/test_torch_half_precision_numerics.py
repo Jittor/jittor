@@ -179,6 +179,20 @@ class TestHalfDtypeIsPreserved(unittest.TestCase):
                             "%s on %s widened %s to %s"
                             % (op, device, name, out.dtype))
 
+    def test_tanh_gelu_rounds_only_at_output(self):
+        values = np.linspace(-4.0, 4.0, 511, dtype=np.float32)
+        gelu = torch.nn.functional.gelu
+        with torch.no_grad():
+            for device in _DEVICES:
+                for dtype in _DTYPES.values():
+                    with self.subTest(device=device, dtype=dtype):
+                        source = torch.tensor(values, device=device, dtype=dtype)
+                        expected = gelu(source.float(), approximate="tanh").to(dtype)
+                        result = gelu(source, approximate="tanh")
+                        self.assertEqual(result.dtype, dtype)
+                        self.assertEqual(result.device, source.device)
+                        np.testing.assert_array_equal(_np(result), _np(expected))
+
 
 class TestHalfAccumulatesInFloat32(unittest.TestCase):
     """ATen accumulates a half reduction in float32 and rounds once.

@@ -875,16 +875,7 @@ def _mem_reserved(device=None, *a, **k):
 
 
 def _native_peak(index):
-    """The pools' own high-water mark for one device, or 0 if they keep none.
-
-    The Python-side mark only moves when some memory API is *called*, so on its
-    own it misses every peak reached inside an execution batch: a training step
-    that filled 22 GB read 0.1-1.3 GB. The pools record the peak on every
-    allocation; the sampled mark stays as the fallback for a process that
-    turned them off.
-    """
-    if index < 0:
-        return 0
+    """The pools' own high-water mark for one device (or host for -1)."""
     return int(jt.core.device_memory_peak(int(index)))
 
 

@@ -114,6 +114,27 @@ def install_parity(ctx):
     )
     modules.instancenorm = instancenorm
 
+    loss_mod = registry.ensure("torch.nn.modules.loss")
+    if not hasattr(loss_mod, "_Loss"):
+        class _Loss(nn.Module):
+            def __init__(self, size_average=None, reduce=None, reduction="mean"):
+                super().__init__()
+                if size_average is not None or reduce is not None:
+                    if size_average is False or reduce is False:
+                        self.reduction = "sum" if size_average is False else "none"
+                    else:
+                        self.reduction = "mean"
+                else:
+                    self.reduction = reduction
+        loss_mod._Loss = _Loss
+    if not hasattr(loss_mod, "_WeightedLoss"):
+        class _WeightedLoss(loss_mod._Loss):
+            def __init__(self, weight=None, size_average=None, reduce=None, reduction="mean"):
+                super().__init__(size_average, reduce, reduction)
+                self.register_buffer("weight", weight)
+        loss_mod._WeightedLoss = _WeightedLoss
+    modules.loss = loss_mod
+
     stateless = registry.ensure("torch.nn.utils.stateless")
     stateless.functional_call = getattr(
         getattr(g, "func", None),

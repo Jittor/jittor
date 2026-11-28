@@ -40,9 +40,8 @@ bool can_retarget_pending(Var* value, int device) {
     return true;
 }
 
-} // namespace
-
-DispatchContext query_dispatch_context(const vector<Var*>& inputs) {
+template<class Inputs>
+DispatchContext query_dispatch(const Inputs& inputs) {
     TensorPlacement target;
     for (auto* value : inputs) {
         USER_CHECK(value) << "dispatch_context requires non-null tensor inputs";
@@ -100,6 +99,22 @@ DispatchContext query_dispatch_context(const vector<Var*>& inputs) {
     USER_CHECK(device >= 0)
         << "Accelerator dispatch requires an initialized current device";
     return {backend_ops(accelerator_backend_id()).name, device};
+}
+
+} // namespace
+
+DispatchContext query_dispatch_context(const vector<Var*>& inputs) {
+    return query_dispatch(inputs);
+}
+
+DispatchContext query_dispatch_context(Var* const* inputs, size_t count) {
+    struct Inputs {
+        Var* const* first;
+        Var* const* last;
+        auto begin() const { return first; }
+        auto end() const { return last; }
+    };
+    return query_dispatch(Inputs{inputs, inputs + count});
 }
 
 } // namespace jittor

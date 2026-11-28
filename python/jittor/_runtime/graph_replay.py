@@ -51,10 +51,10 @@ Typical use::
 
 Arguments may be positional or keyword, and plain tuples, lists and dicts of
 Vars; anything else is matched by identity and treated as a constant of the
-capture. The result may be a Var or any nesting of tuples, lists, named
-tuples, dicts and dataclasses of them -- `ModelOutput` and diffusers' output
-classes included -- and comes back as that same structure around fresh Vars
-of the module's own tensor type. Under the torch frontend,
+capture. The result may nest Vars in tuples, lists, named tuples, dicts,
+dataclasses, registered pytree nodes and plain Python state containers. It
+comes back as that same structure around fresh Vars of the module's own
+tensor type. Under the torch frontend,
 `torch.compile(model, mode="reduce-overhead")` wraps a module in this.
 
 What it is worth, on the one shape that measured reproducibly here -- a
@@ -103,8 +103,10 @@ speedup is worse than none.
 from contextlib import contextmanager, nullcontext as _nullcontext
 import copy as _copy
 import dataclasses as _dataclasses
+import sys
 import threading
 import time
+from types import GetSetDescriptorType
 import weakref
 
 import jittor as jt
@@ -228,7 +230,25 @@ def _map_inputs(value, fn):
     return value
 
 
-def _output_template(value, leaves, index, passthrough=()):
+def _plain_output_state(value):
+    """State of a Python value object with ordinary allocation and copying."""
+    cls = type(value)
+    if any(getattr(cls, name, None) is not getattr(object, name, None) for name in (
+        "__new__", "__getattribute__", "__setattr__", "__getstate__", "__setstate__",
+        "__reduce__", "__reduce_ex__", "__copy__", "__del__",
+    )):
+        return None
+    hierarchy = cls.__mro__
+    if any(base.__dict__.get("__slots__") for base in hierarchy):
+        return None
+    descriptor = next((base.__dict__["__dict__"] for base in hierarchy
+                       if "__dict__" in base.__dict__), None)
+    if isinstance(descriptor, GetSetDescriptorType):
+        return descriptor.__get__(value, cls) or None
+    return None
+
+
+def _output_template(value, leaves, index, passthrough=(), active=None):
     """Describe `value` as a tree over `leaves`, the distinct Vars it holds.
 
     What a module returns is rarely a lone Var: `nn.LSTM` returns a tuple, a
@@ -249,20 +269,43 @@ def _output_template(value, leaves, index, passthrough=()):
         return ("var", i)
     if value is None or isinstance(value, (bool, int, float, str)):
         return ("const", value)
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        raise _Unreplayable("the module returned a cyclic result, which replay cannot rebuild")
+    active.add(identity)
+    try:
+        return _output_container(value, leaves, index, passthrough, active)
+    finally:
+        active.remove(identity)
+
+
+def _output_container(value, leaves, index, passthrough, active):
+    def visit(child):
+        return _output_template(child, leaves, index, passthrough, active)
+
     if type(value) in (tuple, list):
-        return ("seq", type(value), [_output_template(v, leaves, index, passthrough) for v in value])
+        return ("seq", type(value), [visit(child) for child in value])
     if isinstance(value, tuple) and hasattr(type(value), "_fields"):
-        return ("namedtuple", type(value),
-                [_output_template(v, leaves, index, passthrough) for v in value])
+        return ("namedtuple", type(value), [visit(child) for child in value])
     if isinstance(value, dict):
-        return ("dict", value,
-                [(k, _output_template(v, leaves, index, passthrough)) for k, v in value.items()])
+        return ("dict", value, [(key, visit(child)) for key, child in value.items()])
     if _dataclasses.is_dataclass(value) and not isinstance(value, type):
         return ("dataclass", value,
-                [(f.name, _output_template(getattr(value, f.name), leaves, index, passthrough))
-                 for f in _dataclasses.fields(value)])
+                [(field.name, visit(getattr(value, field.name))) for field in _dataclasses.fields(value)])
     if id(value) in passthrough:
         return ("const", value)
+    pytree = sys.modules.get("torch.utils._pytree")
+    node = getattr(pytree, "SUPPORTED_NODES", {}).get(type(value))
+    if node is not None:
+        children, context = node.flatten_fn(value)
+        return ("pytree", node.unflatten_fn, context, [visit(child) for child in children])
+    torch = sys.modules.get("torch")
+    if isinstance(value, type) or type(value) is getattr(torch, "dtype", None):
+        return ("const", value)
+    state = _plain_output_state(value)
+    if state is not None:
+        return ("state", type(value), [(name, visit(child)) for name, child in state.items()])
     raise _Unreplayable(f"the module returned a {type(value).__name__}, which "
                         "replay cannot rebuild")
 
@@ -290,6 +333,12 @@ def _rebuild(template, values):
         return template[1](_rebuild(t, values) for t in template[2])
     if kind == "namedtuple":
         return template[1](*[_rebuild(t, values) for t in template[2]])
+    if kind == "pytree":
+        return template[1]([_rebuild(child, values) for child in template[3]], template[2])
+    if kind == "state":
+        result = object.__new__(template[1])
+        vars(result).update((name, _rebuild(child, values)) for name, child in template[2])
+        return result
     if kind == "dict":
         if type(template[1]) is dict:
             return {k: _rebuild(t, values) for k, t in template[2]}
@@ -578,6 +627,9 @@ class GraphReplay:
         # above its eager peak.
         flush_before = jt.flags.auto_flush_ops
         jt.flags.auto_flush_ops = 0
+        rank_before = jt.flags.auto_compile_shapes_rank
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         readbacks = _core._host_readback_count()
         _TRACING[0] += 1
         try:
@@ -597,10 +649,19 @@ class GraphReplay:
                 except _Unreplayable as exc:
                     self._refused = str(exc)
                     return None
+                if _core._host_readback_count() != readbacks or barriers:
+                    self._refused = "output flattening must not read tensors or execute opaque operations"
+                    return None
                 if not outputs:
                     self._refused = "the module returned no Var"
                     return None
                 outputs[:] = [_dense(o) for o in outputs]
+                if _graph_has_nondeterministic_op():
+                    self._refused = "the graph draws random numbers, so a replay would repeat them"
+                    return None
+                private_inputs = _input_vars((private_args, private_kwargs), [])
+                guarded_leaves = [p for p in params if isinstance(p, jt.Var)]
+                _core._fold_graph_constants(outputs, private_inputs, guarded_leaves)
                 # These vars' own graph and nothing else. A plain `sync()` is a
                 # weak sync: it also sweeps in whatever other holder vars happen
                 # to be pending, and with `keep_graph` on those become part of
@@ -608,9 +669,6 @@ class GraphReplay:
                 # replay. Measured through nsys, a capture taken with unrelated
                 # work pending executed 219 kernels a call instead of 132.
                 jt.sync(outputs, False, False)
-            if _graph_has_nondeterministic_op():
-                self._refused = "the graph draws random numbers, so a replay would repeat them"
-                return None
             if any(o.is_finished for o in outputs):
                 # Nothing outside this method has touched the graph yet, so
                 # what can have finished it is the traced call reading a value
@@ -622,6 +680,7 @@ class GraphReplay:
                 return None
         finally:
             _TRACING[0] -= 1
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.auto_flush_ops = flush_before
             jt.flags.keep_graph = before
 
@@ -632,9 +691,10 @@ class GraphReplay:
         cap.host_inputs = any(int(v.device_id) < 0 for v in cap.inputs)
         cap.outputs = outputs
         cap.template = template
-        # Identity, not value: an optimizer step or a load rebinds the holder
-        # to a new Var, and the captured graph would keep reading the old one.
-        cap.params = [(p, p.var_ptr) for p in params]
+        # Identity and storage version: an optimizer step, load, or in-place
+        # mutation changes the holder's Var or storage version, which must
+        # invalidate both the captured graph and any folded constant leaves.
+        cap.params = [(p, p.var_ptr, p._saved_storage_version()) for p in params]
         cap.training = _training(self._module)
         cap.signature = _signature(args, kwargs)
         return cap
@@ -654,8 +714,8 @@ class GraphReplay:
             return "the inputs changed shape or dtype"
         if _training(self._module) != cap.training:
             return "the module changed training mode"
-        for holder, ptr in cap.params:
-            if holder.var_ptr != ptr:
+        for holder, ptr, ver in cap.params:
+            if holder.var_ptr != ptr or holder._saved_storage_version() != ver:
                 return "a parameter or buffer was replaced since the graph was captured"
         return None
 
@@ -793,6 +853,7 @@ class GraphReplay:
             return False
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
+        rank_before = jt.flags.auto_compile_shapes_rank
         # 2, as for a replay: an intermediate's memory goes back after its
         # last use. While recording, the pools hold such a free for the
         # recording and hand the block to a later allocation of the same
@@ -800,6 +861,8 @@ class GraphReplay:
         # PyTorch's private graph pool does -- rather than every buffer it
         # touches: an SD1.5 UNet step held 4.2 GB that way against 1.9 GB.
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         handle = 0
         try:
             # Drain first: the recording must contain the step, not the
@@ -823,6 +886,7 @@ class GraphReplay:
                 _core.graph_release(handle)
             return False
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         if not handle:
             refusal = _core.graph_capture_refusal()
@@ -921,7 +985,10 @@ class GraphReplay:
             self.stats["graph"] += 1
             return _rebuild(cap.template, outs)
         before = jt.flags.keep_graph
+        rank_before = jt.flags.auto_compile_shapes_rank
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         try:
             # Syncing the captured outputs is what re-runs the graph, once
             # for all of them; the copies build no op, so it does not grow.
@@ -929,6 +996,7 @@ class GraphReplay:
             for out, src in zip(outs, cap.outputs):
                 out._copy_into(src, False)
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         return _rebuild(cap.template, outs)
 
@@ -1175,9 +1243,7 @@ class _StatefulCall:
         self.auto.unstable = 0
         if before == self.last:
             from .step_capture import _PolicyStep
-            # The step holds them strongly: its guards read them, and the id
-            # in the signature must not pass to another object.
-            self.step = _PolicyStep(module, objects, self.signature,
+            self.step = _PolicyStep(module, self.signature,
                                     jt.flags.auto_graph_replay_retain_bytes)
         self.last = after
         return result
@@ -1315,9 +1381,11 @@ _AUTO_SCALARS = (int, float, bool, str)
 def _auto_inputs(value, found, objects):
     """Bytes of the Vars in `value`'s plain containers.
 
-    `found` counts them; any other object is appended to `objects`.
+    `found` counts them when requested. Other objects go into `objects`.
     """
     if isinstance(value, jt.Var):
+        if found is None:
+            return 0
         found[0] += 1
         return value.numel() * _element_size(value.dtype)
     kind = type(value)
@@ -1479,8 +1547,9 @@ def auto_replay_for(module, args, kw):
     # parameter/buffer holders too. A live capture already owns this list, so
     # steady calls need no second traversal of the module tree.
     capture = state.replay._capture if state.replay is not None else None
-    holders = (p for p, _ in capture.params) if capture is not None else _module_vars(module)
-    signature = (_signature(args, kw), tuple((id(p), p.var_ptr) for p in holders))
+    holders = (p for p, _, _ in capture.params) if capture is not None else _module_vars(module)
+    signature = (_signature(args, kw),
+                 tuple((id(p), p.var_ptr, p._saved_storage_version()) for p in holders))
     if signature != state.signature:
         state.signature = signature
         state.seen = 1

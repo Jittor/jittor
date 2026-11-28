@@ -97,10 +97,10 @@ static bool nccl_hold(int device, Var* v) {
         v->mem_ptr, v->allocation, v->size, v->allocator);
 }
 
-cudaStream_t nccl_stream_begin() {
+cudaStream_t nccl_stream_begin(bool wait_for_compute) {
     int device = current_device();
-    cuda_side_stream_wait_default(
-        CUDA_COMMUNICATION_STREAM, device, device);
+    if (wait_for_compute)
+        cuda_side_stream_wait_default(CUDA_COMMUNICATION_STREAM, device, device);
     if (nccl_bucket_open) {
         nccl_bucket_device = device;
         if (!nccl_group_opened) {

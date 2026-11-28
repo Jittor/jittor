@@ -94,6 +94,34 @@ def test_pow_forward_and_both_input_gradients(device, dtype, spelling):
         _close(base.grad, b * a ** (b - 1), dtype)
 
 
+@pytest.mark.parametrize("device,dtype", [
+    ("cpu", "bfloat16"), ("cuda", "bfloat16"), ("cuda", "float16"),
+])
+def test_scalar_cube_uses_storage_precision_between_multiplications(device, dtype):
+    if device == "cuda":
+        _test_capability.require_accelerator("cuda")
+    values = np.linspace(-3, 3, 129, dtype=np.float32)
+    x = torch.tensor(values, dtype=getattr(torch, dtype), device=device, requires_grad=True)
+    upstream = torch.tensor(np.linspace(.125, 1.125, 129, dtype=np.float32),
+                            dtype=x.dtype, device=device)
+
+    with torch.no_grad():
+        expected = _numpy((x * x) * x)
+        for actual in (x ** 3, x.pow(3.0), torch.pow(x, 3.0)):
+            assert actual.dtype == x.dtype
+            assert actual.device.type == device
+            np.testing.assert_array_equal(_numpy(actual), expected)
+
+    actual = torch.pow(x, 3.0)
+    np.testing.assert_array_equal(_numpy(actual), expected)
+    gradient, = torch.autograd.grad(actual, x, upstream, create_graph=True)
+    want_gradient = upstream * (3 * x.pow(2))
+    np.testing.assert_array_equal(_numpy(gradient), _numpy(want_gradient))
+    second, = torch.autograd.grad(gradient.sum(), x)
+    want_second, = torch.autograd.grad(want_gradient.sum(), x)
+    np.testing.assert_array_equal(_numpy(second), _numpy(want_second))
+
+
 @pytest.mark.parametrize("device,dtype", _SPECS)
 def test_cosine_attention_and_sincos_embedding_need_no_input_casts(device, dtype):
     tensor_dtype = getattr(torch, dtype)

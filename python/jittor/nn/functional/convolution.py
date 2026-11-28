@@ -1,8 +1,12 @@
 """One-, two-, and three-dimensional convolution functionals."""
 
+from operator import index
+
 import jittor as jt
+from jittor._core.dtypes import dtype_name
+from jittor.backends.cuda.kernels.nn.pointwise_pixel_cuda import pointwise_pixel_cuda  # noqa: F401
 from jittor.misc import _pair, _triple
-from jittor._runtime.dispatch import select_kernel
+from jittor._runtime.dispatch import optional_kernel, select_kernel
 
 from ._amp import bias_for_compute_dtype
 
@@ -98,19 +102,20 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     >>> w = jt.randn(32, 24, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    stride = _pair(stride)
-    dilation = _pair(dilation)
+    stride = tuple(map(index, _pair(stride)))
+    dilation = tuple(map(index, _pair(dilation)))
     if weight.ndim != 4:
         raise jt.JittorShapeError("Conv2d expected a 4-D weight, got shape {}".format(list(weight.shape)))
     if isinstance(padding, str):
         x, padding = _resolve_string_padding(x, padding, weight.shape[-2:], stride, dilation)
-    padding = _pair(padding)
+    padding = tuple(map(index, _pair(padding)))
     if any(len(values) != 2 for values in (padding, stride, dilation)):
         raise ValueError("Conv2d stride, padding and dilation must each have two entries")
     if (any(value <= 0 for values in (stride, dilation) for value in values)
             or any(value < 0 for value in padding)):
         raise ValueError("Conv2d stride and dilation must be positive and padding non-negative")
     out_channels = weight.shape[0]
+    groups = index(groups)
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
     if out_channels % groups:
@@ -231,12 +236,13 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     >>> w = jt.randn(32, 24, 3, 3, 3)
     >>> y = nn.conv2d(x, w)
     '''
-    stride = _triple(stride)
-    dilation = _triple(dilation)
+    stride = tuple(map(index, _triple(stride)))
+    dilation = tuple(map(index, _triple(dilation)))
     if isinstance(padding, str):
         x, padding = _resolve_string_padding(x, padding, weight.shape[-3:], stride, dilation)
-    padding = _triple(padding)
+    padding = tuple(map(index, _triple(padding)))
     out_channels = weight.shape[0]
+    groups = index(groups)
     if groups <= 0:
         raise ValueError("groups must be a positive integer")
     kernel = select_kernel("conv3d", x, weight, stride, padding, dilation, groups)
@@ -306,6 +312,16 @@ def conv3d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     return y
 
 
+@optional_kernel("conv1d_width", "cuda", dtypes={"float32"})
+def _conv1d_width(input, weight, bias, stride, padding, dilation, groups):
+    # Keep the same cuDNN geometry in eager and captured execution. Matching
+    # the width axis used by Torch also avoids changes in accumulation order
+    # from selecting a different implicit convolution for the height axis.
+    result = jt.nn.conv2d(input.unsqueeze(2), weight.unsqueeze(2), bias,
+                         (1, stride), (0, padding), (1, dilation), groups)
+    return result.squeeze(2)
+
+
 def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     ''' Applies a 1D convolution over an input signal composed of several input
     planes. Torch-compatible functional interface.
@@ -339,6 +355,9 @@ def conv1d(input, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
     if isinstance(padding, str):
         input, (padding,) = _resolve_string_padding(
             input, padding, weight.shape[-1:], (stride,), (dilation,))
+    result = _conv1d_width(input, weight, bias, stride, padding, dilation, groups)
+    if result is not None:
+        return result
     # reuse the 2D conv by adding a singleton width dimension
     x = input.unsqueeze(-1)
     w = weight.unsqueeze(-1)

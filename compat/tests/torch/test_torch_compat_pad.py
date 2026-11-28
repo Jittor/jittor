@@ -241,6 +241,18 @@ class TestReflectionReplicationModules(Base):
     def setUp(self):
         self.x = np.random.RandomState(54).randn(1, 2, 4, 5).astype("float32")
 
+    def test_reflectionpad1d(self):
+        def body(device):
+            source = torch.arange(4, dtype=torch.float32, device=device).reshape(1, 4)
+            result = torch.nn.ReflectionPad1d(1)(source)
+            self.ac(result.cpu().numpy(), [[1, 0, 1, 2, 3, 2]], msg=device)
+            cropped = torch.nn.ReflectionPad1d((-1, 2))(source.unsqueeze(0))
+            self.ac(cropped.cpu().numpy(), [[[1, 2, 3, 2, 1]]], msg=device)
+            self.assertEqual(cropped.device, source.device)
+            with self.assertRaisesRegex(RuntimeError, "Padding size"):
+                torch.nn.ReflectionPad1d(4)(source)
+        both_devices(body)
+
     def test_reflectionpad2d_int(self):
         x = self.x
         def body(dev):

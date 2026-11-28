@@ -23,6 +23,7 @@ struct CodeOp : Op {
     DataMap data;
     string backend;
     bool order_bound_outputs = false;
+    const string* prepared_cuda_source = nullptr;
     /**
     Code Operator for easily customized op.
 
@@ -269,6 +270,11 @@ struct CodeOp : Op {
         print(jt.grad(c, [a, b]))
      */
     CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={}, string&& backend="");
+
+    // Native inference builders reuse a process-lifetime source token.
+    // @pybind(None)
+    CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
+           const string* cuda_token, DataMap&& data, string&& backend);
 
     // @attrs(multiple_outputs)
     CodeOp(vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs={}, string&& cpu_src="", vector<string>&& cpu_grad_src={}, string&& cpu_header="", string&& cuda_src="", vector<string>&& cuda_grad_src={}, string&& cuda_header="", DataMap&& data={}, string&& backend="");

@@ -18,6 +18,65 @@ FACTORY_NAMES = (
 
 class TestTorchFactoryFidelity(unittest.TestCase):
 
+    def test_cuda_scalar_tensor_sequence_keeps_values_live_in_replay(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA unavailable")
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            def apply(x):
+                return torch.tensor([x.max(), x[0]], device=x.device)
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for offset in range(6):
+                x = torch.tensor([2 + offset, 5 + offset], device="cuda")
+                out = compiled(x)
+                self.assertEqual(out.device.type, "cuda")
+                self.assertEqual(out.tolist(), [5 + offset, 2 + offset])
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0)
+
+        x = torch.tensor([3.], device="cuda", requires_grad=True)
+        out = torch.tensor([x[0]], device=x.device, requires_grad=True)
+        self.assertNotEqual(out.data_ptr(), x.data_ptr())
+        self.assertTrue(out.is_leaf)
+        out.sum().backward()
+        self.assertIsNone(x.grad)
+        self.assertEqual(out.grad.item(), 1.)
+
+    def test_linspace_endpoint_can_feed_a_capture_time_list(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA unavailable")
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            count = torch.tensor(4, device="cuda")
+            values = torch.tensor([5.], device="cuda")
+
+            def apply(x):
+                points = torch.linspace(1., 0., count, device=x.device).tolist()
+                return x + sum(points[:-1]), x + points[-1]
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for _ in range(5):
+                total, last = compiled(values)
+                self.assertAlmostEqual(total.item(), 7.)
+                self.assertEqual(last.item(), 5.)
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0)
+
+    def test_cuda_scalar_sequence_preserves_a_host_input(self):
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA unavailable")
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            def apply(x):
+                return torch.tensor([x.sum()], device="cuda")
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for offset in range(6):
+                x = torch.tensor([2 + offset, 5], device="cpu")
+                out = compiled(x)
+                self.assertEqual(out.device.type, "cuda")
+                self.assertEqual(out.tolist(), [7 + offset])
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0, compiled.graph_refused)
+
     def test_factory_objects_are_module_level_and_keep_public_identity(self):
         factories = importlib.import_module(
             "jittor.compat.torch.installers.factories")

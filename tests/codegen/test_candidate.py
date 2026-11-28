@@ -49,6 +49,21 @@ def check3(selected, comer):
     return iou < threshold
 
 class TestCandidateOp(unittest.TestCase):
+    def test_asymmetric_conflicts_at_word_boundaries(self):
+        ids = np.arange(1027, dtype=np.int32)
+        values = jt.array(np.stack((ids // 3, ids % 3), axis=1))
+        # Each selected first row rejects the middle row. The rejected row
+        # must never reject the last row, even across two mask words.
+        selected = jt.candidate(
+            values, "@x(j,0)==@x(i,0) && @x(j,1)+1==@x(i,1)", dtype=jt.int64)
+        self.assertEqual(str(selected.dtype), "int64")
+        np.testing.assert_array_equal(selected.numpy(), ids[ids % 3 != 1])
+
+    def test_all_or_no_conflicts(self):
+        values = jt.arange(513)
+        np.testing.assert_array_equal(jt.candidate(values, "true").numpy(), [0])
+        np.testing.assert_array_equal(jt.candidate(values, "false").numpy(), np.arange(513))
+
     def test(self):
         # increse sequence
         check([100000,3], '(@x(j,0)>@x(i,0))or(@x(j,1)>@x(i,1))or(@x(j,2)>@x(i,2))', check1)

@@ -118,6 +118,24 @@ class TestMemoryHighWater(unittest.TestCase):
             # so its high-water can never exceed that one.
             self.assertLessEqual(peak, jt.core.get_peak_allocator_used_memory())
 
+    def test_memory_profiler_clear_drops_stale_vars_and_empty_treemap_succeeds(self):
+        with jt.flag_scope(use_cuda=0):
+            with jt.flag_scope(profile_memory_enable=1):
+                tmp = jt.randn(256, 256)
+                (tmp + 1).sync()
+                del tmp
+            jt.sync_all(True)
+            jt.gc()
+            with jt.flag_scope(profile_memory_enable=1):
+                self.assertEqual(jt.core.get_max_memory_info().strip(), "0")
+                jt.get_max_memory_treemap(do_print=False)
+
+    def test_profile_scope_restores_flags_on_exception(self):
+        with self.assertRaisesRegex(RuntimeError, "boom"):
+            with jt.profile_scope():
+                raise RuntimeError("boom")
+        self.assertEqual(jt.flags.profiler_enable, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,12 +57,13 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def setUp(self):
         from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda
         self.kernel = cudnn_attention_cuda
-        self.kernel._supported_shapes.clear()
-        # A masked call leaves its mask's bias cached for the next layer.
-        self.addCleanup(self.kernel._MASK_TERMS.clear)
         self.scope = jt.flag_scope(use_cuda=1)
         self.scope.__enter__()
         self.addCleanup(self.scope.__exit__, None, None, None)
+        self.io_bias = self.kernel._bias_uses_io_dtype(self.kernel._library())
+        self.kernel._supported_shapes.clear()
+        # A masked call leaves its mask's bias cached for the next layer.
+        self.addCleanup(self.kernel._MASK_TERMS.clear)
 
     def _ran_on_cudnn(self):
         # The kernel asks cuDNN once per shape; an answer of True is a call
@@ -105,6 +106,9 @@ class TestCudnnFusedAttention(unittest.TestCase):
         np.testing.assert_allclose(seq_out.float32().numpy(), want[0].transpose(0, 2, 1, 3),
                                    atol=2e-3, rtol=2e-3)
         if mask is not None:
+            self.assertTrue(seq_out._storage_is_contiguous())
+            self.assertEqual(out._storage_strides()[1], d)
+            self.assertEqual(out.location(), "device")
             return
         grads = jt.grad((out.float32() * jt.array(dout)).sum(), sources)
         for name, got, expected in zip("qkv", grads, want[1:]):
@@ -122,7 +126,9 @@ class TestCudnnFusedAttention(unittest.TestCase):
     def test_seq_major_inputs_with_a_mask(self):
         mask = np.ones((2, 1, 70, 70), bool)
         mask[1, ..., 50:] = False
-        self._check_seq_major("qkv", mask)
+        mask[0, :, 14, :] = False
+        with jt.flag_scope(transpose_storage_view=1):
+            self._check_seq_major("qkv", mask)
 
     def test_float16_unequal_lengths(self):
         self._check_training("float16", 2, 4, 4, 33, 47, 64, False, 3e-3)
@@ -178,7 +184,9 @@ class TestCudnnFusedAttention(unittest.TestCase):
             self.assertEqual(len(self.kernel._MASK_TERMS), 1)
             self.assertIs(self.kernel._MASK_TERMS[0][2],
                           self.kernel._mask_terms(base[:, :, :, :64], (1, 4, 48, 64),
-                                                  (1, 4, 64, 64), qkv[0].dtype)[0])
+                                                  (1, 4, 64, 64), qkv[0].dtype,
+                                                  check_absorbed=False,
+                                                  replace_infinity=not self.io_bias)[0])
             third = scaled_dot_product_attention(*qkv, attn_mask=jt.array(other))
             self.assertEqual(len(self.kernel._MASK_TERMS), 1)
         want = _reference(q, k, v, full[..., :64], False, np.zeros_like(q))[0]
@@ -187,13 +195,82 @@ class TestCudnnFusedAttention(unittest.TestCase):
         want = _reference(q, k, v, other, False, np.zeros_like(q))[0]
         np.testing.assert_allclose(third.float32().numpy(), want, atol=3e-3 * np.abs(want).max())
 
+    def test_step_capture_reuses_multiple_masks_within_trace_and_clears_after(self):
+        from jittor._runtime import step_capture
+
+        rng = np.random.RandomState(4)
+        q = rng.randn(1, 4, 48, 64).astype("float32")
+        k, v = (rng.randn(1, 4, 64, 64).astype("float32") for _ in range(2))
+        mask_a = rng.rand(1, 1, 48, 80) > 0.3
+        mask_b = rng.rand(1, 1, 48, 80) > 0.5
+        base_a = jt.array(mask_a)
+        base_b = jt.array(mask_b)
+        seen_biases = []
+
+        def step(qt, kt, vt, ma, mb):
+            first = self.kernel._mask_terms(
+                ma[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            second = self.kernel._mask_terms(
+                mb[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            first_again = self.kernel._mask_terms(
+                ma[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            second_again = self.kernel._mask_terms(
+                mb[:, :, :, :64], (1, 4, 48, 64), (1, 4, 64, 64), qt.dtype,
+                check_absorbed=False, replace_infinity=not self.io_bias)
+            if step_capture._ACTIVE is not None:
+                seen_biases.append((first[0], first_again[0], second[0], second_again[0],
+                                    len(step_capture._ACTIVE.mask_terms)))
+            out_a = scaled_dot_product_attention(qt, kt, vt, attn_mask=ma[:, :, :, :64])
+            out_b = scaled_dot_product_attention(qt, kt, vt, attn_mask=mb[:, :, :, :64])
+            return out_a + out_b
+
+        captured = step_capture.StepCapture(step)
+        with jt.no_grad():
+            qkv = [jt.array(t).float16() for t in (q, k, v)]
+            eager_out = captured(*qkv, base_a, base_b)
+            cap_out = captured(*qkv, base_a, base_b)
+            replay_out = captured(*qkv, base_a, base_b)
+            self.assertEqual(len(seen_biases), 1)
+            b1, b1_again, b2, b2_again, cache_len = seen_biases[0]
+            self.assertIs(b1, b1_again)
+            self.assertIs(b2, b2_again)
+            self.assertIsNot(b1, b2)
+            self.assertEqual(cache_len, 2)
+            self.assertEqual(len(captured._capture.mask_terms), 0)
+            want = (_reference(q, k, v, mask_a[..., :64], False, np.zeros_like(q))[0]
+                    + _reference(q, k, v, mask_b[..., :64], False, np.zeros_like(q))[0])
+            for got in (eager_out, cap_out, replay_out):
+                np.testing.assert_allclose(got.float32().numpy(), want, atol=5e-3 * np.abs(want).max())
+
     def test_a_float_mask_per_head(self):
         self._check_mask((np.random.RandomState(3).randn(2, 4, 48, 64) * 0.5).astype("float32"))
 
     def test_a_two_dimensional_mask(self):
         self._check_mask((np.random.RandomState(4).randn(48, 64) * 0.5).astype("float32"))
 
+    def test_square_causal_bias_is_finite_in_half_precision(self):
+        for dtype, shape, tolerance in (
+                ("float16", (4, 3, 49, 32), 2e-3),
+                ("bfloat16", (1, 16, 128, 128), 2e-2)):
+            with self.subTest(dtype=dtype), jt.no_grad(), forbid_backend_fallbacks():
+                rng = np.random.default_rng(62)
+                qkv = [jt.array(rng.standard_normal(shape, dtype=np.float32)).cast(dtype)
+                       for _ in range(3)]
+                mask = np.tril(np.ones((shape[2], shape[2]), dtype=bool))
+                mask[3, :] = False
+                inputs = [tensor.float32().numpy() for tensor in qkv]
+                want = _reference(*inputs, mask, False, np.zeros(shape))[0]
+                out = self.kernel._cudnn_fused_attention(*qkv, attn_mask=jt.array(mask))
+                self.assertIsNotNone(out)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                np.testing.assert_allclose(out.float32().numpy(), want, atol=tolerance, rtol=tolerance)
+
     def _check_mask_training(self, dtype, mask, causal=False, grouped=False, expect_fused=True):
+        expect_fused = expect_fused and (mask.dtype != np.float32 or not self.io_bias)
         rng = np.random.RandomState(41)
         heads, key_heads = (4, 2) if grouped else (2, 2)
         q = rng.randn(1, heads, 33, 64).astype("float32") * 0.5
@@ -267,8 +344,8 @@ class TestCudnnFusedAttention(unittest.TestCase):
                 mask[5, :] = np.finfo(np.float32).min
                 self._check_mask_training(dtype, mask, expect_fused=False)
 
-    def test_autocast_keeps_the_float32_bias_abi(self):
-        mask = np.where(np.arange(47) < 31, 0., -1e9).astype("float32")
+    def test_autocast_keeps_mask_preparation_in_float32(self):
+        mask = np.arange(47) < 31
         for dtype, preference in (("float16", jt.amp_flags.prefer16),
                                   ("bfloat16", jt.amp_flags.prefer_bfloat16)):
             with self.subTest(dtype=dtype), jt.flag_scope(amp_reg=preference):
@@ -356,6 +433,30 @@ class TestCudnnFusedAttention(unittest.TestCase):
                 jt.sync_all(True)
                 peak = jt.core.device_memory_peak(0) - base
                 self.assertLess(peak, scores / 4, "peaked at %.0f MiB" % (peak / 2**20))
+
+    def test_repeated_heads_unwraps_clone_and_contiguous_for_gqa(self):
+        from jittor.nn.functional.attention import _repeated_heads
+
+        rng = np.random.RandomState(47)
+        q = jt.array(rng.randn(1, 8, 32, 64).astype("float32")).bfloat16()
+        k_base = jt.array(rng.randn(1, 4, 32, 64).astype("float32")).bfloat16()
+        v_base = jt.array(rng.randn(1, 4, 32, 64).astype("float32")).bfloat16()
+        with jt.no_grad(), forbid_backend_fallbacks():
+            # Torch-shim repeat_kv inserts clone/contiguous views around broadcast_to.
+            k_rep = k_base[:, :, None, :, :].clone().broadcast((1, 4, 2, 32, 64)).clone().contiguous().reshape(1, 8, 32, 64)
+            v_rep = v_base[:, :, None, :, :].clone().broadcast((1, 4, 2, 32, 64)).clone().contiguous().reshape(1, 8, 32, 64)
+            unwrapped_k = _repeated_heads(k_rep)
+            unwrapped_v = _repeated_heads(v_rep)
+            self.assertIsNotNone(unwrapped_k)
+            self.assertIsNotNone(unwrapped_v)
+            self.assertEqual(unwrapped_k[1], 2)
+            self.assertEqual(unwrapped_v[1], 2)
+            self.assertEqual(tuple(unwrapped_k[0].shape), (1, 4, 32, 64))
+            self.assertEqual(tuple(unwrapped_v[0].shape), (1, 4, 32, 64))
+            out = scaled_dot_product_attention(q, k_rep, v_rep)
+            ref = scaled_dot_product_attention(q, k_base, v_base, enable_gqa=True)
+            out_np, ref_np = jt.fetch_sync([out.float32(), ref.float32()])
+            np.testing.assert_allclose(out_np, ref_np, atol=1e-2, rtol=1e-2)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import numpy as np
 
 import jittor as jt
-from jittor._runtime.dispatch import try_dispatch
+from jittor._runtime.dispatch import dispatch_context, try_dispatch
 from jittor.nn.functional._layout import channels_last_source
 
 from ... import _arg_policy
@@ -289,12 +289,12 @@ def gelu(x, approximate='none'):
         >>> nn.gelu(a)
         jt.Var([-0.134547   0.9882567  6.128115 ], dtype=float32)
     '''
-    # Training keeps the exact BF16 forward and backward in one CUDA kernel
-    # each. It has a separate dispatch name so its registration does not
-    # disable the native no-grad GELU route below for other dtypes.
     fast = try_dispatch("nn.gelu.training", x, approximate=approximate)
     if fast is not None:
         return fast
+    fast = try_dispatch("nn.gelu.inference", x, approximate=approximate)
+    if fast is not None:
+        return _remember_gelu_operand(x, fast, approximate, materialized=True)
     if approximate == 'none' and _FAST_GELU is not None:
         # The body below, built natively when the frontend's binary operators
         # are bound and no "nn.gelu" kernel is registered; None otherwise.
@@ -304,9 +304,13 @@ def gelu(x, approximate='none'):
     fast = try_dispatch("nn.gelu", x, approximate=approximate)
     if fast is not None:
         return fast
+    input_dtype = _jittor_dtype_name(x.dtype)
+    low_precision = input_dtype in ('float16', 'bfloat16')
+    compute_x = x.float32() if low_precision else x
     if approximate == 'tanh':
-        _sqrt_2_over_pi = 0.7978845608028654
-        return 0.5*x*(1+jt.tanh(_sqrt_2_over_pi*(x+0.044715*(x*x*x))))
+        sqrt_2_over_pi = 0.7978845608028654
+        cubic = compute_x * compute_x * compute_x
+        result = 0.5 * compute_x * (1 + jt.tanh(sqrt_2_over_pi * (compute_x + 0.044715 * cubic)))
     elif approximate == 'none':
         # Keep the exact GELU kernel in the tensor's compute dtype. Dividing a
         # float32 Var by a Python float intentionally uses a float64 intermediate
@@ -319,21 +323,58 @@ def gelu(x, approximate='none'):
         # twice on the *string* its own first call returned. The three typed
         # constants were rebuilt per call too; they depend on nothing but the
         # compute dtype, so there are exactly two sets of them.
-        input_dtype = _jittor_dtype_name(x.dtype)
-        low_precision = input_dtype in ('float16', 'bfloat16')
-        compute_x = x.float32() if low_precision else x
         half, one, inv_sqrt2 = _GELU_CONSTANTS[input_dtype == 'float64']
         result = half * compute_x * (one + jt.erf(compute_x * inv_sqrt2))
-        return result.cast(input_dtype) if low_precision else result
     else:
         raise ValueError(f"approximate argument must be either 'none' or 'tanh', got {approximate}")
+    result = result.cast(input_dtype) if low_precision else result
+    return _remember_gelu_operand(x, result, approximate, materialized=False)
+
+
+def _remember_gelu_operand(x, output, approximate, *, materialized):
+    if (approximate != "tanh" or not jt.flags.no_grad or jt.flags.amp_reg
+            or _jittor_dtype_name(x.dtype) not in ("float16", "bfloat16")):
+        return output
+    placement = int(x.placement_backend)
+    if placement != 1 and (placement >= 0 or dispatch_context(x).backend != "cuda"):
+        return output
+    dense_gate = materialized
+    if not dense_gate and x._storage_is_contiguous() and x.numel() >= 4096:
+        from jittor.backends.cuda.kernels.nn.gelu_training_cuda import _has_gelu_input_boundary
+
+        # A GEMM already writes its output to memory. The gated kernel can
+        # consume it directly, leaving other pointwise producers to the fuser.
+        dense_gate = _has_gelu_input_boundary(x)
+    if dense_gate or not x._storage_is_contiguous() or x._is_pending_contiguous():
+        output._jt_gelu_operand = (
+            x, x._saved_storage_version(), output._saved_storage_version(), dense_gate,
+        )
+    return output
 
 
 def sigmoid(x):
     ''' Element-wise sigmoid. Exposed as a function (torch.nn.functional.sigmoid /
     nn.functional.sigmoid) -- jittor only had jt.sigmoid / Var.sigmoid before, so
     `F.sigmoid(x)` (used by qwen2_moe and others) raised AttributeError.'''
+    fast = _fused_activation(x, "sigmoid")
+    if fast is not None:
+        return fast
     return jt.sigmoid(x)
+
+
+def _remember_silu_operand(x, output):
+    if (jt.flags.no_grad and int(x.placement_backend) == 1
+            and not x._storage_is_contiguous()):
+        from jittor._runtime.step_capture import tracing
+        if tracing():
+            output._jt_silu_operand = (
+                x, x.var_ptr, x._saved_storage_version(),
+                output.var_ptr, output._saved_storage_version(),
+            )
+    return output
+
+
+_FAST_SILU = getattr(jt.core, "_fast_silu", None)
 
 
 def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignored
@@ -364,7 +405,11 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
     from jittor.backends.cuda.kernels.nn.silu_cuda import _silu_no_grad_cuda  # noqa: F401
     fast = try_dispatch("nn.silu", x, inplace=inplace)
     if fast is not None:
-        return fast
+        return fast if inplace else _remember_silu_operand(x, fast)
+    if _FAST_SILU is not None:
+        fast = _FAST_SILU(x)
+        if fast is not None:
+            return fast if inplace else _remember_silu_operand(x, fast)
     if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
         # SiLU rounds once at its public boundary. A narrow sigmoid followed
         # by a narrow multiply adds a rounding step absent from the opmath
@@ -372,7 +417,8 @@ def silu(x, inplace=False):     # inplace: accepted for torch/mmcv compat, ignor
         dtype = x.dtype
         with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
             wide = x.float32()
-            return (wide * wide.sigmoid()).cast(dtype)
+            result = (wide * wide.sigmoid()).cast(dtype)
+        return result if inplace else _remember_silu_operand(x, result)
     return x * x.sigmoid()
 
 
@@ -398,6 +444,16 @@ def prelu(x, weight):
     return jt.maximum(0, x) + w * jt.minimum(0, x)
 
 
+def _hard_activation_low_precision(x, swish):
+    with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+        wide = x.float32()
+        # Scalar min/max keep the storage order and can fuse with neighbors.
+        # The right operand receives the gradient on ties, as in clamp.
+        clipped = jt.minimum(6, jt.maximum(0, wide + 3))
+        result = (wide * clipped if swish else clipped) * (1.0 / 6.0)
+        return result.cast(x.dtype)
+
+
 def hardswish(x):
     ''' Applies the element-wise Hardswish function:
 
@@ -408,6 +464,8 @@ def hardswish(x):
         x \\cdot (x + 3) / 6, & \\text{otherwise}
         \\end{cases}
     '''
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return _hard_activation_low_precision(x, swish=True)
     return x * jt.clamp(x + 3, min_v=0, max_v=6) / 6
 
 
@@ -421,6 +479,8 @@ def hardsigmoid(x):
         x / 6 + 1/2, & \\text{otherwise}
         \\end{cases}
     '''
+    if _jittor_dtype_name(x.dtype) in ("float16", "bfloat16"):
+        return _hard_activation_low_precision(x, swish=False)
     return jt.clamp(x / 6 + 0.5, min_v=0.0, max_v=1.0)
 
 

@@ -1034,6 +1034,12 @@ def compile_src(src, h, basename):
         # `obj.__rmul__`), and raise the usual TypeError when there is none.
         if name in binary_number_slots:
             no_overload_code = "Py_INCREF(Py_NotImplemented); return Py_NotImplemented;"
+        elif name == "__richcmp__":
+            no_overload_code = (
+                "if (op == Py_EQ || op == Py_NE) { "
+                "Py_INCREF(Py_NotImplemented); return Py_NotImplemented; } "
+                'no_overload=true; LOGf << "Not a valid call.";'
+            )
         else:
             no_overload_code = 'no_overload=true; LOGf << "Not a valid call.";'
         func = f"""

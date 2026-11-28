@@ -8,8 +8,13 @@
 #include "bindings/pyjt/py_type_lifetime.h"
 #include "ops/op_register.h"
 #include "core/op.h"
+#include "ops/composite/array_op.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
+#include "ops/composite/transpose_op.h"
+#include "ops/composite/fuse_transpose_op.h"
 #include "mem/allocator.h"
+#include <array>
 #include <cstring>
 #include "runtime/device.h"
 #include "runtime/backend.h"
@@ -21,6 +26,14 @@
 #include <unordered_set>
 
 namespace jittor {
+
+bool pending_cuda_code_is(VarHolder* value, const string& source, const string& header) {
+    auto* var = value->var;
+    auto* op = var->input();
+    if (var->is_finished() || !op || !op->is_op(get_op_id("code"))) return false;
+    const auto* code = static_cast<const CodeOp*>(op);
+    return code->cuda_src == source && code->cuda_header == header;
+}
 
 DECLARE_FLAG(bool, no_grad);
 DECLARE_FLAG(int, amp_reg);
@@ -657,7 +670,7 @@ namespace {
 // native name. Dropped when the type is collected.
 struct DtypeTable {
     PyObject* table = nullptr;
-    std::unordered_map<string, PyObject*> by_name;
+    std::array<PyObject*, ns_max_size> by_dtype{};
 };
 std::unordered_map<PyTypeObject*, DtypeTable> dtype_tables;
 
@@ -666,7 +679,7 @@ void forget_dtype_table(PyObject* type) {
     if (found == dtype_tables.end()) return;
     DtypeTable entry = move(found->second);
     dtype_tables.erase(found);
-    for (auto& cached : entry.by_name) Py_DECREF(cached.second);
+    for (auto* cached : entry.by_dtype) Py_XDECREF(cached);
     Py_DECREF(entry.table);
 }
 } // namespace
@@ -689,13 +702,14 @@ PyObject* frontend_dtype(PyObject* self) {
         found = dtype_tables.emplace(type, move(entry)).first;
     }
     auto& entry = found->second;
-    const char* name = GET_RAW_PTR(VarHolder, self)->var->dtype().to_cstring();
-    auto cached = entry.by_name.find(name);
-    if (cached != entry.by_name.end()) {
-        Py_INCREF(cached->second);
-        return cached->second;
+    auto dtype = GET_RAW_PTR(VarHolder, self)->var->dtype();
+    PyObject*& cached = entry.by_dtype[dtype.index()];
+    if (cached) {
+        Py_INCREF(cached);
+        return cached;
     }
-    PyObjHolder key(PyUnicode_FromString(name));
+    PyObjHolder key(PyUnicode_FromString(dtype.to_cstring()));
+    if (!key.obj) return nullptr;
     PyObject* value = PyObject_GetItem(entry.table, key.obj);
     if (!value) {
         PyErr_Clear();
@@ -704,7 +718,7 @@ PyObject* frontend_dtype(PyObject* self) {
     }
     // The table is fixed for an installation; the entry keeps a reference.
     Py_INCREF(value);
-    entry.by_name.emplace(name, value);
+    cached = value;
     return value;
 }
 
@@ -717,6 +731,46 @@ auto make_empty = op_constructor<VarPtr, NanoVector, NanoString>("empty");
 auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
 auto make_cat_cast = op_constructor<VarPtr, Var*, NanoString>("unary");
+auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
+    vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+auto make_prepared_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&,
+    const string*, DataMap&&, string&&>("code");
+
+// Copy both portions of a dense row in one launch. The widths travel with
+// the op so a growing sequence can reuse the same compiled CUDA kernel.
+const char* cat_pair_cuda_header = R"(
+template <class T>
+__global__ static void cat_pair_cuda(const T* left, const T* right,
+                                    T* output, unsigned left_width,
+                                    unsigned right_width, unsigned count) {
+    const unsigned row_width = left_width + right_width;
+    const unsigned step = blockDim.x * gridDim.x;
+    for (unsigned index = blockIdx.x * blockDim.x + threadIdx.x;
+            index < count; index += step) {
+        const unsigned row = index / row_width;
+        const unsigned column = index % row_width;
+        output[index] = column < left_width ? left[row * left_width + column]
+            : right[row * right_width + column - left_width];
+    }
+}
+)";
+const char* cat_pair_cuda_source = R"(
+const unsigned count = out0->num;
+const unsigned left_width = data["left_width"], right_width = data["right_width"];
+constexpr unsigned pack_width = sizeof(uint4) / sizeof(out0_type);
+if (pack_width > 1 && left_width % pack_width == 0 && right_width % pack_width == 0
+        && ((reinterpret_cast<uintptr_t>(in0_p) | reinterpret_cast<uintptr_t>(in1_p)
+             | reinterpret_cast<uintptr_t>(out0_p)) & 15u) == 0) {
+    const unsigned packs = count / pack_width;
+    cat_pair_cuda<<<std::min((packs + 255) / 256, 4096u), 256>>>(
+        reinterpret_cast<const uint4*>(in0_p), reinterpret_cast<const uint4*>(in1_p),
+        reinterpret_cast<uint4*>(out0_p), left_width / pack_width, right_width / pack_width, packs);
+} else {
+    cat_pair_cuda<<<std::min((count + 255) / 256, 4096u), 256>>>(
+        in0_p, in1_p, out0_p, left_width, right_width, count);
+}
+CHECK(cudaGetLastError() == cudaSuccess);
+)";
 
 struct ConcatAmpScope {
     int saved = amp_reg;
@@ -813,6 +867,13 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
         vars[i] = GET_RAW_PTR(VarHolder, items[i])->var;
     }
     Var* first = vars[0];
+    if (first->placement.explicit_backend) {
+        const auto ambient = frontend_placement_request();
+        if (ambient.explicit_backend
+                && (ambient.device.backend != first->placement.device.backend
+                    || ambient.device.index != std::max(first->device_id, 0)))
+            return not_implemented();
+    }
     int ndim = first->shape.size();
     if (ndim == 0) return not_implemented();
     if (dim < 0) dim += ndim;
@@ -876,17 +937,40 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
         PyObjHolder fallback_args(PyTuple_Pack(3, normalized.obj, axis.obj, dtype_name.obj));
         return PyObject_CallObject(continuation.obj, fallback_args.obj);
     }
-    PyObject* capture = PyObject_CallObject(tracing_fn, nullptr);
-    if (!capture) return nullptr;
-    PyObjHolder capturing(capture);
-    int active = PyObject_IsTrue(capture);
-    if (active < 0) return nullptr;
-    if (active) return not_implemented();
-
     // The frontend and placement the generated bindings of `empty` and
     // `setitem` would each have entered.
     NanoVector out_shape;
     for (int d = 0; d < ndim; d++) out_shape.push_back(d == dim ? total : shape[d]);
+
+    // A vectorized copy of a dense pair writes both pieces in one launch.
+    // Keep wider scalar copies in the slice path, where each input can
+    // select its own vector width. The pair is also safe inside a capture.
+    constexpr int64 max_pair_elements = 1 << 24;
+    constexpr int64 max_scalar_elements = 1 << 20;
+    if (n == 2 && no_grad && runtime_use_cuda()
+            && accelerator_backend_id() == BackendId::Cuda && !dtype.is_complex()
+            && vars[0]->num <= max_pair_elements
+            && vars[1]->num <= max_pair_elements - vars[0]->num
+            && vars[0]->is_contiguous() && vars[1]->is_contiguous()
+            && query_dispatch_context(vars).backend == "cuda") {
+        int64 outer = 1;
+        for (int axis = 0; axis < dim; ++axis) outer *= shape[axis];
+        const int64 left = vars[0]->num / outer, right = vars[1]->num / outer;
+        const int64 alignment = (left * dtype.dsize()) | (right * dtype.dsize())
+            | vars[0]->storage_offset_bytes | vars[1]->storage_offset_bytes;
+        if (vars[0]->num + vars[1]->num <= max_scalar_elements || (alignment & 15) == 0) {
+            DataMap widths{{"left_width", double(left)}, {"right_width", double(right)}};
+            static const auto& source = code_source_token(cat_pair_cuda_header, cat_pair_cuda_source);
+            auto result = make_prepared_code(out_shape, dtype, move(vars),
+                                             &source, move(widths), "cuda");
+            return to_py_object<VarHolder*>(new VarHolder(move(result)));
+        }
+    }
+    PyObjHolder capturing(PyObject_CallObject(tracing_fn, nullptr));
+    if (!capturing.obj) return nullptr;
+    int active = PyObject_IsTrue(capturing.obj);
+    if (active < 0) return nullptr;
+    if (active) return not_implemented();
     VarPtr out = make_empty(out_shape, dtype);
     // The scratch allocation is not a differentiable input to concatenation.
     // Only the tensors copied into it may contribute gradient edges.
@@ -910,10 +994,26 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
 
 PyObject* fast_getitem(PyObject* self, PyObject* index) {
     if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)) return not_implemented();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    Var* var = holder->var;
     if (PyTuple_CheckExact(index)) {
         Py_ssize_t n = PyTuple_GET_SIZE(index);
         for (Py_ssize_t i = 0; i < n; i++)
             if (!basic_item(PyTuple_GET_ITEM(index, i))) return not_implemented();
+        if (n > var->shape.size() && n > 1 && PyLong_CheckExact(PyTuple_GET_ITEM(index, 0))) {
+            // The frontend validates this spelling before consulting a provider.
+            bool trailing_full_slices = true;
+            for (Py_ssize_t i = 1; i < n; ++i) {
+                PyObject* item = PyTuple_GET_ITEM(index, i);
+                if (!PySlice_Check(item)) { trailing_full_slices = false; break; }
+                auto* slice = reinterpret_cast<PySliceObject*>(item);
+                if (slice->start != Py_None || slice->stop != Py_None || slice->step != Py_None) {
+                    trailing_full_slices = false;
+                    break;
+                }
+            }
+            if (trailing_full_slices) return not_implemented();
+        }
     } else if (!basic_item(index)) {
         return not_implemented();
     }
@@ -934,8 +1034,6 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
             if (!accepted) return not_implemented();
         }
     }
-    auto* holder = GET_RAW_PTR(VarHolder, self);
-    Var* var = holder->var;
     // A CPU-resident hint or a `.data` record changes what the result must
     // carry; the Python path owns those.
     if (var->placement.explicit_backend && var->placement.device.backend == BackendId::Cpu)
@@ -1015,6 +1113,431 @@ PyObject* fast_getitem(PyObject* self, PyObject* index) {
     auto* out = new VarHolder(make_getitem(var, move(slices)));
     out->set_view_of(holder, move(recorded));
     return to_py_object<VarHolder*>(out);
+}
+
+PyObject* fast_split_slices(PyObject* self, PyObject* sizes, int64 dim, int gopt_disable) {
+    if (!PyObject_TypeCheck(self, &PyjtVarHolder.ht_type)
+            || !(PyList_CheckExact(sizes) || PyTuple_CheckExact(sizes))
+            || kernel_op_registered("tensor.getitem"))
+        Py_RETURN_NONE;
+    auto** attributes = _PyObject_GetDictPtr(self);
+    if (attributes && *attributes && PyDict_GetItemString(*attributes, "getitem"))
+        Py_RETURN_NONE;
+    auto* var = GET_RAW_PTR(VarHolder, self)->var;
+    if (dim < 0 || dim >= var->shape.size() || var->num < 0
+            || (dim == 0 && !gopt_disable && var->is_contiguous()))
+        Py_RETURN_NONE;
+    const auto count = Py_SIZE(sizes);
+    if (count <= 0 || count > 64) Py_RETURN_NONE;
+    auto* items = PySequence_Fast_ITEMS(sizes);
+    int64 extents[64];
+    int64 remainder = var->shape[dim];
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        if (!PyLong_CheckExact(items[i])) Py_RETURN_NONE;
+        int overflow;
+        auto extent = PyLong_AsLongLongAndOverflow(items[i], &overflow);
+        if (overflow || extent <= 0 || extent > remainder) Py_RETURN_NONE;
+        extents[i] = extent;
+        remainder -= extent;
+    }
+    if (remainder) Py_RETURN_NONE;
+
+    PyTensorFrontendScope scope(self);
+    PyObjHolder outputs(PyTuple_New(count));
+    if (!outputs.obj) return nullptr;
+    int64 offset = 0;
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        VarSlices slices(dim + 1);
+        for (int axis = 0; axis < dim; ++axis)
+            slices.slices[axis].slice = {0, 0, 1, 7};
+        auto end = offset + extents[i];
+        slices.slices[dim].slice = {offset, end, 1, 4};
+        auto* result = to_py_object<VarHolder*>(new VarHolder(make_getitem(var, move(slices))));
+        if (!result) return nullptr;
+        PyTuple_SET_ITEM(outputs.obj, i, result);
+        offset = end;
+    }
+    return outputs.release();
+}
+
+namespace {
+Op* pending_producer(Var* var) {
+    return var->is_finished() ? nullptr : var->input();
+}
+
+Var* without_clones(Var* var) {
+    static const OpId clone = get_op_id("clone");
+    while (auto* op = pending_producer(var)) {
+        if (!op->is_op(clone) || op->_inputs.empty()) break;
+        var = op->input(0);
+    }
+    return var;
+}
+
+Var* rope_factor_source(Var* factor, Var* source) {
+    static const OpId clone = get_op_id("clone");
+    while (factor != source) {
+        auto* op = pending_producer(factor);
+        if (!op || op->_inputs.empty()
+                || (!op->is_op(clone) && !op->is_op(op_ids::broadcast_to())))
+            break;
+        factor = op->input(0);
+    }
+    return factor;
+}
+
+const NanoVector* transpose_axes(Op* op) {
+    if (auto* transpose = dynamic_cast<TransposeOp*>(op)) return &transpose->axes;
+    if (auto* transpose = dynamic_cast<FuseTransposeOp*>(op)) return &transpose->axes;
+    return nullptr;
+}
+
+Var* before_matching_transpose(Var* value, const NanoVector& axes) {
+    auto* op = pending_producer(value);
+    const auto* inner_axes = transpose_axes(op);
+    return inner_axes && nano_vector_content_eq(*inner_axes, axes) && !op->_inputs.empty()
+        ? op->input(0) : nullptr;
+}
+
+Var* matching_rotate_half_source(Var* negative, Var* positive, int64 dim) {
+    constexpr int rank = 4;
+    if (dim != rank - 1 || negative->shape.size() != rank || positive->shape.size() != rank)
+        return nullptr;
+    const auto half = negative->shape[dim];
+    if (half <= 0 || positive->shape[dim] != half) return nullptr;
+    Op* negation = pending_producer(negative);
+    if (!negation || !negation->is_op(op_ids::unary()) || negation->ns != ns_negative
+            || negation->inputs().size() != 1 || negation->input(0)->shape != negative->shape)
+        return nullptr;
+    Var* upper = without_clones(negation->input(0));
+    Var* lower = without_clones(positive);
+    Op* upper_slice = pending_producer(upper);
+    Op* lower_slice = pending_producer(lower);
+    if (!upper_slice || !lower_slice || !upper_slice->is_op(op_ids::getitem())
+            || !lower_slice->is_op(op_ids::getitem()) || upper_slice->_inputs.empty()
+            || lower_slice->_inputs.empty())
+        return nullptr;
+    Var* source = lower_slice->input(0);
+    if (source != upper_slice->input(0) || source->shape.size() != rank
+            || source->shape[dim] != 2 * half || source->storage_stride(dim) != 1)
+        return nullptr;
+    for (int axis = 0; axis < rank; ++axis) {
+        if (axis != dim && source->shape[axis] != negative->shape[axis]) return nullptr;
+        const auto stride = source->storage_stride(axis);
+        if (lower->storage_stride(axis) != stride || upper->storage_stride(axis) != stride)
+            return nullptr;
+    }
+    const auto offset = source->storage_offset_bytes;
+    if (lower->storage_offset_bytes != offset || upper->storage_offset_bytes != offset + half * source->dsize())
+        return nullptr;
+    return source;
+}
+} // namespace
+
+PyObject* rotate_half_source(PyObject* negative, PyObject* positive, int64 dim) {
+    if (PyObject_TypeCheck(negative, &PyjtVarHolder.ht_type)
+            && PyObject_TypeCheck(positive, &PyjtVarHolder.ht_type)) {
+        auto* source = matching_rotate_half_source(GET_RAW_PTR(VarHolder, negative)->var,
+                                                   GET_RAW_PTR(VarHolder, positive)->var, dim);
+        if (source) {
+            PyTensorFrontendScope scope(positive);
+            return to_py_object<VarHolder*>(new VarHolder(source));
+        }
+    }
+    Py_RETURN_NONE;
+}
+
+PyObject* neox_rope_cosine(PyObject* product, PyObject* source) {
+    if (!PyObject_TypeCheck(product, &PyjtVarHolder.ht_type)
+            || !PyObject_TypeCheck(source, &PyjtVarHolder.ht_type))
+        Py_RETURN_NONE;
+    auto* original = GET_RAW_PTR(VarHolder, source)->var;
+    auto* multiply = pending_producer(GET_RAW_PTR(VarHolder, product)->var);
+    const auto* outer_axes = transpose_axes(multiply);
+    if (outer_axes) {
+        const auto& axes = *outer_axes;
+        const int rank = axes.size();
+        if (!rank || multiply->_inputs.empty()) Py_RETURN_NONE;
+        for (int i = 0; i < rank; ++i) {
+            const auto axis = axes[i];
+            if (axis < 0 || axis >= rank || axes[axis] != i) Py_RETURN_NONE;
+        }
+        multiply = pending_producer(multiply->input(0));
+    }
+    if (!multiply || !multiply->is_op(op_ids::binary()) || multiply->ns != ns_multiply
+            || multiply->inputs().size() < 2)
+        Py_RETURN_NONE;
+    Var* left = multiply->input(0);
+    Var* right = multiply->input(1);
+    if (outer_axes) {
+        left = before_matching_transpose(left, *outer_axes);
+        right = before_matching_transpose(right, *outer_axes);
+        if (!left || !right) Py_RETURN_NONE;
+    }
+    left = rope_factor_source(left, original);
+    right = rope_factor_source(right, original);
+    Var* other = left == original ? right : right == original ? left : nullptr;
+    if (other) {
+        PyTensorFrontendScope scope(product);
+        return to_py_object<VarHolder*>(new VarHolder(other));
+    }
+    Py_RETURN_NONE;
+}
+
+PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_fn) {
+    if (!PyObject_TypeCheck(x, &PyjtVarHolder.ht_type)
+            || !PyObject_TypeCheck(cos, &PyjtVarHolder.ht_type)
+            || !PyObject_TypeCheck(sin, &PyjtVarHolder.ht_type))
+        Py_RETURN_NONE;
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    auto* cosine = GET_RAW_PTR(VarHolder, cos);
+    auto* sine = GET_RAW_PTR(VarHolder, sin);
+    if (!no_grad && (holder->get_requires_grad() || cosine->get_requires_grad()
+                    || sine->get_requires_grad()))
+        Py_RETURN_NONE;
+
+    Var* value = holder->var;
+    const auto shape = value->shape;
+    const auto dtype = value->dtype();
+    if (shape.size() != 4 || (dtype != ns_float16 && dtype != ns_bfloat16 && dtype != ns_float32))
+        Py_RETURN_NONE;
+    for (int axis = 0; axis < 4; ++axis)
+        if (shape[axis] <= 0) Py_RETURN_NONE;
+    const auto width = shape[3];
+    if (width % 2) Py_RETURN_NONE;
+    // There is no matching source to stop at: walk through all identity
+    // clones and broadcasts to get the original, smaller rotation factors.
+    auto* c = rope_factor_source(cosine->var, nullptr);
+    auto* s = rope_factor_source(sine->var, nullptr);
+    if (c->dtype() != dtype || s->dtype() != dtype || c->shape.size() > 4
+            || c->shape.size() != s->shape.size())
+        Py_RETURN_NONE;
+    int64 factors[4] = {1, 1, 1, 1};
+    auto padding = 4 - c->shape.size();
+    for (uint axis = 0; axis < c->shape.size(); ++axis) {
+        auto extent = c->shape[axis];
+        if (extent != s->shape[axis] || (extent != 1 && extent != shape[padding + axis]))
+            Py_RETURN_NONE;
+        factors[padding + axis] = extent;
+    }
+    if (factors[3] != width) Py_RETURN_NONE;
+
+    const NanoVector swap_heads_sequence{0, 2, 1, 3};
+    auto matching_axes = [](const NanoVector& axes) {
+        return axes.size() == 4 && axes[0] == 0 && axes[1] == 2 && axes[2] == 1 && axes[3] == 3;
+    };
+    Var* producer_source = nullptr;
+    bool transpose_view = false;
+    bool permute_storage = false;
+    if (!value->is_contiguous()) {
+        auto* op = pending_producer(value);
+        const auto* axes = transpose_axes(op);
+        transpose_view = matching_axes(holder->transpose_view_axes());
+        if (axes && matching_axes(*axes) && op->input(0)->shape.size() == 4)
+            producer_source = op->input(0);
+        const auto heads = shape[1], length = shape[2];
+        permute_storage = !value->storage_offset_bytes && value->storage_stride(3) == 1
+            && (heads == 1 || value->storage_stride(1) == width)
+            && (length == 1 || value->storage_stride(2) == heads * width)
+            && (shape[0] == 1 || value->storage_stride(0) == length * heads * width);
+        if (!transpose_view && !producer_source && !permute_storage
+                && (value->is_finished() || axes || (op && op->is_op(op_ids::reindex()))))
+            Py_RETURN_NONE;
+    }
+    if (!source_fn || source_fn == Py_None) Py_RETURN_TRUE;
+
+    // The view construction may submit a batch, so keep the live sources
+    // while constructing the kernel rather than creating Python wrappers.
+    VarPtr c_owner(c == cosine->var ? nullptr : c);
+    VarPtr s_owner(s == sine->var ? nullptr : s);
+    PyTensorFrontendScope scope(x);
+    unique_ptr<VarHolder> dense;
+    if (transpose_view)
+        dense.reset(holder->transpose_view_source());
+    else if (!producer_source && permute_storage)
+        dense.reset(holder->storage_permute(swap_heads_sequence));
+    VarPtr source(dense ? dense->var : producer_source ? producer_source : value);
+    const bool seq_major = dense != nullptr || producer_source != nullptr;
+    using SourceKey = std::tuple<int64, bool, bool, bool, bool, bool>;
+    const SourceKey key{width, dtype == ns_float32, seq_major,
+                        factors[0] > 1, factors[1] > 1, factors[2] > 1};
+    // The registered provider formats source from this specialization only.
+    // A different callable still supplies its own text on every invocation.
+    static PyObject* source_owner = nullptr;
+    static std::map<SourceKey, const string*> sources;
+    if (!source_owner) {
+        Py_INCREF(source_fn);
+        source_owner = source_fn;
+    }
+    const bool cacheable = source_fn == source_owner;
+    auto found = cacheable ? sources.find(key) : sources.end();
+    const string* code;
+    if (found != sources.end()) {
+        code = found->second;
+    } else {
+        // A source callback can run Python, so the inputs must outlive it.
+        if (!c_owner.ptr) c_owner = VarPtr(c);
+        if (!s_owner.ptr) s_owner = VarPtr(s);
+        PyObjHolder text(PyObject_CallFunction(source_fn, "Liiiii", static_cast<long long>(width),
+            dtype == ns_float32, seq_major, factors[0] > 1, factors[1] > 1, factors[2] > 1));
+        if (!text.obj) return nullptr;
+        Py_ssize_t size;
+        const char* bytes = PyUnicode_AsUTF8AndSize(text.obj, &size);
+        if (!bytes) return nullptr;
+        code = &code_source_token("", string(bytes, size));
+        if (cacheable) {
+            if (sources.size() >= 256) sources.clear();
+            sources.emplace(key, code);
+        }
+    }
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(shape, dtype,
+        {source.ptr, c, s}, code, {}, "")));
+    out->stop_grad();
+    return to_py_object<VarHolder*>(out.release());
+}
+
+namespace {
+const string* masked_softmax_code = nullptr;
+
+bool can_read_original_storage(Var* value) {
+    auto version = value->peek_storage_version();
+    return !version || (!version->value.load(std::memory_order_relaxed)
+        && !version->externally_visible.load(std::memory_order_relaxed));
+}
+
+Var* unbroadcast(Var* value) {
+    while (auto* op = pending_producer(value)) {
+        if (!op->is_op(op_ids::broadcast_to()) || op->_inputs.size() != 1) break;
+        value = op->input(0);
+    }
+    return value;
+}
+
+bool read_scalar(Var* value, float& scalar) {
+    value = unbroadcast(value);
+    auto* op = pending_producer(value);
+    if (!op || !op->is_op(op_ids::array()) || value->num != 1 || value->dtype() != ns_float32
+            || !can_read_original_storage(value))
+        return false;
+    auto* array = static_cast<ArrayOp*>(op);
+    if (!array->host_value_known()) return false;
+    scalar = *array->ptr<float>();
+    return std::isfinite(scalar);
+}
+
+bool accepts_score_operand(Var* operand, Var* scores) {
+    const int rank = operand->shape.size();
+    if (rank > 4 || !operand->is_contiguous() || !can_read_original_storage(operand)
+            || !operand->placement.explicit_backend || operand->placement != scores->placement)
+        return false;
+    for (int i = 0; i < rank; ++i)
+        if (operand->shape[i] != 1 && operand->shape[i] != scores->shape[4 - rank + i])
+            return false;
+    return true;
+}
+
+VarPtr try_masked_row_softmax(Var* scores) {
+    if (!masked_softmax_code || scores->dtype() != ns_float32
+            || !scores->placement.explicit_backend || scores->placement.device.backend != BackendId::Cuda
+            || scores->shape.size() != 4 || scores->shape[2] > 4 || scores->shape[3] > 2048
+            || scores->num <= 0 || scores->num > std::numeric_limits<int>::max()
+            || !can_read_original_storage(scores))
+        return {};
+    auto* addition = pending_producer(scores);
+    if (!addition || !addition->is_op(op_ids::binary()) || addition->ns != ns_add
+            || addition->_inputs.size() != 2)
+        return {};
+    Var* masked = addition->input(0);
+    Var* bias = unbroadcast(addition->input(1));
+    auto* selection = pending_producer(masked);
+    static const OpId ternary = get_op_id("ternary");
+    if (!selection || !selection->is_op(ternary) || selection->_inputs.size() != 3
+            || !can_read_original_storage(masked) || bias->dtype() != ns_float32
+            || !accepts_score_operand(bias, scores))
+        return {};
+    Var* mask = unbroadcast(selection->input(0));
+    Var* scaled = selection->input(2);
+    float fill;
+    if (mask->dtype() != ns_bool || !accepts_score_operand(mask, scores)
+            || !read_scalar(selection->input(1), fill) || !can_read_original_storage(scaled))
+        return {};
+    auto* multiplication = pending_producer(scaled);
+    if (!multiplication || !multiplication->is_op(op_ids::binary())
+            || multiplication->ns != ns_multiply || multiplication->_inputs.size() != 2)
+        return {};
+    Var* unscaled = multiplication->input(0);
+    float scale;
+    if (unscaled->dtype() != ns_float32 || unscaled->shape != scores->shape
+            || !accepts_score_operand(unscaled, scores) || !read_scalar(multiplication->input(1), scale))
+        return {};
+    return make_prepared_code(scores->shape, ns_float32, {unscaled, mask, bias},
+                              masked_softmax_code, DataMap{{"scale", scale}, {"fill", fill}}, "cuda");
+}
+} // namespace
+
+void bind_masked_row_softmax(const string& source) {
+    masked_softmax_code = &code_source_token("", source);
+}
+
+namespace {
+const string* inference_code_source(PyObject* source, PyObject* header) {
+    USER_CHECK(PyUnicode_CheckExact(source) && PyUnicode_CheckExact(header))
+        << "inference code sources and headers must be strings";
+    struct Entry {
+        PyObject* source = nullptr;
+        PyObject* header = nullptr;
+        const string* token = nullptr;
+    };
+    // The Python source owners are immutable strings. The actual token
+    // remains valid while a queued operator owns it after this entry is reused.
+    static Entry recent[16]{};
+    static unsigned next = 0;
+    const string* token = nullptr;
+    for (const auto& entry : recent)
+        if (entry.source == source && entry.header == header) {
+            token = entry.token;
+            break;
+        }
+    if (!token) {
+        Py_ssize_t source_size, header_size;
+        const char* source_text = PyUnicode_AsUTF8AndSize(source, &source_size);
+        if (!source_text) throw std::invalid_argument("invalid CUDA source text");
+        USER_CHECK(source_size) << "inference code requires a CUDA source";
+        const char* header_text = PyUnicode_AsUTF8AndSize(header, &header_size);
+        if (!header_text) throw std::invalid_argument("invalid CUDA header text");
+        token = &code_source_token(string(header_text, header_size), string(source_text, source_size));
+        auto& entry = recent[next];
+        Py_XDECREF(entry.source);
+        Py_XDECREF(entry.header);
+        Py_INCREF(source);
+        Py_INCREF(header);
+        entry = {source, header, token};
+        next = (next + 1) % 16;
+    }
+    return token;
+}
+} // namespace
+
+VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header,
+                                    bool plain_row_softmax) {
+    USER_CHECK(no_grad) << "unary inference code requires no_grad";
+    auto* value = input->grad_input();
+    if (plain_row_softmax && !graph_capture_active()) {
+        if (auto fused = try_masked_row_softmax(value))
+            return new VarHolder(move(fused));
+    }
+    const auto* token = inference_code_source(source, header);
+    return new VarHolder(make_prepared_code(value->shape, value->dtype(), {value}, token, {}, ""));
+}
+
+VarHolder* cuda_inference_code(NanoVector shape, NanoString dtype,
+                              vector<VarHolder*>&& inputs, PyObject* source, PyObject* header) {
+    USER_CHECK(no_grad) << "inference code requires no_grad";
+    vector<Var*> values;
+    values.reserve(inputs.size());
+    for (auto* input : inputs) values.push_back(input->grad_input());
+    const auto* token = inference_code_source(source, header);
+    return new VarHolder(make_prepared_code(shape, dtype, move(values), token, {}, ""));
 }
 
 namespace {
@@ -1569,8 +2092,6 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
 }
 
 namespace {
-auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
-    vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
 
 // The body below as one kernel, in the same order and precision: float32
 // throughout, the input widened and the result narrowed as `.float32()` and
@@ -1580,18 +2101,50 @@ auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, 
 // instead of five.
 const string& gelu_source() {
     static const string source = R"(
+    __device__ __forceinline__ float jt_gelu_scalar(float v) {
+        return (0.5f * v) * (1.0f + erff(v * 0.7071067811865476f));
+    }
+    __global__ static void jt_gelu_vec16(const in0_type* __restrict__ x, out0_type* __restrict__ y,
+                                         long long n) {
+        constexpr int VEC = 16 / sizeof(in0_type);
+        long long nvec = n / VEC;
+        long long stride = (long long)gridDim.x * blockDim.x;
+        const uint4* __restrict__ xv = reinterpret_cast<const uint4*>(x);
+        uint4* __restrict__ yv = reinterpret_cast<uint4*>(y);
+        for (long long idx = (long long)blockIdx.x * blockDim.x + threadIdx.x; idx < nvec; idx += stride) {
+            uint4 in_raw = xv[idx];
+            uint4 out_raw;
+            const in0_type* in_e = reinterpret_cast<const in0_type*>(&in_raw);
+            out0_type* out_e = reinterpret_cast<out0_type*>(&out_raw);
+            #pragma unroll
+            for (int k = 0; k < VEC; ++k) {
+                out_e[k] = static_cast<out0_type>(jt_gelu_scalar(static_cast<float>(in_e[k])));
+            }
+            yv[idx] = out_raw;
+        }
+        long long tail = nvec * VEC;
+        for (long long i = tail + (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
+            y[i] = static_cast<out0_type>(jt_gelu_scalar(static_cast<float>(x[i])));
+        }
+    }
     __global__ static void jt_gelu(const in0_type* __restrict__ x, out0_type* __restrict__ y,
                                    long long n) {
         long long stride = (long long)gridDim.x * blockDim.x;
         for (long long i = (long long)blockIdx.x * blockDim.x + threadIdx.x; i < n; i += stride) {
-            float v = static_cast<float>(x[i]);
-            y[i] = static_cast<out0_type>((0.5f * v) * (1.0f + erff(v * 0.7071067811865476f)));
+            y[i] = static_cast<out0_type>(jt_gelu_scalar(static_cast<float>(x[i])));
         }
     }
     long long n = in0->num;
-    long long blocks = (n + 255) / 256;
-    if (blocks > 65536) blocks = 65536;
-    jt_gelu<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    constexpr int VEC = 16 / sizeof(in0_type);
+    if (VEC > 1 && n >= VEC && ((((size_t)in0_p | (size_t)out0_p) & 15) == 0)) {
+        long long blocks = ((n / VEC) + 255) / 256;
+        if (blocks > 65536) blocks = 65536;
+        jt_gelu_vec16<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    } else {
+        long long blocks = (n + 255) / 256;
+        if (blocks > 65536) blocks = 65536;
+        jt_gelu<<<(unsigned)blocks, 256>>>(in0_p, out0_p, n);
+    }
     )";
     return source;
 }
@@ -1610,13 +2163,19 @@ PyObject* fast_gelu(PyObject* x) {
     // also set on ACL).
     if (own != ns_float64 && !amp_reg && runtime_flag_use_cuda()
             && accelerator_backend_id() == BackendId::Cuda && producer
-            && producer->is_op(op_ids::code()) && var->num > 0 && var->is_contiguous()
+            && construction_target_backend(var) == BackendId::Cuda
+            && var->num > 0 && var->is_contiguous()
             && (no_grad || var->is_stop_grad())) {
-        PyTensorFrontendScope scope(x, nullptr, 0, false);
-        unique_ptr<VarHolder> out(new VarHolder(make_code(var->shape, own, {var},
-            "", {}, "", string(gelu_source()), {}, "", {}, "")));
-        out->stop_grad();
-        return to_py_object<VarHolder*>(out.release());
+        const bool code_output = producer->is_op(op_ids::code());
+        auto matmul = code_output ? nullptr : get_op_definition("cublas_matmul", false);
+        if (code_output || (matmul && producer->is_op(matmul->id))) {
+            PyTensorFrontendScope scope(x, nullptr, 0, false);
+            static const auto& source = code_source_token("", gelu_source());
+            unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(var->shape, own, {var},
+                &source, {}, "")));
+            out->stop_grad();
+            return to_py_object<VarHolder*>(out.release());
+        }
     }
     static PyObject* half = PyFloat_FromDouble(0.5);
     static PyObject* one = PyFloat_FromDouble(1.0);
@@ -1657,6 +2216,23 @@ PyObject* fast_gelu(PyObject* x) {
     }
     return wrap_like(out.obj, new VarHolder(
         make_unary(GET_RAW_PTR(VarHolder, out.obj)->var, own)));
+}
+
+PyObject* fast_silu(PyObject* x) {
+    if (!no_grad || amp_reg || !is_var(x) || kernel_op_registered("tensor.sigmoid"))
+        return none();
+    auto* holder = GET_RAW_PTR(VarHolder, x);
+    Var* value = holder->var;
+    const NanoString dtype = value->dtype();
+    if ((dtype != ns_float16 && dtype != ns_bfloat16)
+            || construction_target_backend(value) != BackendId::Cuda)
+        return none();
+    static auto multiply = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
+    PyTensorFrontendScope scope(x, nullptr, 0, false);
+    VarPtr wide = make_unary(holder->grad_input(), ns_float32);
+    VarPtr sigmoid = make_unary(wide, ns_sigmoid);
+    VarPtr product = multiply(wide, sigmoid, ns_multiply);
+    return to_py_object<VarHolder*>(new VarHolder(make_unary(product, dtype)));
 }
 
 namespace {
@@ -1781,7 +2357,7 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
     NanoString dtype = a->dtype();
     if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
     if (a == b || a->mem_ptr || a->is_finished() || target->view || target->views
-            || a->share_src || a->share_next || a->liveness.forward.count() != 1
+            || a->share_src || a->share_next
             || !a->is_stop_grad() || !b->is_stop_grad() || !a->is_contiguous()
             || a->shape != b->shape || a->dtype() != b->dtype()
             || a->placement != b->placement || a->device_id != b->device_id)
@@ -1792,24 +2368,34 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
     // output aliased with an input. Broader producers retain the store path.
     Op* producer = a->input();
     if (!producer || !producer->saved_storage_versions.empty()) return false;
+    Op* update = b->input();
+    if (!update || !update->saved_storage_versions.empty()) return false;
+    static const auto copy = get_op_id("copy");
+    // A private indexed update of a pending clone can keep its native graph.
+    const bool indexed = fresh_result && update->is_op(op_ids::setitem()) && update->input(0) == a
+        && producer->is_op(copy);
     bool dtype_cast = fresh_result && producer->is_op(op_ids::unary()) && producer->ns == ns_cast;
-    if (!dtype_cast && !((has_op("cublas_matmul")
+    if (!indexed && !dtype_cast && !((has_op("cublas_matmul")
                 && producer->is_op(get_op_id("cublas_matmul")))
             || (has_op("cublas_batched_matmul")
                 && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
-    Op* update = b->input();
-    if (!update || !update->is_op(op_ids::binary())
-            || !update->saved_storage_versions.empty()) return false;
+    if (!indexed && (a->liveness.forward.count() != 1 || !update->is_op(op_ids::binary())))
+        return false;
     int readers = 0;
     for (auto* consumer : a->outputs())
         if (consumer != update || ++readers > 1) return false;
     if (readers != 1) return false;
+    // A pending producer can contribute forward liveness even for a stopped
+    // tensor. The backward claims on this destination must be exactly the
+    // holder and its sole indexed reader. Aliases or queued batches add claims.
+    if (indexed && a->liveness.backward.count() != 2) return false;
     auto version = a->peek_storage_version();
-    if (version && version.use_count() != 2) return false;
+    if (version && (version.use_count() != 2
+            || version->externally_visible.load(std::memory_order_relaxed))) return false;
     if (a->autograd_alias && (a->autograd_alias.use_count() != 1
             || a->autograd_alias->version.use_count() != 1)) return false;
     if (!version) version = a->storage_version_token();
-    if (dtype_cast) {
+    if (dtype_cast || indexed) {
         target->assign(replacement);
     } else {
         // copy_(rhs) must leave the destination independent of its live RHS.
@@ -1849,6 +2435,29 @@ PyObject* fast_unsqueeze(PyObject* self, int64 dim) {
     return storage_view(self, target);
 }
 
+namespace {
+PyObject* storage_permute_by(PyObject* self, VarHolder* holder, const NanoVector& axes) {
+    PyTensorFrontendScope scope(self, nullptr, 0, false);
+    unique_ptr<VarHolder> out(holder->storage_permute(axes));
+    out->set_transpose_view_of(holder, axes);
+    return to_py_object<VarHolder*>(out.release());
+}
+
+bool read_permutation(PyObject* axes, int ndim, NanoVector& order) {
+    if (ndim <= 0 || ndim > 64 || PySequence_Fast_GET_SIZE(axes) != ndim) return false;
+    PyObject** items = PySequence_Fast_ITEMS(axes);
+    uint64 seen = 0;
+    for (int i = 0; i < ndim; i++) {
+        int64 axis;
+        if (!exact_int(items[i], axis)) { PyErr_Clear(); return false; }
+        if (axis < 0 || axis >= ndim || (seen >> axis & 1)) return false;
+        seen |= uint64(1) << axis;
+        order.push_back(axis);
+    }
+    return true;
+}
+} // namespace
+
 PyObject* fast_storage_transpose(PyObject* self, PyObject* dims) {
     if (!is_var(self) || !PyTuple_Check(dims) || PyTuple_GET_SIZE(dims) != 2)
         return none();
@@ -1867,10 +2476,15 @@ PyObject* fast_storage_transpose(PyObject* self, PyObject* dims) {
     NanoVector axes;
     for (int i = 0; i < ndim; ++i)
         axes.push_back(i == first ? second : i == second ? first : i);
-    PyTensorFrontendScope scope(self, nullptr, 0, false);
-    unique_ptr<VarHolder> out(holder->storage_permute(axes));
-    out->set_transpose_view_of(holder, axes);
-    return to_py_object<VarHolder*>(out.release());
+    return storage_permute_by(self, holder, axes);
+}
+
+PyObject* fast_storage_permute(PyObject* self, PyObject* axes) {
+    if (!is_var(self) || !(PyTuple_CheckExact(axes) || PyList_CheckExact(axes))) return none();
+    auto* holder = GET_RAW_PTR(VarHolder, self);
+    NanoVector order;
+    if (!read_permutation(axes, holder->var->shape.size(), order)) return none();
+    return storage_permute_by(self, holder, order);
 }
 
 namespace {
@@ -1928,18 +2542,8 @@ PyObject* fast_transpose(PyObject* self, int64 dim0, int64 dim1) {
 PyObject* fast_permute(PyObject* self, PyObject* axes) {
     if (!is_var(self) || !(PyTuple_Check(axes) || PyList_Check(axes))) return none();
     auto* holder = GET_RAW_PTR(VarHolder, self);
-    int ndim = holder->var->shape.size();
-    if (ndim == 0 || PySequence_Fast_GET_SIZE(axes) != ndim) return none();
-    PyObject** items = PySequence_Fast_ITEMS(axes);
     NanoVector order;
-    uint64 seen = 0;
-    for (int i = 0; i < ndim; i++) {
-        if (!PyLong_CheckExact(items[i])) return none();
-        long value = PyLong_AsLong(items[i]);
-        if (value < 0 || value >= ndim || (seen >> value & 1)) { PyErr_Clear(); return none(); }
-        seen |= uint64(1) << value;
-        order.push_back(value);
-    }
+    if (!read_permutation(axes, holder->var->shape.size(), order)) return none();
     return transpose_by(self, holder, order);
 }
 

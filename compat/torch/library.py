@@ -304,6 +304,9 @@ class _AtenOpProxy:
     def __init__(self, name, function):
         object.__setattr__(self, "_name", name)
         object.__setattr__(self, "_function", function)
+        object.__setattr__(self, "__name__", str(name))
+        object.__setattr__(self, "__qualname__", "aten.%s" % name)
+        object.__setattr__(self, "__module__", "torch.ops.aten")
 
     def __call__(self, *args, **kwargs):
         function = object.__getattribute__(self, "_function")
@@ -317,6 +320,8 @@ class _AtenOpProxy:
         return getattr(args[0], name)(*args[1:], **kwargs)
 
     def __getattr__(self, overload):
+        if overload.startswith("__") and overload.endswith("__"):
+            raise AttributeError(overload)
         return self
 
     def __repr__(self):

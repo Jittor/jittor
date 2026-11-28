@@ -32,13 +32,15 @@ struct Profiler {
         unordered_map<NanoVector, pair<uint64, uint64>> shapes;
 
         void update(int c, uint64_t t, uint64_t in, uint64_t out, uint64_t comp) {
-            count += 1<<c;
-            time_max = std::max(time_max, t>>c);
-            time_min = std::min(time_min, t>>c);
+            if (c < 0) c = 0;
+            if (c > 30) c = 30;
+            count += 1ULL << c;
+            time_max = std::max(time_max, t >> c);
+            time_min = std::min(time_min, t >> c);
             time_total += t;
-            in_total += in<<c;
-            out_total += out<<c;
-            compute_total += comp<<c;
+            in_total += in << c;
+            out_total += out << c;
+            compute_total += comp << c;
         }
     };
     // @pyjt(start)

@@ -173,6 +173,156 @@ def test_contiguous_storage_and_gradient_cuda():
         _check_contiguous("cuda")
 
 
+@pytest.fixture
+def cuda_contiguous_scope():
+    if not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("No CUDA found")
+    with jt.flag_scope(use_cuda=1, auto_graph_replay=0), forbid_backend_fallbacks():
+        yield
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+@pytest.mark.parametrize("shape,axes", [
+    pytest.param((7, 1), (1, 0), id="singleton-no-copy"),
+    pytest.param((31, 7), (1, 0), id="matrix"),
+    pytest.param((2, 32, 33), (0, 2, 1), id="b-c-hw-to-b-hw-c"),
+    pytest.param((2, 65, 64), (0, 2, 1), id="b-hw-c-to-b-c-hw"),
+    pytest.param((2, 33, 7, 31), (0, 2, 3, 1), id="nchw-nhwc"),
+    pytest.param((2, 7, 31, 33), (0, 3, 1, 2), id="nhwc-nchw"),
+    pytest.param((2, 7, 1, 33), (0, 2, 3, 1), id="singleton-spatial-axis"),
+    pytest.param((2, 7, 33, 64), (0, 2, 1, 3), id="attention-heads-sequence"),
+    pytest.param((2, 7, 33, 65), (0, 2, 3, 1), id="attention-heads-last"),
+    pytest.param((2, 3, 1, 7, 33), (0, 2, 4, 1, 3), id="five-axes"),
+    pytest.param((2, 2, 7, 3, 7, 33), (0, 5, 1, 3, 2, 4), id="swin-window-axes"),
+])
+def test_cuda_contiguous_transpose_values_and_gradients(cuda_contiguous_scope, dtype, shape, axes):
+    rng = np.random.default_rng(0)
+    values = rng.integers(-64, 64, size=shape).astype(np.float32)
+    source = torch.tensor(values, dtype=dtype, device="cuda", requires_grad=True)
+    view = source.permute(*axes)
+    packed = view.contiguous()
+    expected = values.transpose(axes)
+    weights = rng.integers(-32, 32, size=expected.shape).astype(np.float32)
+    cotangent = torch.tensor(weights, dtype=dtype, device="cuda")
+    gradient, = torch.autograd.grad(packed, source, grad_outputs=cotangent)
+    packed.sync()
+    gradient.sync()
+    assert packed.is_contiguous()
+    assert packed.dtype == gradient.dtype == dtype
+    assert packed.location() == gradient.location() == "device"
+    np.testing.assert_array_equal(packed.detach().float().cpu().numpy(), expected)
+    np.testing.assert_array_equal(gradient.detach().float().cpu().numpy(),
+                                  weights.transpose(np.argsort(axes)))
+
+
+@pytest.mark.cuda
+@pytest.mark.parametrize("dtype,np_dtype,scale", [
+    (torch.int32, np.int32, 123457),
+    (torch.int64, np.int64, 274877906943),
+])
+def test_cuda_contiguous_transpose_integer_bits(cuda_contiguous_scope, dtype, np_dtype, scale):
+    values = ((np.arange(2 * 33 * 65) - 2048) * scale).astype(np_dtype).reshape(2, 33, 65)
+    packed = torch.tensor(values, dtype=dtype, device="cuda").transpose(1, 2).contiguous()
+    packed.sync()
+    assert packed.dtype == dtype
+    assert packed.is_contiguous()
+    assert packed.location() == "device"
+    np.testing.assert_array_equal(packed.cpu().numpy(), values.transpose(0, 2, 1))
+
+
+@pytest.mark.cuda
+def test_cuda_contiguous_transpose_offset_and_gapped_rows(cuda_contiguous_scope):
+    shape = (2, 33, 8, 65)
+    values = (np.arange(np.prod(shape)) % 127).astype(np.float16).reshape(shape)
+    source = torch.tensor(values, device="cuda", requires_grad=True)
+    region = (slice(None), slice(1, None, 2), slice(1, None), slice(1, 64))
+    axes = (0, 2, 3, 1)
+    view = source[region].permute(*axes)
+    assert view.storage_offset() % 8 != 0
+    assert tuple(view.stride()) == (33 * 8 * 65, 65, 1, 2 * 8 * 65)
+    packed = view.contiguous()
+    packed.sync()
+    assert packed.is_contiguous()
+    assert packed.location() == "device"
+    np.testing.assert_array_equal(packed.detach().cpu().numpy(), values[region].transpose(axes))
+    gradient, = torch.autograd.grad(packed.float().sum(), source)
+    expected_gradient = np.zeros_like(values)
+    expected_gradient[region] = 1
+    np.testing.assert_array_equal(gradient.detach().cpu().numpy(), expected_gradient)
+
+
+@pytest.mark.cuda
+def test_cuda_contiguous_transpose_broadcast_and_empty(cuda_contiguous_scope):
+    values = np.arange(7 * 2 * 33, dtype=np.float32).reshape(1, 7, 2, 33)
+    source = torch.tensor(values, device="cuda", requires_grad=True)
+    view = source.permute(0, 2, 3, 1).expand(3, 2, 33, 7)
+    assert view.stride()[0] == 0
+    packed = view.contiguous()
+    packed.sync()
+    assert packed.is_contiguous()
+    assert packed.location() == "device"
+    np.testing.assert_array_equal(packed.detach().cpu().numpy(),
+                                  np.broadcast_to(values.transpose(0, 2, 3, 1), (3, 2, 33, 7)))
+    gradient, = torch.autograd.grad(packed.sum(), source)
+    np.testing.assert_array_equal(gradient.detach().cpu().numpy(), np.full_like(values, 3))
+    empty = source[:, :, :0, :].permute(0, 2, 3, 1).contiguous()
+    empty.sync()
+    assert tuple(empty.shape) == (1, 0, 33, 7)
+    assert empty.is_contiguous()
+
+
+@pytest.mark.cuda
+def test_cuda_contiguous_transpose_more_tiles_than_blocks(cuda_contiguous_scope):
+    values = np.arange(65537 * 4, dtype=np.int32).reshape(65537, 2, 2)
+    packed = torch.tensor(values, device="cuda").transpose(1, 2).contiguous()
+    packed.sync()
+    assert packed.is_contiguous()
+    assert packed.location() == "device"
+    np.testing.assert_array_equal(packed.cpu().numpy(), values.transpose(0, 2, 1))
+
+
+@pytest.mark.cuda
+def test_cuda_contiguous_transpose_with_elementwise_consumer(cuda_contiguous_scope):
+    values = (np.arange(2 * 7 * 31 * 33) % 127).astype(np.float32).reshape(2, 7, 31, 33)
+    source = torch.tensor(values, dtype=torch.float16, device="cuda", requires_grad=True)
+    result = source.permute(0, 3, 1, 2).contiguous() * 2 + 1
+    result.sync()
+    assert result.location() == "device"
+    np.testing.assert_array_equal(result.detach().float().cpu().numpy(),
+                                  values.transpose(0, 3, 1, 2) * 2 + 1)
+    gradient, = torch.autograd.grad(result.float().sum(), source)
+    np.testing.assert_array_equal(gradient.detach().float().cpu().numpy(), np.full_like(values, 2))
+
+
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+@pytest.mark.parametrize("row_width,start,width", [
+    (128, 8, 96),  # Aligned nonzero storage offset and aligned row strides.
+    (128, 1, 96),  # Misaligned storage offset.
+    (100, 0, 96),  # Consecutive rows do not all begin at vector boundaries.
+    (128, 0, 95),  # Partial vector at the end of every row.
+])
+def test_contiguous_packs_permuted_rows(device, row_width, start, width):
+    if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
+        pytest.skip("No CUDA found")
+    shape = (1, 2, 3, 3, 2, row_width)
+    source_np = (np.arange(np.prod(shape)) % 127).astype(np.float16).reshape(shape)
+    with jt.flag_scope(use_cuda=int(device == "cuda"), auto_graph_replay=0), forbid_backend_fallbacks():
+        source = torch.tensor(source_np, device=device, requires_grad=True)
+        view = source[..., start:start + width].permute(0, 1, 3, 2, 4, 5)
+        assert not view.is_contiguous()
+        packed = view.contiguous()
+        packed.sync()
+        assert packed.is_contiguous()
+        assert packed.location() == ("cpu" if device == "cpu" else "device")
+        expected = source_np[..., start:start + width].transpose(0, 1, 3, 2, 4, 5)
+        np.testing.assert_array_equal(packed.detach().cpu().numpy(), expected)
+        gradient, = torch.autograd.grad(packed.float().sum(), source)
+        expected_gradient = np.zeros_like(source_np)
+        expected_gradient[..., start:start + width] = 1
+        np.testing.assert_array_equal(gradient.detach().cpu().numpy(), expected_gradient)
+
+
 @pytest.mark.parametrize("device", ["cpu", "cuda"])
 def test_contiguous_restores_context_and_respects_native_override(device, monkeypatch):
     if device == "cuda" and not capability.check_accelerator("cuda", backend=jt).enabled:
@@ -272,6 +422,39 @@ def test_deepcopy_owns_independent_storage():
     ["cpu"] + (["cuda"] if capability.any_accelerator_enabled(backend=jt) else []))
 def test_repeat_is_a_dense_copy(device):
     _check_repeat_is_a_dense_copy(device)
+
+
+@pytest.mark.parametrize("in_channels", [16, 1])
+def test_cudnn_inference_filter_materializes_dense_ohwi_for_torch_parameter(in_channels):
+    """`_inference_filter` must produce dense OHWI storage for Torch parameters.
+
+    Under the Torch frontend, `Tensor.clone()` defaults to `preserve_format`,
+    which kept the transposed filter view's OIHW strides and caused every
+    subsequent cuDNN conv2d call to launch a full weight `ContiguousOp` copy.
+    """
+    from jittor.nn.backends import cudnn as cudnn_backend
+
+    rng = np.random.default_rng(0)
+    values = rng.standard_normal((16, in_channels, 3, 3)).astype(np.float16)
+    weight = torch.nn.Parameter(torch.tensor(values, dtype=torch.float16))
+    x = torch.zeros((2, in_channels, 8, 8), dtype=torch.float16)
+    jt.sync([weight, x])
+    with torch.no_grad():
+        first, layout1 = cudnn_backend._inference_filter(x, weight, 1)
+        second, layout2 = cudnn_backend._inference_filter(x, weight, 1)
+    assert layout1 == layout2 == "ohwi"
+    assert first._storage_is_contiguous()
+    assert second._storage_is_contiguous()
+    assert tuple(first.shape) == (16, 3, 3, in_channels)
+    expected_strides = (3 * 3 * in_channels, 3 * in_channels, in_channels, 1)
+    assert tuple(second._storage_strides())[:3] == expected_strides[:3]
+    if in_channels > 1:
+        assert second._storage_strides()[3] == 1
+    assert not weight.is_stop_grad()
+    assert second.is_stop_grad()
+    np.testing.assert_array_equal(first.detach().cpu().numpy(), values.transpose(0, 2, 3, 1))
+    np.testing.assert_array_equal(second.detach().cpu().numpy(), values.transpose(0, 2, 3, 1))
+    np.testing.assert_array_equal(weight.detach().cpu().numpy(), values)
 
 
 @pytest.mark.npu

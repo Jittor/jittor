@@ -47,8 +47,11 @@ def call_site(frame):
 class PythonSampler:
     def __init__(self, interval=0.001, thread_id=None):
         self.interval = float(interval)
+        if self.interval <= 0:
+            raise ValueError("interval must be positive, not %r" % (interval,))
         self.thread_id = thread_id if thread_id is not None else threading.get_ident()
         self.sites = Counter()
+        self.sites_ns = Counter()
         self.apis = Counter()
         self.samples = 0
         self._stop = threading.Event()
@@ -59,11 +62,16 @@ class PythonSampler:
 
     def _run(self):
         frames = sys._current_frames
+        last_ns = time.perf_counter_ns()
         while not self._stop.is_set():
+            now_ns = time.perf_counter_ns()
+            dt_ns = max(now_ns - last_ns, 0)
+            last_ns = now_ns
             frame = frames().get(self.thread_id) if self.armed else None
             if frame is not None:
                 site, api = call_site(frame)
                 self.sites[site] += 1
+                self.sites_ns[site] += dt_ns
                 if api:
                     self.apis[api] += 1
                 self.samples += 1
@@ -80,22 +88,44 @@ class PythonSampler:
 
     def stop(self):
         self._stop.set()
-        self._thread.join()
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
         self.stopped = time.perf_counter_ns()
-        sys.setswitchinterval(self._switch)
+        if self._switch is not None:
+            sys.setswitchinterval(self._switch)
+            self._switch = None
         return self
 
 
+_nvml_lock = threading.Lock()
+_nvml_mod = None
+_nvml_err = None
+_nvml_probed = False
+
+
 def _nvml():
-    try:
-        import pynvml
-    except ImportError:
-        return None, "pynvml (nvidia-ml-py) is not installed"
-    try:
-        pynvml.nvmlInit()
-    except pynvml.NVMLError as exc:
-        return None, "nvmlInit failed: %s" % exc
-    return pynvml, None
+    global _nvml_mod, _nvml_err, _nvml_probed
+    if _nvml_probed:
+        return _nvml_mod, _nvml_err
+    with _nvml_lock:
+        if _nvml_probed:
+            return _nvml_mod, _nvml_err
+        try:
+            import pynvml
+        except ImportError:
+            _nvml_err = "pynvml (nvidia-ml-py) is not installed"
+            _nvml_probed = True
+            return None, _nvml_err
+        try:
+            pynvml.nvmlInit()
+        except pynvml.NVMLError as exc:
+            _nvml_err = "nvmlInit failed: %s" % exc
+            _nvml_probed = True
+            return None, _nvml_err
+        _nvml_mod = pynvml
+        _nvml_probed = True
+        return _nvml_mod, None
 
 
 def nvml_handle(pynvml, ordinal):
@@ -132,20 +162,38 @@ class NvmlSampler:
     def read(self):
         pid = os.getpid()
         processes = self._pynvml.nvmlDeviceGetComputeRunningProcesses(self._handle)
-        return sum(p.usedGpuMemory or 0 for p in processes if p.pid == pid)
+        total = 0
+        matched = False
+        for p in processes:
+            if p.pid == pid:
+                matched = True
+                if p.usedGpuMemory is None:
+                    return None
+                total += p.usedGpuMemory
+        return total if matched else 0
 
     def _run(self):
         while not self._stop.is_set():
-            value = self.read()
-            self.samples += 1
-            if self.peak_bytes is None or value > self.peak_bytes:
-                self.peak_bytes = value
+            try:
+                value = self.read()
+            except self._pynvml.NVMLError as exc:
+                self.error = "nvml read failed: %s" % exc
+                break
+            if value is not None:
+                self.samples += 1
+                if self.peak_bytes is None or value > self.peak_bytes:
+                    self.peak_bytes = value
             self._stop.wait(self.interval)
 
     def start(self):
         if self._pynvml is None:
             return self
-        self.start_bytes = self.peak_bytes = self.read()
+        try:
+            self.start_bytes = self.peak_bytes = self.read()
+        except self._pynvml.NVMLError as exc:
+            self.error = "nvml read failed: %s" % exc
+            self._pynvml = None
+            return self
         self._thread = threading.Thread(target=self._run, name="jittor-profile-nvml", daemon=True)
         self._thread.start()
         return self
@@ -154,7 +202,15 @@ class NvmlSampler:
         if self._pynvml is None:
             return self
         self._stop.set()
-        self._thread.join()
-        self.end_bytes = self.read()
-        self.peak_bytes = max(self.peak_bytes or 0, self.end_bytes)
+        if self._thread is not None:
+            self._thread.join()
+            self._thread = None
+        try:
+            end_val = self.read()
+        except self._pynvml.NVMLError as exc:
+            self.error = self.error or ("nvml read failed: %s" % exc)
+            return self
+        self.end_bytes = end_val
+        if end_val is not None:
+            self.peak_bytes = max(self.peak_bytes or 0, end_val)
         return self

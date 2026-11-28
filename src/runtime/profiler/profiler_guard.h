@@ -14,7 +14,7 @@ namespace jittor {
 
 struct ProfilerGuard {
     const char* key;
-    bool alive;
+    bool alive = false;
     std::chrono::high_resolution_clock::time_point start_time;
     std::chrono::high_resolution_clock::time_point stop_time;
 
@@ -40,7 +40,7 @@ struct ProfilerGuard {
         auto total_ns =  (int64_t)std::chrono::duration_cast<std::chrono::nanoseconds>(stop_time-start_time).count();
         // 24ns function call overhead
         total_ns = std::max((int64_t)1, total_ns-24);
-        iter->second.update(1, total_ns, 0, 0, 0);
+        iter->second.update(0, total_ns, 0, 0, 0);
     }
     
     inline ProfilerGuard(const char* _key) {

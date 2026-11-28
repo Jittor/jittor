@@ -108,6 +108,43 @@ class TestDtypeViewStrides:
         with pytest.raises(RuntimeError, match="non-contiguous|contiguous storage"):
             jt.reinterpret_view(source, (12,), "int32")
 
+    def test_complex_pair_views_share_strided_storage(self, device):
+        for dtype in (np.float32, np.float64):
+            real = np.arange(24, dtype=dtype).reshape(3, 8)
+            expected = np.stack((real, 7 + real), axis=-1)
+            base = torch.tensor(expected, device=device)
+            source = torch.view_as_complex(base[1:, 1::2]).transpose(0, 1)
+            assert source.stride() == (2, 8)
+            assert source.storage_offset() == 9
+            pair = torch.view_as_real(source)
+            assert pair.stride() == (4, 16, 1)
+            assert pair.storage_offset() == 18
+            assert pair.data_ptr() == source.data_ptr()
+            assert pair.device == base.device
+            np.testing.assert_array_equal(pair.cpu().numpy(), expected[1:, 1::2].transpose(1, 0, 2))
+
+            pair[0, 0, 1] = 42
+            expected[1, 1, 1] = 42
+            np.testing.assert_array_equal(base.cpu().numpy(), expected)
+
+    def test_strided_complex_views_preserve_gradients(self, device):
+        data = np.arange(48, dtype=np.float32).reshape(3, 8, 2)
+        base = torch.tensor(data, device=device, requires_grad=True)
+        source = torch.view_as_complex(base[1:, 1::2])
+        pair = torch.view_as_real(source.transpose(0, 1))
+        weights = torch.tensor([3.0, -2.0], device=device)
+        (pair * weights).sum().backward()
+
+        expected = np.zeros_like(data)
+        expected[1:, 1::2] = [3.0, -2.0]
+        np.testing.assert_array_equal(base.grad.cpu().numpy(), expected)
+
+    def test_view_as_complex_rejects_unaligned_pair_strides(self, device):
+        source = torch.arange(20, dtype=torch.float32, device=device)
+        for pairs in (source.reshape(2, 10)[:, :4:2], source.reshape(4, 5)[:, :2]):
+            with pytest.raises(RuntimeError, match="stride"):
+                torch.view_as_complex(pairs)
+
     def test_scalar_same_itemsize_and_zero_size_metadata(self, device):
         scalar = torch.tensor(1., dtype=torch.float32, device=device)
         assert scalar.view(torch.int32).item() == np.array(1., np.float32).view(np.int32).item()

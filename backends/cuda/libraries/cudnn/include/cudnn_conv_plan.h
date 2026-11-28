@@ -223,6 +223,17 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
     cudnnBackendHeurMode_t modes[] = {CUDNN_HEUR_MODE_B, CUDNN_HEUR_MODE_A, CUDNN_HEUR_MODE_FALLBACK};
     struct Candidate { cudnnBackendDescriptor_t plan; int64 ws; };
     std::vector<Candidate> candidates;
+    Candidate first_with_workspace{nullptr, 0};
+    const auto singleton_axis = [&](int axis) {
+        return r.xdim[axis] == 1 && r.wdim[axis] == 1 && r.ydim[axis] == 1;
+    };
+    // For short FP32 signal filters, cuDNN can rank FFT tiling ahead of a
+    // direct engine. The workspace and many transform launches dominate for
+    // these small stencils. Prefer a workspace-free plan during heuristic
+    // selection, keeping cuDNN's first usable plan if it needs scratch.
+    const bool prefer_no_workspace = !r.benchmark && r.kind == CONV_PLAN_FWD
+        && fp32 && !r.allow_tf32 && (singleton_axis(2) || singleton_axis(3))
+        && r.wdim[2] * r.wdim[3] <= 32;
     int max_candidates = r.benchmark ? 6 : 1;
     for (auto mode : modes) {
         Desc heur(CUDNN_BACKEND_ENGINEHEUR_DESCRIPTOR);
@@ -248,10 +259,19 @@ inline void build(const ConvPlanRequest& r, ConvPlanEntry& e, void* x, void* w, 
             int64_t n = 0, ws = 0;
             if (cudnnBackendGetAttribute(plan.d, CUDNN_ATTR_EXECUTION_PLAN_WORKSPACE_SIZE, CUDNN_TYPE_INT64,
                     1, &n, &ws) != CUDNN_STATUS_SUCCESS || ws > limit) continue;
+            if (prefer_no_workspace && ws > 0) {
+                if (!first_with_workspace.plan)
+                    first_with_workspace = {plan.release(), ws};
+                continue;
+            }
             candidates.push_back({plan.release(), ws});
         }
         for (auto c : cfgs) if (c) cudnnBackendDestroyDescriptor(c);
         if (candidates.size()) break;
+    }
+    if (first_with_workspace.plan) {
+        if (candidates.empty()) candidates.push_back(first_with_workspace);
+        else cudnnBackendDestroyDescriptor(first_with_workspace.plan);
     }
     if (candidates.empty()) return;
     int best = 0;

@@ -13,7 +13,7 @@ def _kineto_trace(prof):
     flows from each operator to its kernels, [memory] instants, and the same
     top-level keys, so TensorBoard's profiler, HTA and Perfetto read it as a
     PyTorch trace."""
-    from jittor.profiling._memory import RESERVE, EXISTING
+    from jittor.profiling._memory import POOL, TEMP, RESERVE, EXISTING
     result = prof.result
     pid = os.getpid()
     tid = pid
@@ -45,6 +45,7 @@ def _kineto_trace(prof):
         by_seq[record["seq"]] = event
         add(event)
     devices = set()
+    flow_id = 0
     for record in sorted(result.kernel_records + result.copy_records, key=lambda r: r["start"]):
         is_kernel = "bytes" not in record
         name = _demangle(record["name"]) if is_kernel else record["name"]
@@ -64,23 +65,33 @@ def _kineto_trace(prof):
              "ts": us(record["start"]), "dur": us(record["end"] - record["start"]), "args": args})
         owner = by_seq.get(record["seq"])
         if owner is not None:
-            events.append({"ph": "s", "id": record["correlation"], "pid": pid, "tid": tid,
+            flow_id += 1
+            events.append({"ph": "s", "id": flow_id, "pid": pid, "tid": tid,
                            "ts": owner["ts"], "cat": "ac2g", "name": "ac2g"})
-            events.append({"ph": "f", "id": record["correlation"], "pid": record["device"],
+            events.append({"ph": "f", "id": flow_id, "pid": record["device"],
                            "tid": record["stream"], "ts": us(record["start"]), "cat": "ac2g",
                            "name": "ac2g", "bp": "e"})
     memory = result.memory
     if prof.profile_memory and memory is not None:
-        allocated, reserved = memory.start[0], memory.start[1]
+        allocated, reserved, temp = memory.start[0], memory.start[1], memory.start[6]
         for e in sorted((e for e in memory.events if e["kind"] != EXISTING and e["device"] == memory.device),
                         key=lambda e: e["t"]):
             if e["kind"] == RESERVE:
                 reserved += e["bytes"]
                 continue
-            allocated += e["bytes"]
+            if e["kind"] == POOL:
+                allocated += e["bytes"]
+                total_alloc = allocated + temp
+                total_res = max(reserved + temp, total_alloc)
+            elif e["kind"] == TEMP:
+                temp += e["bytes"]
+                total_alloc = allocated + temp
+                total_res = max(reserved + temp, total_alloc)
+            else:
+                continue
             add({"ph": "i", "cat": "cpu_instant_event", "s": "t", "name": "[memory]", "pid": pid,
                  "tid": tid, "ts": us(e["t"]),
-                 "args": {"Total Reserved": reserved, "Total Allocated": allocated,
+                 "args": {"Total Reserved": total_res, "Total Allocated": total_alloc,
                           "Bytes": e["bytes"], "Device Id": e["device"],
                           "Device Type": 1 if e["device"] >= 0 else 0, "Addr": e["allocation"],
                           "finished": False}})
@@ -103,7 +114,8 @@ def _kineto_trace(prof):
                  {"name": "thread_sort_index", "ph": "M", "ts": t0, "pid": device, "tid": stream,
                   "args": {"sort_index": stream}}]
     span = {"ph": "X", "cat": "Trace", "ts": t0, "dur": us(result.t1 - result.t0), "pid": "Spans",
-            "tid": "Jittor Profiler", "name": "Jittor Profiler (0)", "args": {"Op count": 0}}
+            "tid": "Jittor Profiler", "name": "Jittor Profiler (0)",
+            "args": {"Op count": len(result.op_records)}}
     trace = {"schemaVersion": 1, "deviceProperties": _device_properties(sorted({d for d, _ in devices})),
              "with_stack": int(bool(prof.with_stack)), "profile_memory": int(bool(prof.profile_memory)),
              "record_shapes": int(bool(prof.record_shapes)), "displayTimeUnit": "ms",
@@ -151,7 +163,8 @@ def _memory_timeline(result):
     return [times, sizes]
 
 
-def _timeline_html(timeline, device_index, figsize=(20, 12), title=None):
+def _timeline_html(timeline, device_index, figsize=(20, 12), title=None,
+                   peak_allocated=None, peak_reserved=None):
     """PyTorch's ``export_memory_timeline_html``: the stacked plot as an embedded PNG."""
     import importlib.util
     if importlib.util.find_spec("matplotlib") is None:
@@ -166,8 +179,11 @@ def _timeline_html(timeline, device_index, figsize=(20, 12), title=None):
     import jittor as jt
 
     times, sizes = np.array(timeline[0], dtype=np.float64), np.array(timeline[1], dtype=np.float64)
-    times -= times.min()
-    stacked = np.cumsum(sizes, axis=1) / 1024 ** 3
+    if times.size:
+        times -= times.min()
+        stacked = np.cumsum(sizes, axis=1) / 1024 ** 3
+    else:
+        stacked = np.zeros((0, len(_TIMELINE_CATEGORIES) + 1), dtype=np.float64)
     fig = plt.figure(figsize=figsize, dpi=80)
     axes = fig.gca()
     for i, (_name, color) in enumerate(_TIMELINE_CATEGORIES):
@@ -175,8 +191,10 @@ def _timeline_html(timeline, device_index, figsize=(20, 12), title=None):
     fig.legend(["Unknown" if name is None else name for name, _ in _TIMELINE_CATEGORIES])
     axes.set_xlabel("Time (ms)")
     axes.set_ylabel("Memory (GB)")
-    peak = jt.core.device_memory_peak(device_index) / 1024 ** 3
-    reserved = jt.core.device_memory_reserved_peak(device_index) / 1024 ** 3
+    peak = (peak_allocated if peak_allocated is not None
+            else jt.core.device_memory_peak(device_index)) / 1024 ** 3
+    reserved = (peak_reserved if peak_reserved is not None
+                else jt.core.device_memory_reserved_peak(device_index)) / 1024 ** 3
     axes.set_title("\n\n".join(([title] if title else []) + [
         "Max memory allocated: %.2f GiB \nMax memory reserved: %.2f GiB" % (peak, reserved)]))
     buffer = io.BytesIO()

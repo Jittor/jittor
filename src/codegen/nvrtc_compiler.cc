@@ -603,9 +603,17 @@ static std::string emit_binary_expr(
                 "_jt_signed_pow_f32(" + emit_as_float(x, tx) + ", " + emit_as_float(y, ty) + ")", tz);
         }
         // Match common_op_type_cuda_map: jittor::_signed_pow(double, double) cast to tz
-        std::string d = "_jt_signed_pow_f64(" + emit_as_double(x, tx) + ", " + emit_as_double(y, ty) + ")";
-        if (tz == NvrtcDType::F64) return d;
-        return "((" + std::string(storage_ctype(tz)) + ")(" + d + "))";
+        const std::string base = emit_as_double(x, tx);
+        const std::string exponent = emit_as_double(y, ty);
+        const std::string power = "_jt_signed_pow_f64(" + base + ", " + exponent + ")";
+        if (tz == NvrtcDType::F32 && tx == NvrtcDType::F32) {
+            const std::string f32 = emit_as_float(x, tx);
+            return "((" + exponent + " == 2.0) ? __fmul_rn(" + f32 + ", " + f32
+                + ") : (float)((" + exponent + " == 3.0) ? " + base + " * " + base
+                + " * " + base + " : " + power + "))";
+        }
+        if (tz == NvrtcDType::F64) return power;
+        return "((" + std::string(storage_ctype(tz)) + ")(" + power + "))";
     }
 
     if (op == ns_floor_divide) {
@@ -1099,25 +1107,49 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
 
     if (plan.scalar_arrays.size() > 32) return false;
 
-    // Can we emit a 4-element vectorized path?
-    // Eligible when all non-scalar inputs/outputs are contiguous and <= 4 bytes each
-    // (float32, int32, float16, bfloat16, int8, uint8, bool -> float4/int4/ushort4/uchar4/char4).
-    bool can_vec4 = !plan.any_strided;
-    if (can_vec4) {
-        for (const auto& ib : plan.inputs) {
-            if (!ib.is_scalar && vec4_ctype(ib.dtype) == nullptr) { can_vec4 = false; break; }
-        }
-        for (const auto& ob : plan.outputs) {
-            if (vec4_ctype(ob.dtype) == nullptr) { can_vec4 = false; break; }
-        }
+    // Broadcast inputs can reuse one load for each pack, or load a
+    // contiguous pack within a row. The launch checks the runtime strides
+    // and row width before using the packed path.
+    const uint32_t inner_axis = plan.rank ? 1u << (plan.rank - 1) : 0;
+    const auto lane_broadcast = [&](const auto& input) {
+        return input.is_scalar || (input.is_strided && !(input.stride_mask & inner_axis));
+    };
+    bool all_vec4 = true;
+    bool all_2byte = true;
+    for (const auto& input : plan.inputs) {
+        if (lane_broadcast(input)) continue;
+        all_vec4 &= vec4_ctype(input.dtype) != nullptr;
+        all_2byte &= nvrtc_dtype_size(input.dtype) == 2;
     }
-    plan.use_vec4 = can_vec4;
+    for (const auto& output : plan.outputs) {
+        all_vec4 &= vec4_ctype(output.dtype) != nullptr;
+        all_2byte &= nvrtc_dtype_size(output.dtype) == 2;
+    }
+    const int vec_width = all_2byte ? 8 : (all_vec4 ? 4 : 1);
+    plan.vec_width = vec_width;
 
     if (!out) return true;
 
     // Generate pure CUDA C kernel source (ZERO #includes!)
     std::ostringstream ss;
     ss << kNvrtcPrelude << "\n";
+    if (plan.any_strided) {
+        ss << R"CUDA(
+struct JtIndexDivisor {
+    unsigned int value, reciprocal;
+
+    __device__ __forceinline__ unsigned int div(unsigned int n) const {
+        unsigned int quotient = __umulhi(n, reciprocal);
+        // The truncated reciprocal underestimates the quotient by at most one.
+        return quotient + (n - quotient * value >= value);
+    }
+
+    __device__ __forceinline__ unsigned int mod(unsigned int n) const {
+        return n - div(n) * value;
+    }
+};
+)CUDA";
+    }
 
     // Helper device function computing one element given loaded inputs and scalar args.
     // Using an inline helper avoids duplicating DAG code between vec4 and scalar tail!
@@ -1173,7 +1205,7 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
     // Kernel signature: flat typed parameters matching launch trampoline exact order
     ss << "extern \"C\" __global__ void jittor_nvrtc_kernel(\n";
     ss << "    int num";
-    if (plan.use_vec4) ss << ",\n    int vec_num";
+    if (plan.vec_width > 1) ss << ",\n    int vec_num";
     for (size_t k = 0; k < plan.inputs.size(); ++k) {
         ss << ",\n    const " << storage_ctype(plan.inputs[k].dtype) << "* in" << k;
     }
@@ -1186,8 +1218,8 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
     if (plan.any_strided) {
         for (int d = 0; d < plan.rank; ++d) {
             if (!(plan.union_stride_mask & (1u << d))) continue;
-            if (d > 0) ss << ",\n    int shape" << d;
-            if (d < plan.rank - 1) ss << ",\n    int above" << d;
+            if (d > 0) ss << ",\n    JtIndexDivisor shape" << d;
+            if (d < plan.rank - 1) ss << ",\n    JtIndexDivisor above" << d;
         }
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
             if (!plan.inputs[k].is_strided) continue;
@@ -1202,115 +1234,113 @@ static bool analyze_and_build(FusedOp* fop, const std::string* jit_key, NvrtcCom
     ss << "    int tid = (int)(blockIdx.x * blockDim.x + threadIdx.x);\n";
     ss << "    int gstride = (int)(gridDim.x * blockDim.x);\n";
 
-    if (plan.use_vec4) {
-        // Vectorized 4-element-per-thread path (128-bit for f32/i32, 64-bit for f16/bf16, 32-bit for i8/u8/bool).
-        // Loads ALL inputs into registers BEFORE writing ANY output -> 100% safe with reuse_dying_inputs!
-        ss << "    for (int vi = tid; vi < vec_num; vi += gstride) {\n";
+    // Use the same indexing for the first lane of a pack and each
+    // scalar lane. Stride metadata remains a launch argument.
+    const auto emit_offsets = [&]() {
+        if (!plan.any_strided) return;
+        for (int d = 0; d < plan.rank; ++d) {
+            if (!(plan.union_stride_mask & (1u << d))) continue;
+            ss << "        int c" << d << " = ";
+            if (plan.rank == 1) ss << "i";
+            else if (d == 0) ss << "above0.div(i)";
+            else if (d == plan.rank - 1) ss << "shape" << d << ".mod(i)";
+            else ss << "shape" << d << ".mod(above" << d << ".div(i))";
+            ss << ";\n";
+        }
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
-            if (plan.inputs[k].is_scalar) {
-                ss << "        " << storage_ctype(plan.inputs[k].dtype) << " sv" << k << " = in" << k << "[0];\n";
-            } else {
-                const char* vt = vec4_ctype(plan.inputs[k].dtype);
-                ss << "        " << vt << " iv" << k << " = reinterpret_cast<const " << vt << "*>(in" << k << ")[vi];\n";
-            }
-        }
-        for (size_t k = 0; k < plan.outputs.size(); ++k) {
-            ss << "        " << vec4_ctype(plan.outputs[k].dtype) << " ov" << k << ";\n";
-        }
-        const char* lanes[4] = {"x", "y", "z", "w"};
-        for (int lane = 0; lane < 4; ++lane) {
-            ss << "        _jt_eval_elem(";
-            bool f = true;
-            auto s = [&]() { if (!f) ss << ", "; f = false; };
-            for (size_t k = 0; k < plan.inputs.size(); ++k) {
-                s();
-                if (plan.inputs[k].is_scalar) ss << "sv" << k;
-                else ss << "iv" << k << "." << lanes[lane];
-            }
-            for (size_t k = 0; k < plan.scalar_arrays.size(); ++k) {
-                s();
-                ss << "sc" << k;
-            }
-            for (size_t k = 0; k < plan.outputs.size(); ++k) {
-                s();
-                ss << "ov" << k << "." << lanes[lane];
-            }
-            ss << ");\n";
-        }
-        for (size_t k = 0; k < plan.outputs.size(); ++k) {
-            const char* vt = vec4_ctype(plan.outputs[k].dtype);
-            ss << "        reinterpret_cast<" << vt << "*>(out" << k << ")[vi] = ov" << k << ";\n";
-        }
-        ss << "    }\n";
-        // Scalar tail (also serves full array when vec_num == 0 due to unaligned ptr or num < 4)
-        ss << "    for (int i = vec_num * 4 + tid; i < num; i += gstride) {\n";
-        for (size_t k = 0; k < plan.inputs.size(); ++k) {
-            ss << "        " << storage_ctype(plan.inputs[k].dtype) << " iv" << k
-               << " = in" << k << (plan.inputs[k].is_scalar ? "[0];\n" : "[i];\n");
-        }
-        for (size_t k = 0; k < plan.outputs.size(); ++k) {
-            ss << "        " << storage_ctype(plan.outputs[k].dtype) << " ov" << k << ";\n";
-        }
-        ss << "        _jt_eval_elem(";
-        {
-            bool f = true;
-            auto s = [&]() { if (!f) ss << ", "; f = false; };
-            for (size_t k = 0; k < plan.inputs.size(); ++k) { s(); ss << "iv" << k; }
-            for (size_t k = 0; k < plan.scalar_arrays.size(); ++k) { s(); ss << "sc" << k; }
-            for (size_t k = 0; k < plan.outputs.size(); ++k) { s(); ss << "ov" << k; }
-        }
-        ss << ");\n";
-        for (size_t k = 0; k < plan.outputs.size(); ++k) {
-            ss << "        out" << k << "[i] = ov" << k << ";\n";
-        }
-        ss << "    }\n";
-    } else {
-        // General scalar grid-stride path (handles strided/broadcast inputs and f64/i64 cleanly)
-        ss << "    for (int i = tid; i < num; i += gstride) {\n";
-        if (plan.any_strided) {
+            const auto& input = plan.inputs[k];
+            if (!input.is_strided) continue;
+            ss << "        int off" << k << " = 0";
             for (int d = 0; d < plan.rank; ++d) {
-                if (!(plan.union_stride_mask & (1u << d))) continue;
-                ss << "        int c" << d << " = ";
-                if (plan.rank == 1) ss << "i";
-                else if (d == 0) ss << "(i / above0)";
-                else if (d == plan.rank - 1) ss << "(i % shape" << d << ")";
-                else ss << "((i / above" << d << ") % shape" << d << ")";
-                ss << ";\n";
+                if (input.stride_mask & (1u << d))
+                    ss << " + c" << d << " * stride_" << k << "_" << d;
             }
+            ss << ";\n";
         }
+    };
+    const auto input_offset = [&](size_t k) -> std::string {
+        const auto& input = plan.inputs[k];
+        if (input.is_scalar) return "0";
+        return input.is_strided ? "off" + std::to_string(k) : "i";
+    };
+    const bool wide = vec_width == 8;
+    const auto emit_eval = [&](int lane) {
+        constexpr const char* fields[] = {".x", ".y", ".z", ".w"};
+        std::string suffix;
+        if (lane >= 0)
+            suffix = wide ? "[" + std::to_string(lane) + "]" : fields[lane];
+        ss << "        _jt_eval_elem(";
+        bool first = true;
+        const auto sep = [&]() { if (!first) ss << ", "; first = false; };
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
-            if (plan.inputs[k].is_scalar) {
-                ss << "        " << storage_ctype(plan.inputs[k].dtype) << " iv" << k << " = in" << k << "[0];\n";
-            } else if (!plan.inputs[k].is_strided) {
-                ss << "        " << storage_ctype(plan.inputs[k].dtype) << " iv" << k << " = in" << k << "[i];\n";
-            } else {
-                ss << "        int off" << k << " = 0";
-                for (int d = 0; d < plan.rank; ++d) {
-                    if (plan.inputs[k].stride_mask & (1u << d)) {
-                        ss << " + c" << d << " * stride_" << k << "_" << d;
-                    }
-                }
-                ss << ";\n";
-                ss << "        " << storage_ctype(plan.inputs[k].dtype) << " iv" << k << " = in" << k << "[off" << k << "];\n";
-            }
+            sep();
+            ss << "iv" << k;
+            if (!lane_broadcast(plan.inputs[k])) ss << suffix;
+        }
+        for (size_t k = 0; k < plan.scalar_arrays.size(); ++k) {
+            sep();
+            ss << "sc" << k;
         }
         for (size_t k = 0; k < plan.outputs.size(); ++k) {
-            ss << "        " << storage_ctype(plan.outputs[k].dtype) << " ov" << k << ";\n";
-        }
-        ss << "        _jt_eval_elem(";
-        {
-            bool f = true;
-            auto s = [&]() { if (!f) ss << ", "; f = false; };
-            for (size_t k = 0; k < plan.inputs.size(); ++k) { s(); ss << "iv" << k; }
-            for (size_t k = 0; k < plan.scalar_arrays.size(); ++k) { s(); ss << "sc" << k; }
-            for (size_t k = 0; k < plan.outputs.size(); ++k) { s(); ss << "ov" << k; }
+            sep();
+            ss << "ov" << k << suffix;
         }
         ss << ");\n";
+    };
+
+    if (vec_width > 1) {
+        // Load every input before storing outputs so a dying input buffer
+        // can also serve as an output.
+        ss << "    for (int vi = tid; vi < vec_num; vi += gstride) {\n";
+        ss << "        int i = vi * " << vec_width << ";\n";
+        emit_offsets();
+        for (size_t k = 0; k < plan.inputs.size(); ++k) {
+            auto dtype = plan.inputs[k].dtype;
+            auto offset = input_offset(k);
+            if (lane_broadcast(plan.inputs[k])) {
+                ss << "        " << storage_ctype(dtype) << " iv" << k
+                   << " = in" << k << "[" << offset << "];\n";
+            } else {
+                const char* pack = wide ? "uint4" : vec4_ctype(dtype);
+                ss << "        " << pack << " iv" << k << (wide ? "_raw" : "")
+                   << " = *reinterpret_cast<const " << pack << "*>(in" << k << " + " << offset << ");\n";
+                if (wide) {
+                    ss << "        const auto* iv" << k << " = reinterpret_cast<const "
+                       << storage_ctype(dtype) << "*>(&iv" << k << "_raw);\n";
+                }
+            }
+        }
         for (size_t k = 0; k < plan.outputs.size(); ++k) {
-            ss << "        out" << k << "[i] = ov" << k << ";\n";
+            auto dtype = plan.outputs[k].dtype;
+            ss << "        " << (wide ? "uint4" : vec4_ctype(dtype))
+               << " ov" << k << (wide ? "_raw" : "") << ";\n";
+            if (wide) {
+                ss << "        auto* ov" << k << " = reinterpret_cast<"
+                   << storage_ctype(dtype) << "*>(&ov" << k << "_raw);\n";
+            }
+        }
+        for (int lane = 0; lane < vec_width; ++lane) emit_eval(lane);
+        for (size_t k = 0; k < plan.outputs.size(); ++k) {
+            ss << "        reinterpret_cast<" << (wide ? "uint4" : vec4_ctype(plan.outputs[k].dtype))
+               << "*>(out" << k << ")[vi] = ov" << k << (wide ? "_raw" : "") << ";\n";
         }
         ss << "    }\n";
     }
+    // Scalar tail and the fallback for layouts that cannot load a pack.
+    ss << "    for (int i = ";
+    if (vec_width > 1) ss << "vec_num * " << vec_width << " + ";
+    ss << "tid; i < num; i += gstride) {\n";
+    emit_offsets();
+    for (size_t k = 0; k < plan.inputs.size(); ++k) {
+        ss << "        " << storage_ctype(plan.inputs[k].dtype) << " iv" << k
+           << " = in" << k << "[" << input_offset(k) << "];\n";
+    }
+    for (size_t k = 0; k < plan.outputs.size(); ++k)
+        ss << "        " << storage_ctype(plan.outputs[k].dtype) << " ov" << k << ";\n";
+    emit_eval(-1);
+    for (size_t k = 0; k < plan.outputs.size(); ++k)
+        ss << "        out" << k << "[i] = ov" << k << ";\n";
+    ss << "    }\n";
     ss << "}\n";
 
     out->jit_key = *jit_key;
@@ -1613,31 +1643,45 @@ void nvrtc_fused_entry(Op* op) {
     int num = (int)ref_out->num;
     if (num == 0) return;
 
-    // Collect pointers and verify alignment for vec4 path
+    // Collect pointers and verify alignment for vectorized path
     void* in_ptrs[24];
     void* out_ptrs[16];
-    bool aligned16 = plan.use_vec4 && (num >= 4);
+    const int inner_dim = plan.rank - 1;
+    const int width = plan.vec_width;
+    bool aligned_vec = width > 1 && num >= width;
+    if (aligned_vec && plan.any_strided)
+        aligned_vec = ref_out->shape[inner_dim] % width == 0;
 
     for (size_t k = 0; k < plan.inputs.size(); ++k) {
-        Var* v = fop->vars[plan.inputs[k].fop_var_idx].var;
+        const auto& input = plan.inputs[k];
+        Var* v = fop->vars[input.fop_var_idx].var;
         void* p = v->ptr<void>();
         in_ptrs[k] = p;
-        if (aligned16 && !plan.inputs[k].is_scalar) {
-            size_t align_req = (size_t)nvrtc_dtype_size(plan.inputs[k].dtype) * 4u;
-            if ((reinterpret_cast<uintptr_t>(p) & (align_req - 1u)) != 0) aligned16 = false;
+        if (!aligned_vec || input.is_scalar) continue;
+        if (input.is_strided) {
+            // A broadcast over the innermost axis needs just one scalar
+            // load. Other inputs need a contiguous, aligned pack on every row.
+            if (!(input.stride_mask & (1u << inner_dim))) continue;
+            aligned_vec = v->storage_stride(inner_dim) == 1;
+            for (int d = 0; d < inner_dim && aligned_vec; ++d) {
+                if (input.stride_mask & (1u << d))
+                    aligned_vec = v->storage_stride(d) % width == 0;
+            }
         }
+        size_t align_req = (size_t)nvrtc_dtype_size(input.dtype) * width;
+        aligned_vec = aligned_vec && (reinterpret_cast<uintptr_t>(p) & (align_req - 1u)) == 0;
     }
     for (size_t k = 0; k < plan.outputs.size(); ++k) {
         Var* v = fop->vars[plan.outputs[k].fop_var_idx].var;
         void* p = v->ptr<void>();
         out_ptrs[k] = p;
-        if (aligned16) {
-            size_t align_req = (size_t)nvrtc_dtype_size(plan.outputs[k].dtype) * 4u;
-            if ((reinterpret_cast<uintptr_t>(p) & (align_req - 1u)) != 0) aligned16 = false;
+        if (aligned_vec) {
+            size_t align_req = (size_t)nvrtc_dtype_size(plan.outputs[k].dtype) * (size_t)plan.vec_width;
+            if ((reinterpret_cast<uintptr_t>(p) & (align_req - 1u)) != 0) aligned_vec = false;
         }
     }
 
-    int vec_num = aligned16 ? (num / 4) : 0;
+    int vec_num = aligned_vec ? (num / plan.vec_width) : 0;
 
     // Read scalar ArrayOp payloads (up to 8 bytes each)
     alignas(8) char scalar_buf[32][8];
@@ -1648,17 +1692,25 @@ void nvrtc_fused_entry(Op* op) {
     }
 
     // Stride metadata if any input is strided
-    int shapes[8] = {};
-    int aboves[8] = {};
+    struct IndexDivisor {
+        uint32_t value, reciprocal;
+    };
+    const auto index_divisor = [](uint32_t value) {
+        return IndexDivisor{value, std::numeric_limits<uint32_t>::max() / value};
+    };
+    IndexDivisor shapes[8], aboves[8];
     int stride_vals[12 * 8];
     int stride_val_count = 0;
 
     if (plan.any_strided) {
-        for (int d = 0; d < plan.rank; ++d) shapes[d] = (int)ref_out->shape[d];
-        int acc = 1;
+        uint32_t stride = 1;
         for (int d = plan.rank - 1; d >= 0; --d) {
-            aboves[d] = acc;
-            acc *= shapes[d];
+            uint32_t size = ref_out->shape[d];
+            if (plan.union_stride_mask & (1u << d)) {
+                if (d > 0) shapes[d] = index_divisor(size);
+                if (d < plan.rank - 1) aboves[d] = index_divisor(stride);
+            }
+            stride *= size;
         }
         for (size_t k = 0; k < plan.inputs.size(); ++k) {
             if (!plan.inputs[k].is_strided) continue;
@@ -1675,7 +1727,7 @@ void nvrtc_fused_entry(Op* op) {
     void* params[256];
     int pi = 0;
     params[pi++] = &num;
-    if (plan.use_vec4) params[pi++] = &vec_num;
+    if (plan.vec_width > 1) params[pi++] = &vec_num;
     for (size_t k = 0; k < plan.inputs.size(); ++k) params[pi++] = &in_ptrs[k];
     for (size_t k = 0; k < plan.outputs.size(); ++k) params[pi++] = &out_ptrs[k];
     for (size_t k = 0; k < plan.scalar_arrays.size(); ++k) params[pi++] = scalar_buf[k];
@@ -1698,19 +1750,13 @@ void nvrtc_fused_entry(Op* op) {
         backend_stream({BackendId::Cuda, dev >= 0 ? dev : 0}, BackendStreamKind::Compute).handle);
 
     const unsigned int block = 256u;
-    int work_items = (plan.use_vec4 && vec_num > 0) ? vec_num : num;
+    int work_items = (plan.vec_width > 1 && vec_num > 0) ? vec_num : num;
     unsigned int grid = (unsigned int)((work_items + (int)block - 1) / (int)block);
     if (grid == 0) grid = 1;
     if (grid > 65535u) grid = 65535u;
 
     auto& api = nvrtc_api();
-    CUresult rc = CUDA_SUCCESS;
-    if (PREDICT_BRANCH_NOT_TAKEN(step_trace_active())) {
-        GILReleaseScope gil_release;
-        rc = api.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, 0, stream, params, nullptr);
-    } else {
-        rc = api.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, 0, stream, params, nullptr);
-    }
+    CUresult rc = api.cuLaunchKernel(func, grid, 1, 1, block, 1, 1, 0, stream, params, nullptr);
     if (rc != CUDA_SUCCESS) {
         const char* err = "unknown";
         if (api.cuGetErrorString) api.cuGetErrorString(rc, &err);
@@ -1753,8 +1799,13 @@ bool nvrtc_try_compile_and_run(FusedOp* fop, JK& jk) {
 
     std::string jit_key = jk.to_string();
     auto ctx = std::make_shared<FusedOpContext>();
-    if (!nvrtc_try_compile(fop, *ctx, jit_key)) return false;
-    if (ctx->nvrtc_kernel) ctx->nvrtc_kernel->preload_if_context_active();
+    {
+        // Charge in-process NVRTC first-run compilation to compile_ns rather
+        // than operator_launch in jt.profile / torch.profiler.
+        StepTraceCompileScope trace_compile;
+        if (!nvrtc_try_compile(fop, *ctx, jit_key)) return false;
+        if (ctx->nvrtc_kernel) ctx->nvrtc_kernel->preload_if_context_active();
+    }
 
     fop->context_owner = ctx;
     fop->context = ctx.get();

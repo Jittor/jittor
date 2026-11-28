@@ -177,6 +177,13 @@ class TestAsyncExecution(unittest.TestCase):
         self._need_worker(ran)
         np.testing.assert_array_equal(got, want)
 
+    def test_worker_bookkeeping_drains_small_segments_before_sync(self):
+        with jt.flag_scope(auto_flush_bytes=0, auto_flush_ops=64):
+            want, _ = self._run(0, steps=60)
+            got, ran = self._run(1, steps=60)
+        self._need_worker(ran)
+        np.testing.assert_array_equal(got, want)
+
     def test_intermediates_read_back_while_the_worker_runs(self):
         with jt.no_grad():
             before = jt.core.async_exec_batches()

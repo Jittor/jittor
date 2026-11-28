@@ -78,18 +78,38 @@ def _exactly_causal(mask, query_length, source_length, batch=1):
     return verdict
 
 
+def _exactly_causal_traced(mask, query_length, source_length, batch=1):
+    """Check whether `mask` is literally causal using a guarded StepCapture predicate."""
+    if _jittor_dtype_name(mask.dtype) != "bool":
+        return False
+    if len(mask.shape) != 4 or query_length != source_length or query_length < 2:
+        return False
+    blocks = int(mask.shape[0])
+    if int(mask.shape[1]) != 1 or blocks not in (1, int(batch)):
+        return False
+    if int(mask.shape[-2]) != query_length or int(mask.shape[-1]) != source_length:
+        return False
+    from jittor._runtime.step_capture import guarded_predicate
+    with jt.no_grad():
+        expected = jt.tril(jt.ones((query_length, source_length), dtype="bool"))
+        blocks_value = mask.reshape((blocks, query_length, source_length))
+        if blocks == 1:
+            expr = (blocks_value.reshape((query_length, source_length)) == expected).all()
+        else:
+            expr = (blocks_value == expected.broadcast(blocks_value.shape)).all()
+    verdict = guarded_predicate(expr)
+    return bool(verdict) if verdict is not None else False
+
+
 def causal_mask_rewrite(query, key, attn_mask, is_causal):
     """Whether this call's mask should be handed on as ``is_causal``.
 
     The verdict costs one host read of a mask that a decoder rebuilds every
     step. Outside a capture that is cheap and buys a fused causal kernel.
-    Inside one it is fatal: a capture refuses a trace that read a value back,
-    because the next call's Python path could differ, so this read kept the
-    default-SDPA path from ever being replayed and rebuilt its graph on every
-    call. While tracing, leave the mask on the device and hand it to SDPA
-    unchanged -- the same attention math, and the captured graph stays
-    value-independent because the mask is one of its inputs, copied in on
-    every replay.
+    Inside an active no-grad StepCapture, evaluate it only through a guarded
+    predicate over constants and pre-trace leaves so any dynamic mask input
+    stays on the general path and any mutated pre-trace leaf invalidates the
+    capture cleanly.
     """
     if attn_mask is None or is_causal:
         return False
@@ -97,9 +117,19 @@ def causal_mask_rewrite(query, key, attn_mask, is_causal):
         return False
     if dispatch_context().backend not in ("cuda", "cpu"):
         return False
-    from jittor._runtime.step_capture import tracing
-    if tracing():
-        return False
+    from jittor._runtime import step_capture
+    if step_capture.tracing():
+        cap = step_capture._ACTIVE
+        if cap is None or cap.scalar_epoch is None:
+            return False
+        q_len, k_len, batch = int(query.shape[-2]), int(key.shape[-2]), int(query.shape[0])
+        cache_key = ("causal", attn_mask.var_ptr, q_len, k_len, batch)
+        cached = cap.mask_terms.get(cache_key)
+        if cached is not None:
+            return cached
+        verdict = _exactly_causal_traced(attn_mask, q_len, k_len, batch)
+        cap.mask_terms[cache_key] = verdict
+        return verdict
     return _exactly_causal(attn_mask, int(query.shape[-2]), int(key.shape[-2]),
                            int(query.shape[0]))
 
@@ -315,7 +345,7 @@ def _repeated_heads(tensor):
     if producer_name is None or producer_name() != "reshape":
         return None
     expanded = tensor._input(0)
-    if expanded._producer_name() == "contiguous":
+    while expanded._producer_name() in ("contiguous", "clone"):
         expanded = expanded._input(0)
     if expanded._producer_name() != "broadcast_to":
         return None
@@ -324,6 +354,8 @@ def _repeated_heads(tensor):
         return None
     b, heads, group, length, dim = shape
     unsqueezed = expanded._input(0)
+    while unsqueezed._producer_name() in ("contiguous", "clone"):
+        unsqueezed = unsqueezed._input(0)
     if _shape(unsqueezed) != (b, heads, 1, length, dim):
         return None
     if unsqueezed._producer_name() == "getitem" and _shape(unsqueezed._input(0)) == (
@@ -340,6 +372,25 @@ def _repeated_heads(tensor):
 #: answered with one, for a caller that remembers the route (the Torch
 #: frontend's `scaled_dot_product_attention`); the caller clears it.
 LAST_FUSED_KERNEL = [None]
+
+
+def _capture_prefers_batched_fp32(query, key):
+    from jittor._runtime import step_capture
+
+    if (not step_capture.active() or len(query.shape) != 4 or len(key.shape) != 4
+            or tuple(query.shape[:2]) != tuple(key.shape[:2])):
+        return False
+    batch, heads, queries, width = (int(size) for size in query.shape)
+    keys = int(key.shape[-2])
+    scores = batch * heads * queries * keys
+    if not (0 < queries and 0 < keys and scores >= (1 << 18)):
+        return False
+    if max(queries, keys) <= 128 and scores <= (4 << 20):
+        return True
+    # Dense batched GEMMs can pay for storing the probabilities when the
+    # sequences are short relative to the projected features. Cap both that
+    # expansion and the absolute size of one FP32 score buffer (128 MiB).
+    return max(queries, keys) <= 4 * width and scores <= (32 << 20)
 
 
 def _scaled_dot_product_attention(
@@ -507,6 +558,19 @@ def _scaled_dot_product_attention(
                 )
             if out is not None:
                 return out.cast(query_dtype)
+        # Short bounded FP32 captured steps intentionally decline tiled
+        # `fused_attention_f32` to avoid recomputing scores in backward.
+        # Keep them on `_composite` so probabilities are computed once with
+        # the fused CUB softmax forward and backward instead of recomputing
+        # Q@K^T and scalar max/sum reductions inside `_MemoryEfficientAttention`.
+        if (use_fused and query_dtype == "float32"
+                and dispatch_context(query, key, value).backend == "cuda"
+                and _capture_prefers_batched_fp32(query, key)
+                and (attn_mask is None or not _output_requires_grad(attn_mask))):
+            return _composite(
+                query, key, value, attn_mask, probability, is_causal,
+                scale_factor, query_dtype
+            )
         return _MemoryEfficientAttention.apply(
             query, key, value, attn_mask, bool(is_causal), float(scale_factor)
         )
@@ -585,8 +649,9 @@ def _query_block(query, key, is_causal):
 
 
 def _composite(query, key, value, attn_mask, probability, is_causal, scale_factor, query_dtype):
-    """Attention built from matmuls and a softmax, for calls without a backward."""
-    if _jittor_dtype_name(query.dtype) in ("float16", "bfloat16"):
+    """Attention built from matmuls and a softmax."""
+    compute_dtype = _jittor_dtype_name(query.dtype)
+    if compute_dtype in ("float16", "bfloat16"):
         with _opmath_scope(query):
             return _composite(
                 _softmax_precision(query),
@@ -600,12 +665,20 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
             )
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
-    query_scale, key_scale = _attention_scale_factors(query, scale_factor)
-    if query_scale != 1.0:
-        query = query * query_scale
-    if key_scale != 1.0:
-        key = key * key_scale
-    scores = _product(query, key, trans_b=True)
+    scores = None
+    if (compute_dtype == "float32" and len(query.shape) == len(key.shape) == 4
+            and query.shape[:2] == key.shape[:2]
+            and dispatch_context(query, key).backend == "cuda"):
+        kernel = select_kernel("batched_matmul", query, key, False, True)
+        from jittor.nn.functional.matrix import _cublas_batched_matmul
+        if kernel is _cublas_batched_matmul:
+            # The op's storage adapter keeps the logical inputs in the gradient
+            # graph, including inputs backed by strided transpose views.
+            scores = kernel(query, key, trans_b=True, alpha=float(scale_factor))
+    if scores is None:
+        scores = jt.nn.matmul(query, key.transpose(-2, -1))
+        if scale_factor != 1.0:
+            scores = scores * scale_factor
     softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)
     fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)
     zero_fully_masked = fast_softmax is not None and attn_mask is not None

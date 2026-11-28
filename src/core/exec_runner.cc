@@ -65,8 +65,8 @@ static inline void check_input_is_backed(Var* v, Op* op) {
 }
 
 
-static void propagate_needed_flags(const vector<Op*>& ops, const FusedOp& fused) {
-    for (int i=ops.size()-1; i>=0; i--) {
+static void propagate_needed_flags(Op* const* ops, size_t count, const FusedOp& fused) {
+    for (size_t i = count; i-- > 0;) {
         bool has_need = 0;
         auto op = ops[i];
         for (auto o : op->outputs())
@@ -82,7 +82,7 @@ static void propagate_needed_flags(const vector<Op*>& ops, const FusedOp& fused)
 }
 
 static inline void propergate_needed_flags(FusedOp& fused_op) {
-    propagate_needed_flags(fused_op.ops, fused_op);
+    propagate_needed_flags(fused_op.ops.data(), fused_op.ops.size(), fused_op);
 }
 
 
@@ -658,8 +658,9 @@ static bool has_stream_candidate(FusedOp& fused) {
 // What finishing a segment does to the graph: the outputs it wrote stop
 // keeping their inputs pending. Shared by the calling thread, which does it as
 // each segment ends, and the async worker, which queues it (see below).
-static void finish_fused_outputs(const vector<Var*>& outputs) {
-    for (Var* var : outputs) {
+static void finish_fused_outputs(Var* const* outputs, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        Var* var = outputs[i];
         if (var->flag(VarFlags::_kept)) continue;
         var->finish_pending_liveness();
     }
@@ -690,7 +691,7 @@ static void finish_unfused(Op* op, vector<Var*>& outputs_bk) {
         var->finish_pending_liveness();
 }
 
-DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them; they are otherwise applied whenever the lock is free. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
+DEFINE_FLAG(int64, async_release_lag_bytes, 16<<20, "On the async worker (see `async_execution`), how much memory the releases it has queued behind its launches may hold back before it waits for the graph lock to apply them. An output that could take over a dying input's memory waits for the lock too when it is a quarter of this or more, rather than being allocated afresh.");
 
 namespace {
 // The async worker's graph bookkeeping, applied behind its launches.
@@ -704,7 +705,7 @@ namespace {
 // with no worker at all. A launch reads none of that bookkeeping (a segment is
 // loaded from the batch's own snapshot), so the worker launches without the
 // lock and queues the releases and finishes in their order. The queue is
-// applied whenever the lock happens to be free, before anything reads
+// applied in groups when the lock happens to be free, before anything reads
 // liveness again (the dying-input reuse), once the releases it holds back
 // pass `async_release_lag_bytes`, and when the loop is over -- on an
 // exception too.
@@ -712,12 +713,15 @@ struct DeferredGraphWork {
     struct Item {
         int released_segment = -1;  // the batch's hold on what this segment used last
         Op* op = nullptr;           // an operator to finish
-        vector<Op*> fused_ops;      // or a fused segment to finish: its operators
-        vector<Var*> outputs;       // and the outputs it wrote
+        size_t first_op = 0, op_count = 0;
+        size_t first_output = 0, output_count = 0;
     };
     ExecPlan& plan;
     FusedOp& fused;
     vector<Item> items;
+    // One reusable buffer per batch, including all of its pending segments.
+    vector<Op*> fused_ops;
+    vector<Var*> fused_outputs;
     size_t front = 0;
     int64 lag_bytes = 0;
     vector<Var*> outputs_bk;
@@ -737,9 +741,14 @@ struct DeferredGraphWork {
         items.back().op = op;
     }
     void finish(FusedOp& segment) {
-        items.emplace_back();
-        items.back().fused_ops = segment.ops;
-        for (Var* var : segment.outputs()) items.back().outputs.push_back(var);
+        Item item;
+        item.first_op = fused_ops.size();
+        item.op_count = segment.ops.size();
+        fused_ops.insert(fused_ops.end(), segment.ops.begin(), segment.ops.end());
+        item.first_output = fused_outputs.size();
+        for (Var* var : segment.outputs()) fused_outputs.push_back(var);
+        item.output_count = fused_outputs.size() - item.first_output;
+        items.push_back(item);
     }
     // The caller holds the graph lock.
     void apply() {
@@ -750,11 +759,14 @@ struct DeferredGraphWork {
             } else if (item.op) {
                 finish_unfused(item.op, outputs_bk);
             } else {
-                propagate_needed_flags(item.fused_ops, fused);
-                finish_fused_outputs(item.outputs);
+                propagate_needed_flags(fused_ops.data() + item.first_op, item.op_count, fused);
+                if (item.output_count)
+                    finish_fused_outputs(fused_outputs.data() + item.first_output, item.output_count);
             }
         }
         items.clear();
+        fused_ops.clear();
+        fused_outputs.clear();
         front = 0;
         lag_bytes = 0;
     }
@@ -768,12 +780,14 @@ struct DeferredGraphWork {
         std::lock_guard<GraphMutationMutex> graph(graph_mutation_mutex());
         apply();
     }
-    // Between operators: when the lock is free, or when waiting for it is
-    // cheaper than the memory the queued releases keep.
+    // Amortize handoffs of the graph lock across small operators. Large
+    // batches of bytes still drain immediately at the existing memory limit.
     void step() {
-        if (empty()) return;
-        if (try_apply_and_hold()) graph_mutation_mutex().unlock();
-        else if (lag_bytes > async_release_lag_bytes) apply_now();
+        if (lag_bytes > async_release_lag_bytes) {
+            apply_now();
+        } else if (items.size() - front >= 8 && try_apply_and_hold()) {
+            graph_mutation_mutex().unlock();
+        }
     }
     ~DeferredGraphWork() {
         if (empty()) return;
@@ -891,11 +905,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1))) prepared_jit_key.clear();
         try {
         if (op->type() != OpType::other) {
-            op = &fused_op;
-            is_fused_op = true;
             int ll = (rid<queue.size()-1)?range[queue.size()-rid-2]:0, rr = range[queue.size()-rid-1];
             root = fuse_ops[rr-1];
-            load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            op = load_fused_op(fused_op, fuse_ops, ops, ll, rr, tt);
+            is_fused_op = op == &fused_op;
         }
         // A kept graph run again: an in-graph constant has already moved its
         // data into its output (ArrayOp::run), so there is nothing to run --
@@ -906,7 +919,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             if (is_fused_op) {
                 fused_outputs_buf.clear();
                 for (Var* var : op->outputs()) fused_outputs_buf.push_back(var);
-                finish_fused_outputs(fused_outputs_buf);
+                finish_fused_outputs(fused_outputs_buf.data(), fused_outputs_buf.size());
             } else finish_unfused(op, outputs_bk);
             continue;
         }
@@ -917,6 +930,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         const auto requested_backend = placement.explicit_backend
             ? placement.device.backend : execution_target_backend();
         const auto execution_backend = op->execution_backend_for(requested_backend);
+        const bool storage_view = op->is_storage_view();
         ExecutionBackendScope operation_backend_scope(requested_backend);
         TensorPlacementScope placement_scope(placement);
         Float32PrecisionScope precision_scope(op->float32_precision);
@@ -935,6 +949,32 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         trace_op.named(op, is_fused_op,
                        requested_backend == BackendId::Cpu ? -1 : execution_device);
+        #if !defined(JT_CHECK_NAN) && !defined(JT_SYNC)
+        // A resident alias performs no compute, transfer, or driver call.
+        // Keep the ordinary runner for views that cross an allocator boundary.
+        if (storage_view && !save_mem && !keep_graph && !trace_py_var
+                && !profile_memory_enable && !graph_capture_recording
+                && requested_backend == execution_backend
+                && op->_inputs.size() == 1 && op->_outputs.size() == 1) {
+            Var* source = op->input(0);
+            Var* view = op->output(0);
+            const bool device_storage = execution_backend != BackendId::Cpu;
+            if (view->share_src == source && source->mem_ptr && source->allocator == allocator
+                    && allocator->is_cuda() == device_storage
+                    && (!device_storage || allocator->device() == execution_device)) {
+                CHECK(view->alloc(allocator)) << "Unable to allocate memory for" << view;
+                trace_op.allocated();
+                exe.last_is_cuda = device_storage;
+                if (on_worker) {
+                    deferred.finish(op);
+                    deferred.step();
+                } else {
+                    finish_unfused(op, outputs_bk);
+                }
+                continue;
+            }
+        }
+        #endif
         const bool need_launch_record = execution_backend != BackendId::Cpu
             || requested_backend != BackendId::Cpu
             || op->flag(OpFlags::_manual_device);
@@ -969,7 +1009,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             allocation_target.backend = requested_backend;
         #endif
         allocator = get_allocator(allocation_target, false);
-        temp_allocator = get_allocator(allocation_target, true);
+        // The accelerator workspace and tensors use the same pool. Only the
+        // CPU can choose a separate temporary allocator.
+        temp_allocator = allocation_target.backend == BackendId::Cpu
+            ? get_allocator(allocation_target, true) : allocator;
         exe.allocator = allocator;
         exe.temp_allocator = temp_allocator;
         if (save_mem) {
@@ -1038,7 +1081,10 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             memory_profiler.check();
         trace_op.allocated();
         LOGvvv << "Run" << op << "inputs:" << op->inputs() << "outputs:" << op->outputs();
-        op->prepare_execution_on(jkl, execution_backend);
+        if (storage_view)
+            jkl.clear();
+        else
+            op->prepare_execution_on(jkl, execution_backend);
         if (PREDICT_BRANCH_NOT_TAKEN(V_ON(1)))
             prepared_jit_key.assign(jkl.to_cstring(), jkl.size);
         bool is_cuda = execution_backend != BackendId::Cpu;
@@ -1124,17 +1170,20 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
         #endif
         exe.last_is_cuda = is_cuda;
         // _JT_SEH_START2;
-        if (execution_backend != BackendId::Cpu)
-            record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
-        else
-            int_division_by_zero.store(0, std::memory_order_relaxed);
-        op->execute_prepared_on(jkl, execution_backend);
-        // An integer `//`, `%` or fmod by zero in a host kernel (see
-        // type/floor_divide_compute.h): torch's CPU kernels raise
-        // "RuntimeError: ZeroDivisionError" for it.
-        if (execution_backend == BackendId::Cpu
-                && PREDICT_BRANCH_NOT_TAKEN(int_division_by_zero.exchange(0, std::memory_order_relaxed)))
-            throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
+        // A storage view shares its allocation above. Transfers, if needed,
+        // keep the operation's attribution, but the view itself has no kernel.
+        if (!storage_view) {
+            if (is_cuda)
+                record_active_launch(backend_stream({execution_backend, execution_device}, BackendStreamKind::Compute));
+            else
+                int_division_by_zero.store(0, std::memory_order_relaxed);
+            op->execute_prepared_on(jkl, execution_backend);
+            // An integer `//`, `%` or fmod by zero in a host kernel (see
+            // type/floor_divide_compute.h) must surface at that operation.
+            if (!is_cuda && PREDICT_BRANCH_NOT_TAKEN(
+                    int_division_by_zero.exchange(0, std::memory_order_relaxed)))
+                throw std::runtime_error("ZeroDivisionError: integer division or modulo by zero");
+        }
         // _JT_SEH_END2;
         #ifdef HAS_ACCELERATOR
         // migrate to gpu
@@ -1184,7 +1233,7 @@ void run_exec_plan(Executor& exe, ExecPlan& plan, FusedOp& fused_op,
             }
             fused_outputs_buf.clear();
             for (Var* var : op->outputs()) fused_outputs_buf.push_back(var);
-            finish_fused_outputs(fused_outputs_buf);
+            finish_fused_outputs(fused_outputs_buf.data(), fused_outputs_buf.size());
             continue;
         }
         // Leave everything alive and re-runnable; see the `keep_graph` flag

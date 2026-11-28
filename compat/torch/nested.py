@@ -1,4 +1,5 @@
 """Nested tensor, tensor-size, and leaf-parameter compatibility."""
+from operator import index
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import numpy as np
@@ -15,8 +16,7 @@ class _TorchSize(tuple):
     def __new__(cls, sizes=()):
         # torch.Size stores plain ints read through __index__, so
         # torch.Size((2, np.int64(1))) compares equal to a tensor's shape.
-        import operator
-        return super().__new__(cls, (operator.index(d) for d in sizes))
+        return super().__new__(cls, map(index, sizes))
 
     def numel(self):
         n = 1

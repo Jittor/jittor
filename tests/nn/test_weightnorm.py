@@ -94,6 +94,22 @@ class TestWeightNorm(unittest.TestCase):
             atol=1e-6,
         )
 
+    def test_load_parametrized_checkpoint_and_keep_parameters_as_leaves(self):
+        module = weight_norm(JittorModule(np.ones_like(self.weight)), "linear", 0)
+        gain = np.linalg.norm(self.weight, axis=1, keepdims=True)
+        checkpoint = {
+            "parametrizations.linear.original0": jt.array(gain),
+            "parametrizations.linear.original1": jt.array(self.weight),
+        }
+        module.load_state_dict(checkpoint)
+        self.assertEqual(len(checkpoint), 2)
+        for _, parameter in module.named_parameters():
+            self.assertTrue(parameter.is_backward_leaf)
+            self.assertFalse(parameter._is_view())
+        np.testing.assert_allclose(
+            module(jt.array(self.value)).numpy(), self.weight @ self.value, rtol=1e-6,
+        )
+
     def test_duplicate_registration_and_missing_remove_fail_loudly(self):
         module = JittorModule(self.weight)
         weight_norm(module, "linear", 0)

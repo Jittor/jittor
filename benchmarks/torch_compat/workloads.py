@@ -239,7 +239,7 @@ class Qwen3Decode(_Qwen3):
     default_dtype = "bfloat16"
     description = "Qwen3-0.6B greedy generate() with KV cache, fixed length"
     iterations = (2, 5)
-    compile_what = None     # the dynamic cache grows every token
+    compile_what = None     # dynamic decode uses the native compiler only
     cache = None
 
     def setup(self):
@@ -260,16 +260,51 @@ class Qwen3Decode(_Qwen3):
             self.pool.append((ids, self.torch.ones_like(ids)))
         self.items = self.batch * self.new_tokens
 
-    def run(self, input_ids, attention_mask):
+    def compile(self, mode):
+        # The growing KV cache carries tensors across compiled forward calls.
+        # Use Inductor with CUDA graphs disabled so the cache owns its storage.
+        self.model.forward = self.compiled = self.torch.compile(
+            self.model.forward, dynamic=True, options={"triton.cudagraphs": False})
+        self.compile_settings = {"mode": "default", "dynamic": True, "cudagraphs": False}
+
+    def _generate(self, input_ids, attention_mask, **options):
         extra = {} if self.cache is None else {"cache_implementation": self.cache}
         with self.torch.no_grad():
             out = self.model.generate(
                 input_ids=input_ids, attention_mask=attention_mask,
                 max_new_tokens=self.new_tokens, min_new_tokens=self.new_tokens,
-                do_sample=False, use_cache=True, **extra)
+                do_sample=False, use_cache=True, **extra, **options)
         if out.shape[-1] != self.prompt + self.new_tokens:
             raise RuntimeError("generate() stopped at %d tokens" % out.shape[-1])
-        return [out]
+        return out
+
+    def run(self, input_ids, attention_mask):
+        return [self._generate(input_ids, attention_mask)]
+
+    def parity_step(self, input_ids, attention_mask):
+        from transformers import LogitsProcessorList
+
+        # Compare unmodified logits at shared prefixes. A one-ULP change at a
+        # near tie can send greedy decoding down a different token trajectory.
+        torch = self.torch
+        continuation = input_ids[:, -self.new_tokens:]
+        recorded_steps = set(np.linspace(0, self.new_tokens - 1, min(8, self.new_tokens), dtype=int))
+        logits = []
+
+        def record_and_force(prefix, scores):
+            step = prefix.shape[-1] - self.prompt
+            if step in recorded_steps:
+                logits.append(scores.detach().cpu())
+            token = continuation[:, step:step + 1]
+            return torch.full_like(scores, -float("inf")).scatter_(1, token, 0.0)
+
+        if self.compiled is not None:
+            torch.compiler.cudagraph_mark_step_begin()
+        output = self._generate(input_ids, attention_mask,
+                                logits_processor=LogitsProcessorList([record_and_force]))
+        if len(logits) != len(recorded_steps) or not torch.equal(output[:, self.prompt:], continuation):
+            raise RuntimeError("Decode parity pass did not follow the shared token prefix")
+        return logits
 
     def config(self):
         return {"batch": self.batch, "prompt": self.prompt,
@@ -685,14 +720,20 @@ class ResNet50Train(_Images):
     description = ("ResNet-50 ImageNet step, batch 64, 224x224, "
                    "SGD momentum 0.9")
 
+    # Random weights and repeated synthetic labels amplify rounding at lr=0.1.
+    lr = 0.01
+
     def setup(self):
         torch = self.torch
         self.model = self.init(resnet50(torch, tiny=self.tiny)).to(
             device=self.device, dtype=self.dtype).train()
-        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.1,
+        self.optimizer = torch.optim.SGD(self.model.parameters(), lr=self.lr,
                                          momentum=0.9, weight_decay=1e-4)
         self.loss_fn = torch.nn.CrossEntropyLoss()
         self._images()
+
+    def config(self):
+        return dict(super().config(), lr=self.lr)
 
     def run(self, images, labels):
         loss = self.loss_fn(self.model(images), labels)

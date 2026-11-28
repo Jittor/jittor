@@ -4,6 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from collections.abc import Sequence, Iterable
 from jittor_core import Var
 from .._runtime.dispatch import select_kernel, try_dispatch
+from .indexing import var_getitem
 
 def _repeat_interleave_cpu_source():
     return ('''
@@ -70,6 +71,13 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
     if dim < 0:
         dim += x.ndim
 
+    if isinstance(repeats, Var) and repeats.numel() == 1 and output_size is None:
+        # A scalar repeat count defines the shape. Keep the values being
+        # repeated live on their device, including integer index tensors.
+        repeats = int(repeats.item())
+        if repeats < 0:
+            raise RuntimeError("repeat_interleave: repeats must be nonnegative")
+
     if isinstance(repeats, int):
         # Built as expand + reshape rather than a `reindex` with a divided
         # index expression (``i{dim}/{repeats}``): that specific reindex
@@ -99,7 +107,7 @@ def repeat_interleave(x,repeats,dim=None,output_size=None):
 
     # per-element repeats: build a gather index along `dim` then index_select.
     if isinstance(repeats, Var):
-        rep_list = [int(c) for c in repeats.numpy().reshape(-1)]
+        rep_list = [int(c) for c in repeats.reshape(-1).tolist()]
     else:
         rep_list = [int(c) for c in repeats]
     n = x.shape[dim]
@@ -378,6 +386,11 @@ def split(d, split_size, dim=0):
     s_last = len(split_size)-1
     gopt_disable = jt.flags.gopt_disable
     slice_kernel = select_kernel("misc.split_slice", d)
+    if (slice_kernel is _split_slice and isinstance(d, Var)
+            and type(d).__getattribute__ is Var.__getattribute__ and type(d).getitem is var_getitem):
+        result = jt.core._fast_split_slices(d, split_size, dim, gopt_disable)
+        if result is not None:
+            return result
     for j, i in enumerate(split_size):
         if i==0:
             shape = list(d.shape)
@@ -568,3 +581,59 @@ def tril(input: Var, diagonal:int=0) -> Var:
     index = input.index()
     mask = index[-2] >= index[-1] - diagonal
     return jt.ternary(mask, input, jt.zeros_like(input))
+
+
+def _pending_slice_of_float_add(value):
+    """Return the corresponding reads from an unexecuted FP32 broadcast add.
+
+    Match a view that fixes one axis and retains the other axes unchanged.
+    Callers may read the two slices without evaluating the larger add.
+    """
+    if not value._is_view() or value.is_finished:
+        return None
+    root = value._view_base_object()
+    if root is None or root._producer_op() != "binary.add" or not root._storage_is_contiguous():
+        return None
+    shape, strides = tuple(root.shape), tuple(root._storage_strides())
+    view_shape, view_strides = tuple(value.shape), tuple(value._storage_strides())
+    if (len(shape) != len(view_shape) + 1 or not shape[-1] or view_shape[-1] != shape[-1]
+            or any(size == 0 for size in view_shape)):
+        return None
+    offset = value._storage_offset() - root._storage_offset()
+    for axis, (size, stride) in enumerate(zip(shape[:-1], strides[:-1])):
+        if (stride <= 0 or shape[:axis] + shape[axis + 1:] != view_shape
+                or strides[:axis] + strides[axis + 1:] != view_strides):
+            continue
+        index, remainder = divmod(offset, stride)
+        if 0 <= index < size and remainder == 0:
+            break
+    else:
+        return None
+
+    operands = root._inputs()
+    if len(operands) != 2 or any(tuple(t.shape) != shape for t in operands):
+        return None
+    terms = []
+    for tensor in operands:
+        if str(tensor.dtype).removeprefix("torch.") != "float32":
+            return None
+        if tensor._producer_name() == "broadcast_to":
+            inputs = tensor._inputs()
+            if len(inputs) != 1:
+                return None
+            source = inputs[0]
+            sizes = tuple(source.shape)
+            expected = tuple(s if extent == full else 0
+                             for s, extent, full in zip(source._storage_strides(), sizes, shape))
+            if (len(sizes) != len(shape) or any(s not in (1, n) for s, n in zip(sizes, shape))
+                    or any(s != t for s, t, n in zip(expected, tensor._storage_strides(), shape) if n > 1)):
+                return None
+            tensor = source
+        if tensor._producer_unary() == "float32":
+            inputs = tensor._inputs()
+            if len(inputs) != 1 or tuple(inputs[0].shape) != tuple(tensor.shape):
+                return None
+            if str(inputs[0].dtype).removeprefix("torch.") in ("float16", "bfloat16"):
+                tensor = inputs[0]
+        terms.append(tensor[(slice(None),) * axis + (index if tensor.shape[axis] > 1 else 0,)])
+    return tuple(terms)

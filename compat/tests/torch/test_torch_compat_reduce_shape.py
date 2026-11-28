@@ -347,6 +347,22 @@ class TestRepeatTile(Base):
                     msg=f"constant repeat_interleave index {dev}")
         both_devices(body)
 
+    def test_repeat_interleave_scalar_tensor_only_reads_the_count(self):
+        def body(dev):
+            values = torch.tensor([2], dtype=torch.int64, device=dev)
+            repeats = torch.tensor([3], dtype=torch.int64, device=dev)
+            jt.sync([values, repeats])
+            before = jt.core._host_readback_count()
+            result = torch.repeat_interleave(values, repeats)
+            jt.sync([result])
+            self.assertEqual(jt.core._host_readback_count() - before, 1)
+            self.assertEqual(result.device.type, dev)
+            self.ac(result.numpy(), np.array([2, 2, 2], dtype="int64"))
+
+            empty = torch.repeat_interleave(values, repeats * 0)
+            self.assertEqual(empty.numel(), 0)
+        both_devices(body)
+
     def test_repeat_interleave_arange_one_index(self):
         x = np.arange(6).reshape(1, 6).astype("float32")
         repeats_np = np.array([7], dtype="int32")
@@ -402,6 +418,30 @@ class TestUnfold(Base):
 
 
 class TestSplitChunk(Base):
+    def test_dim_size_reads_current_tensor_shape(self):
+        def body(dev):
+            x = torch.ones((2, 3, 4), device=dev).transpose(0, 2)
+            self.assertEqual(x.size(-1), 2)
+            self.assertEqual(x.size(0), 4)
+            self.assertEqual(x.size(), torch.Size((np.int64(4), 3, 2)))
+            self.assertIsInstance(x.size(), torch.Size)
+
+        both_devices(body)
+
+    def test_split_nonleading_axis_of_transpose(self):
+        x = np.arange(48, dtype=np.float32).reshape(2, 4, 6)
+        expected = np.split(x.transpose(0, 2, 1), [3], axis=-1)
+
+        def body(dev):
+            parts = torch.tensor(x, device=dev).transpose(1, 2).split(3, dim=-1)
+            self.assertEqual(len(parts), len(expected))
+            for part, ref in zip(parts, expected):
+                self.assertIsInstance(part, torch.Tensor)
+                self.assertEqual(part.device.type, dev)
+                self.ac(part.cpu().numpy(), ref)
+
+        both_devices(body)
+
     def test_split_int(self):
         x = np.arange(10).astype("float32")
         def body(dev):

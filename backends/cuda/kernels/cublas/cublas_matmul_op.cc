@@ -12,6 +12,9 @@
 #include "cublas_matmul_op.h"
 #include "cublas_wrapper.h"
 #include "cublas_compute_type.h"
+#if defined(JIT_cuda) && !defined(IS_ROCM) && !defined(IS_COREX)
+#include "cublas_row_product.h"
+#endif
 
 using namespace std;
 
@@ -151,7 +154,48 @@ void CublasMatmulOp::infer_shape() {
     }
 }
 
+void CublasMatmulOp::run() {
+    if (!c->num) return;
+    auto handle = cublas_bind_stream();
+    if (!a->num || !b->num) {
+        cudaStream_t stream;
+        checkCudaErrors(cublasGetStream(handle, &stream));
+        checkCudaErrors(cudaMemsetAsync(c->mem_ptr, 0, c->size, stream));
+        return;
+    }
+
+    int64 a_rows, a_cols, b_rows, b_cols;
+    flatten_2d(a->shape, a_rows, a_cols);
+    flatten_2d(b->shape, b_rows, b_cols);
+    const int64 n = trans_a ? a_cols : a_rows;
+    const int64 m = trans_a ? a_rows : a_cols;
+    const int64 k = trans_b ? b_rows : b_cols;
+    const auto dtype = a->dtype();
+    const auto mode = cublas_gemm_mode(dtype == ns_float16, dtype == ns_bfloat16, false);
+    const float alpha = 1.0f, beta = 0.0f;
+    LOGvvv << "cublas_matmul algo select:"
+        << "precision=" >> float32_precision_tier_name(mode.tier)
+        << "computeType=" >> cublas_compute_type_name(mode.compute)
+        << "algo=" >> cublas_gemm_algo_name(mode.algo);
+    checkCudaErrors(cublasGemmEx(handle,
+        trans_b ? CUBLAS_OP_T : CUBLAS_OP_N, trans_a ? CUBLAS_OP_T : CUBLAS_OP_N,
+        k, n, m, &alpha, b->mem_ptr, get_dtype(b->dtype()), b_cols,
+        a->mem_ptr, get_dtype(dtype), a_cols, &beta,
+        c->mem_ptr, get_dtype(c->dtype()), k, mode.compute, mode.algo));
+}
+
 void CublasMatmulOp::jit_prepare(JK& jk) {
+#if defined(IS_CUDA) && !defined(IS_ROCM) && !defined(IS_COREX)
+    // The cuBLAS ABI accepts opaque data pointers and runtime dtypes. Ordinary
+    // products can therefore use the same relay without forming a JIT key.
+    const auto dtype = a->dtype();
+    if (dtype == ns_float16 || dtype == ns_bfloat16) return;
+    if (dtype == ns_float32) {
+        const bool single_row = !trans_a && trans_b && a->num == a->shape[a->shape.size() - 1];
+        if (!single_row || !c->is_stop_grad() || float32_matmul_tier() != F32_HIGHEST)
+            return;
+    }
+#endif
     jk << "«T:" << a->dtype();
     if (c->dtype() != a->dtype()) jk << "«Tc:" << c->dtype();
     jk << "«Trans_a:" << (trans_a ? 'T' : 'N');
@@ -164,13 +208,13 @@ void CublasMatmulOp::jit_prepare(JK& jk) {
 
 void CublasMatmulOp::jit_run() {
     if (!c->num) return;
-    cublasHandle_t handle_ = cublas_bind_stream();
     // An empty contraction has a nonempty zero result. cuBLAS still checks
     // leading dimensions for K=0, so our zero-width buffers are not legal
     // GEMM operands. Initialize the result on the same compute stream.
     if (!a->num || !b->num) {
+        auto handle = cublas_bind_stream();
         cudaStream_t stream;
-        checkCudaErrors(cublasGetStream(handle_, &stream));
+        checkCudaErrors(cublasGetStream(handle, &stream));
         checkCudaErrors(cudaMemsetAsync(c->ptr<T>(), 0, c->size, stream));
         return;
     }
@@ -200,6 +244,16 @@ void CublasMatmulOp::jit_run() {
     if ('@Trans_b'=='T') {
         k = bn;
     }
+#if defined(JIT_cuda) && !defined(IS_ROCM) && !defined(IS_COREX)
+    if ('@Trans_a' == 'N' && '@Trans_b' == 'T' && n == 1 && c->is_stop_grad()
+            && a->dtype() == ns_float32 && b->dtype() == ns_float32 && c->dtype() == ns_float32
+            && float32_matmul_tier() == F32_HIGHEST
+            && a->is_contiguous() && b->is_contiguous() && c->is_contiguous()
+            && row_product::launch<float>(a->ptr<float>(), b->ptr<float>(),
+                nullptr, c->ptr<float>(), m, k))
+        return;
+#endif
+    auto handle_ = cublas_bind_stream();
     bool has_fp16 = a->dtype() == ns_float16
         || b->dtype() == ns_float16 || c->dtype() == ns_float16;
     bool has_bf16 = a->dtype() == ns_bfloat16

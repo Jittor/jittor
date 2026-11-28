@@ -267,6 +267,77 @@ with jt.flag_scope(use_cuda={use_cuda}):
 
 
 @_test_capability.accelerator_required("cuda")
+@pytest.mark.parametrize(
+    ("layout", "gate_dtype"),
+    [
+        ("channel", "float32"),
+        ("channel", "bfloat16"),
+        ("row", "float32"),
+        ("offset", "float32"),
+        ("row_pitch", "float32"),
+        ("inner_stride", "float32"),
+        ("odd_width", "float32"),
+    ],
+)
+def test_nvrtc_packed_broadcasts_and_strided_fallback(layout, gate_dtype):
+    rng = np.random.default_rng(91)
+    width = 65 if layout == "odd_width" else 64
+    shape = (2, 129, width)
+
+    def values(dims):
+        # These values round exactly to BF16, so the reference needs only the
+        # final narrowing of the expression.
+        return rng.integers(-64, 65, size=dims).astype(np.float32) / 32
+
+    left, right = values(shape), values(shape)
+    gate_shape = (2, 1, width)
+    key = (..., slice(None))
+    if layout == "row":
+        gate_shape = (2, 129, 1)
+    elif layout == "offset":
+        gate_shape = (2, 1, width + 8)
+        key = (..., slice(1, width + 1))
+    elif layout == "row_pitch":
+        gate_shape = (2, 1, width + 1)
+        key = (..., slice(width))
+    elif layout == "inner_stride":
+        gate_shape = (2, 1, width * 2)
+        key = (..., slice(None, None, 2))
+
+    gates = values(gate_shape)
+    with jt.flag_scope(use_cuda=1, use_nvrtc=1, jit_tier="1", cuda_kernel_math="strict",
+                       backend_fallback="error"), jt.no_grad():
+        a = jt.array(left).bfloat16()
+        b = jt.array(right).bfloat16()
+        g = jt.array(gates).cast(gate_dtype)[key]
+        jt.sync([a, b, g], True)
+        launches = jt.core._nvrtc_stats()[3]
+        out = (a.float32() + b.float32() * g.float32()).bfloat16()
+        out.sync(True)
+        assert out.location() == "device"
+        assert jt.core._nvrtc_stats()[3] > launches
+        expected = jt.array(left + right * gates[key]).bfloat16().float32()
+        np.testing.assert_array_equal(out.float32().numpy(), expected.numpy())
+
+
+@_test_capability.accelerator_required("cuda")
+def test_nvrtc_strided_offsets_across_runtime_shapes():
+    rng = np.random.default_rng(73)
+    with jt.flag_scope(use_cuda=1, use_nvrtc=1, jit_tier="1", backend_fallback="error"), jt.no_grad():
+        for batch, heads, tokens, width in [(2, 3, 97, 64), (3, 5, 131, 48), (2, 3, 97, 63)]:
+            values = rng.integers(-20, 21, size=(batch, heads, tokens, width)).astype(np.float32)
+            offsets = rng.integers(-8, 9, size=(batch, 1, tokens, 1)).astype(np.float32)
+            weights = rng.integers(-4, 5, size=(1, heads, 1, width)).astype(np.float32)
+            x, offset, weight = [jt.array(v) for v in (values, offsets, weights)]
+            jt.sync([x, offset, weight], True)
+            launches = jt.core._nvrtc_stats()[3]
+            result = x * weight + offset
+            result.sync(True)
+            assert result.location() == "device" and jt.core._nvrtc_stats()[3] > launches
+            np.testing.assert_array_equal(result.numpy(), values * weights + offsets)
+
+
+@_test_capability.accelerator_required("cuda")
 def test_nvrtc_compile_disk_cache_math_and_graph_capture():
     # Child 1: cold NVRTC compile, comprehensive parity (vec4, tails, strided,
     # multi-output, reuse_dying_inputs, scalar-broadcast shape reuse [1]->[64],
@@ -318,6 +389,21 @@ with jt.flag_scope(use_cuda=1, reuse_dying_inputs=2):
     ref_s = np.where(m_np, x2_np * 2.0 + b1_np, y2_np - b2_np) + np.power(x2_np, 3.0)
     np.testing.assert_allclose(s_out.numpy(), ref_s, rtol=1e-4, atol=1e-5)
 
+    base_np = np.array([-3.125, -0.0, 0.0, 0.25, 9.75], dtype=np.float32)
+    base = jt.array(base_np)
+    base.sync(True)
+    cubic = jt.pow(base, 3.0)
+    squared = jt.pow(base, 2.0)
+    gradient = jt.grad(cubic.sum(), base)
+    oracle = base_np.astype(np.float64)
+    for actual, expected in ((squared, oracle**2), (cubic, oracle**3),
+                             (gradient, 3 * oracle**2)):
+        actual.sync(True)
+        assert actual.location() == 'device'
+        values = actual.numpy()
+        np.testing.assert_array_equal(values, expected.astype(np.float32))
+        np.testing.assert_array_equal(np.signbit(values), np.signbit(expected))
+
     # Bool arithmetic must store strictly 0/1 bytes (never 2 for True + True)
     ba = (m + m2).numpy()
     bm = (m * m2).numpy()
@@ -336,11 +422,43 @@ with jt.flag_scope(use_cuda=1, reuse_dying_inputs=2):
     np.testing.assert_allclose(mo1.numpy(), ref_tmp * 2.0 + 0.25, rtol=1e-5, atol=1e-6)
     np.testing.assert_allclose(mo2.numpy(), ref_tmp * -0.5 + 1.5, rtol=1e-5, atol=1e-6)
 
-    # fp16 & bf16 & f64 & int64 & NaN max/min
+    # fp16 & bf16 & f64 & int64 & NaN max/min (exercises vec8 uint4 path + scalar tail)
     h_out = (x2.float16() + b1.float16()).float32()
     np.testing.assert_allclose(h_out.numpy(), (x2_np.astype(np.float16) + b1_np.astype(np.float16)).astype(np.float32), rtol=1e-2, atol=1e-2)
     bf_out = (x2.bfloat16() * y2.bfloat16()).float32()
     np.testing.assert_allclose(bf_out.numpy(), x2_np * y2_np, rtol=2e-2, atol=2e-2)
+    for n_vec8 in (16, 49, 13, 7):
+        a16_np = rng.standard_normal(n_vec8).astype(np.float16)
+        b16_np = rng.standard_normal(n_vec8).astype(np.float16)
+        a16, b16 = jt.array(a16_np), jt.array(b16_np)
+        jt.sync([a16, b16], True)
+        c16 = a16 + b16
+        c16.sync(True)
+        assert c16.location() == 'device'
+        np.testing.assert_array_equal(c16.numpy(), (a16_np + b16_np).astype(np.float16))
+        if n_vec8 >= 13:
+            # Unaligned slice (offset by 1 half = 2 bytes) falls back cleanly to scalar loop
+            ua, ub = a16[1:], b16[1:]
+            uc = ua + ub
+            uc.sync(True)
+            np.testing.assert_array_equal(uc.numpy(), (a16_np[1:] + b16_np[1:]).astype(np.float16))
+    # Vectorized CUDA fast_gelu (16-byte uint4 path + tail + unaligned) for fp16/bf16/fp32
+    with jt.no_grad():
+        for dt_name, np_dt in (("float16", np.float16), ("float32", np.float32)):
+            for n_g in (256, 313, 7):
+                g_in_np = rng.standard_normal((1, n_g)).astype(np_dt)
+                w_np = np.eye(n_g, dtype=np_dt)
+                g_x = jt.array(g_in_np)
+                g_w = jt.array(w_np)
+                jt.sync([g_x, g_w], True)
+                lin = jt.nn.matmul_transpose(g_x, g_w)
+                g_out = jt.nn.gelu(lin)
+                g_out.sync(True)
+                assert g_out.location() == 'device'
+                xf = g_in_np.astype(np.float32)
+                import math as _m
+                ref_g = (0.5 * xf * (1.0 + np.vectorize(_m.erf)(xf * 0.7071067811865476))).astype(np_dt)
+                np.testing.assert_allclose(g_out.numpy().astype(np.float32), ref_g.astype(np.float32), rtol=1e-2 if dt_name == "float16" else 1e-5, atol=1e-2 if dt_name == "float16" else 1e-5)
     nan_a = jt.array(np.array([1.0, np.nan, -2.0], dtype=np.float32))
     nan_b = jt.array(np.array([2.0, 3.0, np.nan], dtype=np.float32))
     jt.sync_all(True)

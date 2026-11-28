@@ -287,7 +287,11 @@ VarPtr GetitemOp::grad(Var* out, Var* dout, Var* v, int v_index) {
     // need analysis the overlap attr os var slices
     for (int i=0; i<vs.n; i++)
         if (vs.slices[i].is_var()) {
-            return make_setitem(zeros, VarSlices(vs, true), dout, ns_add);
+            auto gradient = make_setitem(zeros, VarSlices(vs, true), dout, ns_add);
+            if (zeros->num >= 0 && !zeros->mem_ptr && !zeros->is_sharing()
+                    && zeros->is_contiguous())
+                gradient->share_with(zeros);
+            return gradient;
         }
     VarPtr value = dout;
     if (value->dtype() != zeros->dtype()) value = make_unary(value, zeros->dtype());

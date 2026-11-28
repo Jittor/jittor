@@ -50,12 +50,16 @@ void NcclAllReduceManyOp::jit_run() {
     // half-open group for the next unrelated collective.
     for (int i=0; i<tensor_count; ++i) nccl_dtype(input(i)->dtype());
     nccl_bucket_begin(false);
+    bool wait_for_compute = true;
     try {
         for (int i=0; i<tensor_count; ++i) {
             Var* x = input(i);
             Var* y = output(i);
             if (!x->num) continue;
-            auto stream = nccl_stream_begin();
+            // The executor has submitted every input before entering this op.
+            // A single event orders all of those producers before the group.
+            auto stream = nccl_stream_begin(wait_for_compute);
+            wait_for_compute = false;
             checkCudaErrors(ncclAllReduce(
                 x->mem_ptr, y->mem_ptr, x->num,
                 nccl_dtype(x->dtype()), mean ? ncclAvg : ncclSum,

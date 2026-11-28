@@ -203,19 +203,28 @@ void CudnnConvBackwardWOp::jit_run() {
     };
 
 #ifndef IS_ROCM
-    {
-        // Backend-API plan cache; falls through to the legacy path below when
-        // no plan can be built for this configuration.
-        ConvPlanRequest req = conv_plan_request(
-            CONV_PLAN_BWD_FILTER,
-            getDataType<Tx>(), getDataType<Tw>(), getDataType<Ty>(),
-            dimX, strideX, dimW,
-            filterFormat_@WFORMAT == CUDNN_TENSOR_NHWC,
-            dimY, strideY, padA, convstrideA, dilationA, conv_math_type);
-        if (cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>())) {
-            return;
-        }
-    }
+    const ConvPlanRequest req = conv_plan_request(
+        CONV_PLAN_BWD_FILTER,
+        getDataType<Tx>(), getDataType<Tw>(), getDataType<Ty>(),
+        dimX, strideX, dimW,
+        filterFormat_@WFORMAT == CUDNN_TENSOR_NHWC,
+        dimY, strideY, padA, convstrideA, dilationA, conv_math_type);
+    // cuDNN's first backend-API heuristic can accumulate these filter
+    // gradients in a single long reduction. With enough channels and
+    // spatial tiles, the Winograd transform and split reduction take less
+    // time. Query support and scratch size without timing any candidates.
+    const bool prefer_winograd = !req.benchmark && fp32_conv && !req.allow_tf32
+        && groups == 1 && filterFormat_@WFORMAT == CUDNN_TENSOR_NCHW
+        && strideX[3] == 1 && strideY[3] == 1
+        && strideX[2] == dimX[3] && strideY[2] == dimY[3]
+        && strideX[1] == (int64)dimX[2] * dimX[3]
+        && strideY[1] == (int64)dimY[2] * dimY[3]
+        && dimW[2] == 3 && dimW[3] == 3
+        && strideh == 1 && stridew == 1 && dilationh == 1 && dilationw == 1
+        && dimX[1] >= 64 && dimY[1] >= 64
+        && dimX[2] >= 8 && dimX[3] >= 8 && dimY[2] >= 8 && dimY[3] >= 8;
+    if (!prefer_winograd && cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>()))
+        return;
 #endif
 
     // ---- legacy cuDNN API fallback: from here on descriptors are needed ----
@@ -237,6 +246,30 @@ void CudnnConvBackwardWOp::jit_run() {
     checkCudaErrors(cudnnSetConvolutionGroupCount( cudnnConvDesc, groups ));
 #ifndef IS_ROCM
     checkCudaErrors(cudnnSetConvolutionMathType(cudnnConvDesc, conv_math_type));
+#endif
+    const auto run = [&](cudnnConvolutionBwdFilterAlgo_t algorithm, size_t bytes) {
+        CudnnWorkspace workspace(bytes);
+        CudnnScalingType<Ty> alpha = 1, beta = 0;
+        return cudnnConvolutionBackwardFilter(
+            handle_, &alpha, cudnnIdesc, x->ptr<Tx>(), cudnnOdesc, y->ptr<Ty>(),
+            cudnnConvDesc, algorithm, workspace.ptr, workspace.size,
+            &beta, cudnnFdesc, w->ptr<Tw>());
+    };
+#ifndef IS_ROCM
+    if (prefer_winograd) {
+        constexpr auto winograd = CUDNN_CONVOLUTION_BWD_FILTER_ALGO_WINOGRAD_NONFUSED;
+        size_t bytes = 0;
+        auto status = cudnnGetConvolutionBackwardFilterWorkspaceSize(
+            handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, cudnnFdesc, winograd, &bytes);
+        if (status == CUDNN_STATUS_SUCCESS && bytes <= mem_info.total_cuda_ram * max_workspace_ratio) {
+            status = run(winograd, bytes);
+            if (status == CUDNN_STATUS_SUCCESS) return;
+        }
+        if (status != CUDNN_STATUS_SUCCESS && status != CUDNN_STATUS_NOT_SUPPORTED
+                && status != CUDNN_STATUS_ARCH_MISMATCH)
+            checkCudaErrors(status);
+        if (cudnn_conv_backend_run(req, x->ptr<Tx>(), w->ptr<Tw>(), y->ptr<Ty>())) return;
+    }
 #endif
     cudnnConvolutionBwdFilterAlgo_t algos[] = {
         CUDNN_CONVOLUTION_BWD_FILTER_ALGO_0,
@@ -337,19 +370,7 @@ void CudnnConvBackwardWOp::jit_run() {
     checkCudaErrors (cudnnGetConvolutionBackwardFilterWorkspaceSize(
         handle_, cudnnIdesc, cudnnOdesc, cudnnConvDesc, 
         cudnnFdesc, algo, &workSpaceSize));
-    CudnnWorkspace workSpace(workSpaceSize);
-    CudnnScalingType<Ty> alpha=1, beta=0;
-    checkCudaErrors(cudnnConvolutionBackwardFilter(
-        handle_,
-        (void*)(&alpha),
-        cudnnIdesc,  x->ptr<Tx>(),
-        cudnnOdesc, y->ptr<Ty>(),
-        cudnnConvDesc,
-        algo,
-        workSpace.ptr, workSpace.size,
-        (void*)(&beta),
-        cudnnFdesc,  w->ptr<Tw>())
-    );
+    checkCudaErrors(run(algo, workSpaceSize));
 }
 #endif
 #endif // JIT

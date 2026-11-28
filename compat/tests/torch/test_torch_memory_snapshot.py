@@ -60,8 +60,9 @@ class TestTorchMemorySnapshot(unittest.TestCase):
         blocks = [b for s in data["segments"] for b in s["blocks"]
                   if b["state"] == "active_allocated" and b["requested_size"] == weight]
         self.assertTrue(blocks)
-        self.assertTrue(any(f["filename"] == __file__ and f["name"] == "_train"
-                            for f in blocks[0]["frames"]), blocks[0]["frames"][:8])
+        here = os.path.realpath(__file__)
+        self.assertTrue(any(os.path.realpath(f["filename"]) == here and f["name"] == "_train"
+                            for f in blocks[0]["frames"]), blocks[0]["frames"][:12])
 
     def test_memory_snapshot_is_the_segments(self):
         torch.cuda.memory._record_memory_history()

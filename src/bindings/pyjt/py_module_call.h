@@ -42,6 +42,10 @@ void module_call_bind(PyObject* module_cls, PyObject* dispatch_call,
                       PyObject* pipeline, PyObject* device_context, PyObject* slow,
                       PyObject* dispatch_parts);
 
+// Use functional Linear while discovering or applying a StepCapture layout.
+// @pyjt(_set_parallel_linear_scope)
+bool set_parallel_linear_scope(bool enabled);
+
 // @pyjt(_module_call)
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs);
 

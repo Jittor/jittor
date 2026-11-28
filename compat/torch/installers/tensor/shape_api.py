@@ -18,14 +18,32 @@ def _permutation_view(input, axes):
     return result
 
 
+def _torch_unbind(input, dim=0):
+    """Return one indexed storage view for each slice along the axis."""
+    from jittor._core.var import _transpose_axis
+
+    rank = input.ndim
+    if not rank:
+        raise IndexError("unbind requires a tensor with at least one dimension")
+    axis = _transpose_axis(dim, rank, 0)
+    prefix = (slice(None),) * axis
+    # The native CUDA unbind can copy several slices in one launch. Torch
+    # exposes a view even for large slices whose innermost stride is > 1.
+    return tuple(input[prefix + (index,)] for index in range(input.shape[axis]))
+
+
 def _torch_permute(input, *dims, **kwargs):
-    from jittor._core.var import _transpose_permutation
     if kwargs:
         if set(kwargs) != {'dims'} or dims:
             raise TypeError('permute expects one dims sequence or positional dimensions')
         dims = kwargs['dims']
     elif len(dims) == 1 and isinstance(dims[0], (tuple, list, jt.NanoVector)):
         dims = dims[0]
+    if _FAST_STORAGE_PERMUTE is not None:
+        result = _FAST_STORAGE_PERMUTE(input, dims)
+        if result is not None:
+            return result
+    from jittor._core.var import _transpose_permutation
     axes = _transpose_permutation(dims, input.ndim, input.shape)
     return _permutation_view(input, axes)
 
@@ -72,10 +90,12 @@ def _torch_t(input):
     return _permutation_view(input, axes)
 
 def _torch_size(self, dim=None):
+    if dim is not None:
+        return self.shape[dim]
     _context = get_install_context(jt)
     _native = _context.state["tensor_shape_api"]
     _Size = _native['_Size']
-    return self.shape[dim] if dim is not None else _Size(self.shape)
+    return _Size(self.shape)
 
 
 def _dtype_itemsize_name(ds):
@@ -120,6 +140,7 @@ def _bitcast(self, dt):
 #: the frames. None answers for everything else.
 _FAST_VIEW = None
 _FAST_STORAGE_TRANSPOSE = None
+_FAST_STORAGE_PERMUTE = None
 
 
 def _torch_reshape(self, *shape, **_kw):
@@ -254,6 +275,13 @@ def _torch_var_sum(self, *a, **k):
         raise IndexError(
             "Dimension out of range (expected to be in range of [-1, 0], "
             "but got %d)" % int(dims[0]))
+    if out is None and dt is None and self.ndim == 4 and jt.flags.no_grad:
+        if (a == (-1,) and not k) or (not a and k == {"dim": -1}):
+            from jittor.backends.cuda.kernels.nn.grid_sample_cuda import try_reduce_sampled_grids
+
+            fused = try_reduce_sampled_grids(self)
+            if fused is not None:
+                return fused
     result = _autocast_fp32_call(_orig_var_sum, self, *a, eligible=dt is None and out is None, **k)
     if dt is not None and _jittor_dtype_name(result.dtype) != _dtype_to_str(dt):
         result = result.cast(_dtype_to_str(dt))

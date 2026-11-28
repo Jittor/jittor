@@ -10,11 +10,19 @@ from jittor.backends.cuda.kernels.cublas.lt_linear_cuda import (
 from jittor._core.dtypes import dtype_name
 
 from ._amp import bias_for_compute_dtype
+from ._parallel_linear import try_parallel_linear
 from .matrix import _bfloat16_matmul_accumulator, _check_matmul_shapes
 
 
 def linear(x, weight, bias=None):
     """Return ``x * weight.T`` with an optional bias."""
+    packed = try_parallel_linear(x, weight, bias, _unpacked_linear)
+    if packed is not None:
+        return packed
+    return _unpacked_linear(x, weight, bias)
+
+
+def _unpacked_linear(x, weight, bias):
     if bias is not None:
         # cuBLASLt folds the bias into the GEMM's epilogue, which is the same
         # one-rounding order the bf16 accumulator below exists to preserve:

@@ -135,7 +135,7 @@ class MemoryReport:
         cached = self.end[1] - self.end[0]
         if cached <= 0:
             return 0.0
-        return 1.0 - self.end[5] / float(cached)
+        return max(0.0, min(1.0, 1.0 - self.end[5] / float(cached)))
 
     def to_dict(self):
         return {
@@ -175,8 +175,11 @@ class MemoryReport:
             lines.append("  NVML process used              start %s, end %s, sampled peak %s (%d samples)" % (
                 _fmt(nv.get("start")), _fmt(nv.get("end")), _fmt(nv.get("peak")), nv.get("samples", 0)))
             if nv.get("end") is not None:
-                lines.append("    outside the pools at end     %s (context, modules, library handles)" % _fmt(
-                    nv["end"] - self.end[1] - self.end[7]))
+                outside = nv["end"] - self.end[1] - self.end[7]
+                if outside >= 0:
+                    lines.append("    outside the pools at end     %s (context, modules, library handles)" % _fmt(outside))
+                else:
+                    lines.append("    outside the pools at end     n/a (NVML process reading below pool reserved)")
         lines.append("  start -> end allocated         %s -> %s; reserved %s -> %s" % (
             _fmt(self.start[0]), _fmt(self.end[0]), _fmt(self.start[1]), _fmt(self.end[1])))
         lines.append("  cached at end                  %s in %d free blocks, largest %s, fragmentation %.0f%%" % (

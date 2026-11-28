@@ -5,6 +5,7 @@ from math import prod
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
+from jittor._runtime import dispatch as _matrix_dispatch
 from jittor._runtime.dispatch import native_rule, register_kernel, select_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from ._amp import prefers_half as _amp_retypes_output_to_half
@@ -168,9 +169,28 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
     return get_library_ops("cublas").cublas_matmul(a, b, trans_a, trans_b)
 
 
-def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False):
+def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False, alpha=1.0):
+    if (jt.flags.keep_graph == 2 and jt.flags.no_grad and not trans_a
+            and alpha == 1.0 and _jittor_dtype_name(a.dtype) == "float32"):
+        from jittor.backends.cuda.kernels.nn.batched_matmul_cuda import (
+            narrow_batched_matmul,
+            short_batched_matmul,
+        )
+
+        specialized = short_batched_matmul(a, b, trans_b)
+        if specialized is None and not trans_b:
+            specialized = narrow_batched_matmul(a, b)
+        if specialized is not None:
+            return specialized
+    if type(alpha) is float:
+        result = jt.core._cublas_matmul_matching_batch(a, b, trans_a, trans_b, alpha)
+        if result is not None:
+            return result
     a, b = _broadcast_batch_dims(a, b)
-    return get_library_ops("cublas").cublas_batched_matmul(a, b, trans_a, trans_b)
+    op = get_library_ops("cublas").cublas_batched_matmul
+    if alpha == 1.0:
+        return op(a, b, trans_a, trans_b)
+    return op(a, b, trans_a, trans_b, alpha)
 
 
 def _supports_mkl(a, b, trans_a=False, trans_b=False):
@@ -586,10 +606,33 @@ def _transpose_base_last2(x):
     return None
 
 
+class _AdjointOfTransposeView(jt.Function):
+    """Use the base's data and differentiate with respect to the view."""
+
+    def __init__(self, adjoint):
+        self.adjoint = adjoint
+
+    def execute(self, view):
+        return self.adjoint
+
+    def grad(self, g):
+        return _conj_last2(g)
+
+
 def _conj_last2(x):
+    base = _transpose_base_last2(x)
+    if base is not None:
+        adjoint = base.conj() if x.dtype.is_complex() else base
+        if jt.flags.no_grad:
+            return adjoint
+        if x.is_stop_grad():
+            return adjoint if adjoint.is_stop_grad() else adjoint.detach()
+        # Reconnect the view for higher-order gradients without evaluating it.
+        return _AdjointOfTransposeView(adjoint)(x)
     axes = list(range(x.ndim))
     axes[-1], axes[-2] = axes[-2], axes[-1]
-    return x.transpose(axes).conj()
+    transposed = x.transpose(axes)
+    return transposed.conj() if x.dtype.is_complex() else transposed
 
 
 def _sum_to_shape(x, shape):
@@ -705,6 +748,24 @@ def _matmul_fallback(a, b):
         return _matmul_impl(a, b)
 
 
+_BASE_SELECT_KERNEL = select_kernel
+
+
+def _frontend_batched_matmul(a, b, tensor_type):
+    # Let the normal dispatcher choose the capture-time CUDA schedule.
+    if jt.flags.keep_graph == 2:
+        return None
+    if (select_kernel is _BASE_SELECT_KERNEL
+            and _matrix_dispatch.select_kernel is _BASE_SELECT_KERNEL
+            and _matrix_dispatch.dispatch_context is _matrix_dispatch._NATIVE_DISPATCH_CONTEXT
+            and _matrix_dispatch._NATIVE_SELECT is jt.core._kernel_select):
+        return jt.core._cublas_matmul_frontend(a, b, tensor_type, _cublas_batched_matmul)
+    return None
+
+
+matmul._frontend_batched_matmul = _frontend_batched_matmul
+
+
 def _matmul_impl(a, b):
     len_a = a.ndim
     len_b = b.ndim
@@ -738,6 +799,11 @@ def _matmul_impl(a, b):
         trans_a, trans_b = a_base is not None, b_base is not None
         fast = _matmul_kernel_dispatch("batched_matmul", aa, bb, trans_a, trans_b)
         if fast is not None:
+            if (len_a == 4 and jt.flags.no_grad and fast.placement_backend == 1
+                    and _jittor_dtype_name(fast.dtype) == "float16"):
+                from jittor.backends.cuda.kernels.nn.short_attention_cuda import record_matmul
+
+                record_matmul(fast, a, b)
             return _keep_operand_grads(a, b, aa, bb, fast)
     shape = []
     len_c = max(len_a, len_b)

@@ -144,6 +144,7 @@ def _concat_direct(arr, dim, dtype):
 
 #: Inputs `_concat_fused` takes on: one nested select per input boundary.
 _MAX_FUSED_INPUTS = 4
+_MAX_HOST_FUSED_ELEMENTS = 4096
 
 
 def _concat_fused(arr, dim, dtype):
@@ -168,6 +169,8 @@ def _concat_fused(arr, dim, dtype):
         jt = _jt()
         if not 2 <= len(arr) <= _MAX_FUSED_INPUTS:
             return None
+        small_host_prefix = (jt.flags.no_grad and int(arr[0].placement_backend) == 0
+                             and sum(value.numel() for value in arr) <= _MAX_HOST_FUSED_ELEMENTS)
         sources = []
         for value in arr:
             if not isinstance(value, jt.Var) or value.shape[dim] == 0:
@@ -180,7 +183,10 @@ def _concat_fused(arr, dim, dtype):
                     break
                 ops.append(name)
                 base = base._input(0)
-            if not base._producer_is_view():
+            # Host-prefix replay accepts value-producing operations and views.
+            # The direct concat instead starts with scratch storage and writes
+            # each slice. Bound extra work when the inputs themselves compute.
+            if not small_host_prefix and not base._producer_is_view():
                 return None
             sources.append((base, ops[::-1], int(value.shape[dim])))
         out_shape = list(arr[0].shape)
@@ -275,6 +281,10 @@ def concat(arr, dim=0):
                 and not select_kernel._is_registered("tensor.setitem"):
             out = native(arr, dim)
             if out is not NotImplemented:
+                if len(arr) == 2 and (dim == -1 or dim == len(first.shape) - 1):
+                    src = _detect_rotate_half_source(arr, len(first.shape) - 1)
+                    if src is not None:
+                        out._jt_rotate_half_src = src
                 return out
     amp_reg = jt.flags.amp_reg
     keep_reduce = jt.amp_flags.keep_reduce
@@ -282,6 +292,13 @@ def concat(arr, dim=0):
         return _concat(jt, arr, dim)
     with jt.flag_scope(amp_reg=amp_reg | keep_reduce):
         return _concat(jt, arr, dim)
+
+
+def _detect_rotate_half_source(arr, dim):
+    """Return ``x`` when ``arr`` is ``(-x[..., half:], x[..., :half])`` along the last axis."""
+    if len(arr) != 2:
+        return None
+    return _jt().core._rotate_half_source(arr[0], arr[1], dim)
 
 
 _tracing = None
@@ -348,10 +365,27 @@ def _concat_after_kernel(arr, dim, dtype):
     if _tracing is None:
         from .._runtime.step_capture import tracing as _tracing
     if _tracing():
+        if _jt().flags.no_grad and len(arr) == 2 and all(
+                _jittor_dtype_name(value.dtype) == _jittor_dtype_name(dtype) for value in arr):
+            from jittor.backends.cuda.kernels.misc import concat_cuda as _concat_cuda  # noqa: F401
+            kernel = select_kernel("tensor.concat.strided_inference", arr, dim)
+            if kernel is not None:
+                packed = kernel(arr, dim)
+                if packed is not None:
+                    return packed
         fused = _concat_fused(arr, dim, dtype)
         if fused is not None:
+            if len(arr) == 2 and dim == len(arr[0].shape) - 1:
+                src = _detect_rotate_half_source(arr, dim)
+                if src is not None:
+                    fused._jt_rotate_half_src = src
             return fused
-    return _concat_bounded(arr, dim, dtype)
+    out = _concat_bounded(arr, dim, dtype)
+    if len(arr) == 2 and dim == len(arr[0].shape) - 1:
+        src = _detect_rotate_half_source(arr, dim)
+        if src is not None:
+            out._jt_rotate_half_src = src
+    return out
 
 
 cat = concat

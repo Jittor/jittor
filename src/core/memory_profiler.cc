@@ -60,6 +60,7 @@ MemoryProfiler::MemoryProfiler() {
 
 void MemoryProfiler::clear() {
     allocations.clear();
+    max_live_vars.clear();
     max_memory_size = 0;
     max_used_memory_size = 0;
     max_device_used_memory.clear();
@@ -71,6 +72,7 @@ std::pair<size_t, size_t> MemoryProfiler::get_memory_info() {
     size_t unused = 0;
     //TODO add mssfrl allocator
     for (auto& a : SFRLAllocator::sfrl_allocators) {
+        std::unique_lock<std::recursive_mutex> lock(a->mutex);
         used += a->used_memory;
         unused += a->unused_memory;
     }
@@ -87,8 +89,11 @@ void MemoryProfiler::check() {
     // measures their sum.
     {
         std::map<int, int64> device_used;
-        for (auto& a : SFRLAllocator::sfrl_allocators)
-            if (a->is_cuda()) device_used[a->device()] += a->used_memory;
+        for (auto& a : SFRLAllocator::sfrl_allocators) {
+            if (!a->is_cuda()) continue;
+            std::unique_lock<std::recursive_mutex> lock(a->mutex);
+            device_used[a->device()] += a->used_memory;
+        }
         for (auto& entry : device_used) {
             int64& seen = max_device_used_memory[entry.first];
             if (entry.second > seen) seen = entry.second;
@@ -122,7 +127,7 @@ void MemoryProfiler::check() {
             if (node->is_var()) {
                 Var* var = (Var*)node;
                 if (var->mem_ptr != nullptr) {
-                    if (profile_memory_enable == 2 && !var->allocator->is_cuda()) {
+                    if (profile_memory_enable == 2 && (!var->allocator || !var->allocator->is_cuda())) {
                         cpu_sum += var->size;
                         continue;
                     }
@@ -158,10 +163,11 @@ void MemoryProfiler::display_max_memory_info() {
     log << "max used memory" << FloatOutput_{(double)max_used_memory_size, " KMG", 1024, "B"} << "\n";
     log << "max var memory" << FloatOutput_{(double)max_memory_size, " KMG", 1024, "B"} << "\n\n";
     log << "[Size]" << "[Percent]" << "[Var Info]" << "\n";
-    for (int i = 0; i < max_live_vars.size(); ++i) {
-        log << FloatOutput_{(double)max_live_vars[i].second, " KMG", 1024, "B"} 
-        << double(max_live_vars[i].second) / max_memory_size * 100 << "%" 
-        << max_live_vars[i].first.first 
+    for (int i = 0; i < (int)max_live_vars.size(); ++i) {
+        double pct = max_memory_size > 0 ? double(max_live_vars[i].second) / max_memory_size * 100 : 0.0;
+        log << FloatOutput_{(double)max_live_vars[i].second, " KMG", 1024, "B"}
+        << pct << "%"
+        << max_live_vars[i].first.first
         << max_live_vars[i].first.second[0].file_path + ":" + std::to_string(max_live_vars[i].first.second[0].lineno)
         << "\n\n";
     }

@@ -247,6 +247,7 @@ _MODULE_API = (
     "RReLU",
     "ReLU",
     "ReLU6",
+    "ReflectionPad1d",
     "ReflectionPad2d",
     "Relu",
     "ReplicationPad2d",

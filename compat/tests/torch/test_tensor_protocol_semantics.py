@@ -113,6 +113,24 @@ def test_new_functions():
     np.testing.assert_allclose(a.matrix_exp().numpy(), expected, atol=1e-14)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_special_logit_clips_and_preserves_boundary_gradients(device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA unavailable")
+    x = torch.tensor([-1.0, 0.0, 0.2, 0.5, 0.8, 1.0, 2.0],
+                     dtype=torch.float64, device=device).requires_grad_(True)
+    y = torch.special.logit(x, eps=0.2)
+    dy, = torch.autograd.grad(y.sum(), x)
+    assert y.device.type == device
+    expected = np.log(4)
+    np.testing.assert_allclose(y.detach().cpu().numpy(), [-expected] * 3 + [0] + [expected] * 3)
+    np.testing.assert_allclose(dy.cpu().numpy(), [0, 0, 6.25, 4, 6.25, 0, 0])
+    with torch.no_grad():
+        raw = torch.special.logit(x).cpu().numpy()
+    assert np.isnan(raw[[0, -1]]).all()
+    assert np.isneginf(raw[1]) and np.isposinf(raw[-2])
+
+
 def test_complex_setitem_converts_precision():
     x = torch.zeros(3, dtype=torch.complex128)
     x[1] = torch.tensor(1 + 2j, dtype=torch.complex64)

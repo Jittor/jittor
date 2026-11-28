@@ -99,7 +99,8 @@ class TorchDistributionFinder(object):
         if not _path_matches(paths, self.root.parent):
             return iter(())
         roots = ((_NAME, self.root),
-                 ("flash_attn", self.root.parent / "flash_attn_dist_info"))
+                 ("flash_attn", self.root.parent / "flash_attn_dist_info"),
+                 ("torchvision", self.root.parent / "torchvision_dist_info"))
         return iter(metadata.PathDistribution(root) for package, root in roots
                     if _name_matches(name, package))
 
@@ -114,7 +115,8 @@ def publish():
     if _finder is not None and _finder in sys.meta_path:
         return _finder
     root = resource_root()
-    for packaged in (root, root.parent / "flash_attn_dist_info"):
+    for packaged in (root, root.parent / "flash_attn_dist_info",
+                     root.parent / "torchvision_dist_info"):
         if not (packaged / "METADATA").is_file():
             raise RuntimeError(
                 "a packaged shim distribution is missing: %s" % packaged)

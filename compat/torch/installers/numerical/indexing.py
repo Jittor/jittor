@@ -106,7 +106,23 @@ def index_copy(input, dim, index, source):
 
 
 def index_copy_(input, dim, index, source):
-    """Reuse native index update and storage-preserving copy for true aliases."""
+    """Copy rows/slices in place along ``dim`` (Torch inplace form)."""
+    from . import (
+        jt,
+    )
+    if jt.flags.no_grad or not (
+        getattr(input, "requires_grad", False)
+        or getattr(source, "requires_grad", False)
+    ):
+        d = dim % input.ndim
+        idx = index if isinstance(index, jt.Var) else jt.array(index)
+        if d == 0:
+            input[idx] = source
+        else:
+            slices = [slice(None)] * input.ndim
+            slices[d] = idx
+            input[tuple(slices)] = source
+        return input
     return input.copy_(index_copy(input, dim, index, source))
 
 

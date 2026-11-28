@@ -35,6 +35,8 @@ class Upsample(jt.Module):
     def execute(self, x):
         if self.scale_factor is None:
             raise ValueError("scale_factor should be defined")
+        if x.ndim == 3 and self.mode == "nearest":
+            return jt.nn.interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
         if self.mode == "nearest-exact":
             # Retain explicit scale semantics; the functional admits exact
             # integer factors and rejects fractional ones instead of silently

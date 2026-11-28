@@ -13,7 +13,12 @@ from jittor import nn
 from jittor._core.hooks import _RemovableHandle
 from jittor.nn.backends import hooks as _backend_hooks
 from jittor.backends.cuda.kernels.nn.rms_norm_training_cuda import _rms_norm_training_cuda
-from jittor.backends.cuda.kernels.nn.rms_norm_cuda import _rms_norm_cuda, _rms_norm_source
+from jittor.backends.cuda.kernels.nn.rms_norm_cuda import (
+    _rms_norm_cuda,
+    _rms_norm_single_round_cuda,
+    _rms_norm_source,
+    _rms_norm_weightless_cuda,
+)
 from ...context import registry_for
 from ...fidelity import Fidelity, register_fidelity
 from ...nested import _torch_register_leaf
@@ -56,9 +61,9 @@ _ORIG_MODULE_GETATTR = nn.Module.__getattr__
 _ORIG_MODULE_REGISTER_BACKWARD_HOOK = nn.Module.register_backward_hook
 _ORIG_MODULE_REMOVE_BACKWARD_HOOK = nn.Module.remove_backward_hook
 
-_TORCH_HOOK_TABLES = {
+_TORCH_HOOK_TABLES = frozenset({
     "_forward_hooks", "_forward_pre_hooks", "_backward_hooks", "_backward_pre_hooks",
-}
+})
 
 
 def _getattr(self, name):
@@ -170,12 +175,29 @@ def _acl_bfloat16_rms_norm(value, weight, epsilon):
 def _standard_rms_norm(self, args, kwargs):
     """A fused RMS norm for the standard single-argument shape, or None."""
     cls_name = type(self).__name__
+    is_diffusers_rms = (
+        cls_name == "RMSNorm"
+        and type(self).__module__ == "diffusers.models.normalization"
+        and "eps" in self.__dict__
+        and getattr(self, "bias", None) is None
+        and len(getattr(self, "dim", ())) == 1
+    )
+    is_t5_rms = (
+        cls_name.endswith("LayerNorm")
+        and "variance_epsilon" in self.__dict__
+        and "bias" not in self.__dict__
+        and "normalized_shape" not in self.__dict__
+    )
+    is_gemma4_rms = (
+        cls_name == "Gemma4RMSNorm"
+        and "eps" in self.__dict__
+    )
     if (
-        not cls_name.endswith("RMSNorm")
+        (not cls_name.endswith("RMSNorm") and not is_t5_rms)
         or cls_name.endswith("RMSNormGated")
         or len(args) != 1
         or kwargs
-        or "variance_epsilon" not in self.__dict__
+        or ("variance_epsilon" not in self.__dict__ and not is_diffusers_rms and not is_gemma4_rms)
         # Optional affine weights and partial variance are different public
         # forward contracts. Leave their computation with the module owner.
         or getattr(self, "has_weight", True) is False
@@ -187,13 +209,24 @@ def _standard_rms_norm(self, args, kwargs):
     ):
         return None
     value = args[0]
+    if not isinstance(value, jt.Var):
+        return None
+    epsilon = self.__dict__["eps"] if (is_diffusers_rms or is_gemma4_rms) else self.__dict__["variance_epsilon"]
+    if is_gemma4_rms:
+        if getattr(self, "with_scale", False) is False:
+            return _rms_norm_weightless_cuda(value, epsilon)
+        weight = getattr(self, "weight", None)
+        if not isinstance(weight, jt.Var):
+            return None
+        return _rms_norm_single_round_cuda(value, weight, epsilon)
+    if is_diffusers_rms and getattr(self, "elementwise_affine", False) is False:
+        return _rms_norm_weightless_cuda(value, epsilon)
     weight = getattr(self, "weight", None)
-    if not isinstance(value, jt.Var) or not isinstance(weight, jt.Var):
+    if not isinstance(weight, jt.Var):
         return None
     # Mixed input/weight dtypes have promotion semantics owned by forward.
     if _jittor_dtype_name(value.dtype) != _jittor_dtype_name(weight.dtype):
         return None
-    epsilon = self.__dict__["variance_epsilon"]
     pytorch_order = _acl_bfloat16_rms_norm(value, weight, epsilon)
     if pytorch_order is not None:
         return pytorch_order
@@ -1640,6 +1673,9 @@ def _install_module_methods(nn, registry=None):
         "prefer_forward": _prefer_forward,
         "standard_rms_norm": _standard_rms_norm,
         "rms_selector_state": _rms_selector_state,
+        "rms_getattr_state": (globals(), _getattr, _getattr.__code__,
+                              _ORIG_MODULE_GETATTR, _ORIG_MODULE_GETATTR.__code__,
+                              _TORCH_HOOK_TABLES),
         "linear_execute": _NativeLinear.execute,
         "linear_training_state": _linear_training_dispatch_state(nn, _kernel_dispatch),
         "matmul_kernel": _matrix._cublas_matmul,
@@ -1670,6 +1706,7 @@ def _install_module_methods(nn, registry=None):
         "layer_norm_execute": _NativeLayerNorm.execute,
         "layer_norm_inference": _layer_norm_cuda._layer_norm_no_grad_cuda.__wrapped__,
         "layer_norm_source": _layer_norm_cuda._affine_source,
+        "layer_norm_weight_only_source": _layer_norm_cuda._weight_only_source,
         "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
     }
     jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,

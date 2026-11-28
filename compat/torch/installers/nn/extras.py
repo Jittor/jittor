@@ -335,9 +335,8 @@ def _install_nn_extras(nn, registry=None):
 
         nn.utils = _u
 
-    # Newer PyTorch exposes torch.nn.utils.parametrize and
-    # torch.nn.utils.parametrizations. transformers 4.56 probes
-    # nn.utils.parametrizations.weight_norm while remapping checkpoint keys.
+    # Parametrized weight normalization exposes its original parameters under
+    # a different checkpoint namespace from the legacy pre-forward hook.
     import types as _types_nn_utils
     _u = getattr(nn, "utils", None) or _types_nn_utils.ModuleType("torch.nn.utils")
     _u.__path__ = getattr(_u, "__path__", [])
@@ -381,13 +380,20 @@ def _install_nn_extras(nn, registry=None):
         _modules.setdefault("torch.nn.utils.fusion", _u.fusion)
     if not hasattr(_u, "parametrizations"):
         _parametrizations = _types_nn_utils.ModuleType("torch.nn.utils.parametrizations")
-        _parametrizations.weight_norm = getattr(_u, "weight_norm", _api_parametrizations_weight_norm)
+        _parametrizations.weight_norm = _api_parametrizations_weight_norm
         _parametrizations.spectral_norm = getattr(_u, "spectral_norm", _api_parametrizations_spectral_norm)
         _parametrizations.orthogonal = _api_parametrizations_orthogonal
         _u.parametrizations = _parametrizations
         _modules["torch.nn.utils.parametrizations"] = _parametrizations
     else:
         _modules.setdefault("torch.nn.utils.parametrizations", _u.parametrizations)
+    register_api_bindings(
+        _u.parametrizations, "torch.nn.utils.parametrizations", ("weight_norm",),
+        Fidelity.APPROXIMATE, "Weight normalization with original0/original1 parameter state.")
+    register_api_bindings(
+        _u.parametrize, "torch.nn.utils.parametrize",
+        ("remove_parametrizations", "is_parametrized", "type_before_parametrizations"),
+        Fidelity.APPROXIMATE, "Supports the weight-normalization parametrization.")
 
     # torchmetrics imports torch.nn.utils.rnn at module import time. Install the
     # module unconditionally because some bootstrap paths create nn.utils before
@@ -637,6 +643,30 @@ def _install_nn_extras(nn, registry=None):
         embedding_cls.__init__ = embedding_init
         embedding_cls._torch_dtype_patched = True
 
+    class _TorchUpsample(nn.Module):
+        def __init__(self, size=None, scale_factor=None, mode="nearest",
+                     align_corners=None, recompute_scale_factor=None):
+            super().__init__()
+            self.size = size
+            self.scale_factor = scale_factor
+            self.mode = mode
+            self.align_corners = align_corners
+            self.recompute_scale_factor = recompute_scale_factor
+
+        def forward(self, input):
+            return F.interpolate(
+                input,
+                size=self.size,
+                scale_factor=self.scale_factor,
+                mode=self.mode,
+                align_corners=self.align_corners,
+                recompute_scale_factor=self.recompute_scale_factor,
+            )
+
+    _TorchUpsample.__name__ = "Upsample"
+    _TorchUpsample.__qualname__ = "Upsample"
+    nn.Upsample = _TorchUpsample
+
     get_install_context(_torch_target).state["nn_extra_native"] = MappingProxyType({
         "dropout_initializers": MappingProxyType(_dropout_initializers),
         "_jt_linear": locals().get("_jt_linear"),
@@ -670,8 +700,7 @@ def _install_nn_extras(nn, registry=None):
     for _path, _names in (
         ("torch.nn.attention.flex_attention", ("flex_attention", "create_block_mask",
          "and_masks", "or_masks", "noop_mask")),
-        ("torch.nn.utils.parametrize", ("register_parametrization", "remove_parametrizations",
-         "is_parametrized", "type_before_parametrizations")),
+        ("torch.nn.utils.parametrize", ("register_parametrization",)),
         ("torch.nn.utils.prune", ("is_pruned",)),
     ):
         _namespace = _modules.get(_path)

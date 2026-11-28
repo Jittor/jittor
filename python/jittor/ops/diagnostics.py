@@ -21,8 +21,9 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
 
     out = ''
     tab = '   '
+    pct = (now['size'] / max_memory_size * 100.0) if max_memory_size > 0 else 0.0
     out += prefix1+now['name']+'('+now['type']+')\n'
-    out += prefix2+'['+format_size(now['size'])+'; '+format(now['size']/max_memory_size*100, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
+    out += prefix2+'['+format_size(now['size'])+'; '+format(pct, '.2f')+'%; cnt:'+format_size(now['cnt'],'') + ']\n'
     if len(now['children']) == 0 and len(now['vinfo']):
         out += prefix2+now['vinfo'][0]
         if len(now['vinfo']) > 1: out += "..."
@@ -44,7 +45,7 @@ def print_tree(now, max_memory_size, prefix1, prefix2, build_by):
         else:
             prefix1_ = prefix2 + tab + '└─'
             prefix2_ = prefix2 + tab + '  '
-        out += jt.misc.print_tree(
+        out += print_tree(
             c, max_memory_size, prefix1_, prefix2_, build_by,
         )
     return out
@@ -107,9 +108,9 @@ Output::
     if (build_by == 0): # build tree by name
         tree = {'name':'root', "children":[], 'size':0, 'cnt':1, 'path':[], 'type':'', 'vinfo':[]}
 
-        def find_child(now, key):
+        def find_child(now, key, typ):
             for c in now['children']:
-                if (c['name'] == key):
+                if c['name'] == key and c['type'] == typ:
                     return c
             return None
         for v in vars:
@@ -118,11 +119,10 @@ Output::
             now['cnt'] += v['cnt']
             now['vinfo'].append(v['vinfo'])
             for s in v['stack']:
-                ch = find_child(now, s['name'])
+                ch = find_child(now, s['name'], s['type'])
                 if (ch is not None):
                     if (not s['path'] in ch['path']):
                         ch['path'].append(s['path'])
-                    assert(ch['type']==s['type'])
                     now = ch
                     now['size'] += v['size']
                     now['cnt'] += v['cnt']
@@ -165,7 +165,7 @@ Output::
         for c in now['children']:
             sort_tree(c)
     sort_tree(tree)
-    out = jt.misc.print_tree(tree, max_memory_size, '', '', build_by)
+    out = print_tree(tree, max_memory_size, '', '', build_by)
     if (do_print):
         print(out)
     return tree, out

@@ -157,26 +157,41 @@ def _all_reduce_mean_many(variables):
 
 def _all_reduce_mean_bucketed(variables, bucket_bytes):
     """Overlap ordered FP32 CUDA buckets, then publish only joined results."""
+    from jittor._runtime.dispatch import select_kernel
+
     variables = list(variables)
     if not variables or _world_size() <= 1:
         return variables
     ops = _nccl_ops()
     buckets, bucket, size = [], [], 0
     for value in variables:
+        value_bytes = value.numel() * value.element_size()
+        if value_bytes >= bucket_bytes:
+            if bucket:
+                buckets.append(bucket)
+            buckets.append([value])
+            bucket, size = [], 0
+            continue
         bucket.append(value)
-        size += value.numel() * value.element_size()
+        size += value_bytes
         if size >= bucket_bytes:
             buckets.append(bucket)
             bucket, size = [], 0
     if bucket:
         buckets.append(bucket)
-    futures = []
+    futures, layouts = [], []
     for bucket in buckets:
         # A rank-agreed readiness order is supplied by DDP. Start each bucket as
         # soon as its local gradients are ready, in the same order per rank.
+        layout = sorted(range(len(bucket)), key=lambda index: bucket[index].numel() % 4 != 0)
+        layouts.append(layout)
         with jt.flag_scope(node_order=1):
-            flat = (bucket[0].reshape((-1,)) if len(bucket) == 1 else
-                    jt.concat([value.reshape((-1,)) for value in bucket]))
+            pieces = [bucket[index].reshape((-1,)) for index in layout]
+            if len(pieces) == 1:
+                flat = pieces[0]
+            else:
+                pack = select_kernel("collective.pack_flat", pieces)
+                flat = pack(pieces) if pack is not None else jt.concat(pieces)
             future = ops.nccl_all_reduce_deferred(flat, mean=True)
             if futures:
                 future._add_dependency([futures[-1]])
@@ -186,12 +201,15 @@ def _all_reduce_mean_bucketed(variables, bucket_bytes):
     with jt.flag_scope(node_order=2):
         reduced = ops.nccl_wait_many(futures)
     results = []
-    for bucket, flat in zip(buckets, reduced):
+    for bucket, layout, flat in zip(buckets, layouts, reduced):
+        views = [None] * len(bucket)
         offset = 0
-        for value in bucket:
+        for index in layout:
+            value = bucket[index]
             count = value.numel()
-            results.append(flat[offset:offset+count].reshape(value.shape))
+            views[index] = flat[offset:offset+count].reshape(value.shape)
             offset += count
+        results.extend(views)
     return results
 
 

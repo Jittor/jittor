@@ -42,6 +42,7 @@ PyObject* placement_context = nullptr;
 // but "unset": until one of the setters below runs, no context holds a value.
 bool frontend_context_set = false;
 bool placement_context_set = false;
+PyObject* device_zero_placements[int(BackendId::Corex) + 1]{};
 
 PyObject* placement_variable() {
     if (!placement_context) {
@@ -130,26 +131,16 @@ PyObject* set_tensor_placement_context(int backend, int device) {
     USER_CHECK(backend >= 0 && backend <= int(BackendId::Corex) && device >= 0)
         << "tensor placement requires a registered backend id and a non-negative device index";
     device = backend == 0 ? 0 : device;
-    PyObject* value = nullptr;
-    if (placement_context_set) {
-        if (PyContextVar_Get(placement_variable(), nullptr, &value) < 0)
-            throw std::runtime_error("cannot read tensor placement context");
-        // Nested modules usually keep their caller's device. Reuse that
-        // immutable value, but always create a real reset token: the body
-        // may change placement, and leaving this scope must still restore it.
-        if (value && !(PyTuple_CheckExact(value) && PyTuple_GET_SIZE(value) == 2
-                && PyLong_CheckExact(PyTuple_GET_ITEM(value, 0))
-                && PyLong_CheckExact(PyTuple_GET_ITEM(value, 1))
-                && PyLong_AsLong(PyTuple_GET_ITEM(value, 0)) == backend
-                && PyLong_AsLong(PyTuple_GET_ITEM(value, 1)) == device)) {
-            Py_CLEAR(value);
-        }
+    PyObjHolder temporary;
+    // The common device-zero scopes can use the same immutable tuple across
+    // calls and contexts. Each setter still gets its own reset token.
+    PyObject*& value = device == 0 ? device_zero_placements[backend] : temporary.obj;
+    if (!value) {
+        value = Py_BuildValue("(ii)", backend, device);
+        if (!value) throw std::runtime_error("cannot create tensor placement value");
     }
-    if (!value) value = Py_BuildValue("(ii)", backend, device);
-    if (!value) throw std::runtime_error("cannot create tensor placement value");
     placement_context_set = true;
     PyObject* token = PyContextVar_Set(placement_variable(), value);
-    Py_DECREF(value);
     if (!token) throw std::runtime_error("cannot set tensor placement context");
     return token;
 }
@@ -157,6 +148,45 @@ PyObject* set_tensor_placement_context(int backend, int device) {
 void reset_tensor_placement_context(PyObject* token) {
     if (PyContextVar_Reset(placement_variable(), token) < 0)
         throw std::runtime_error("cannot reset tensor placement context");
+}
+
+namespace {
+void restore_context_value(PyObject* variable, PyObject* saved) {
+    PyObjHolder current;
+    if (PyContextVar_Get(variable, nullptr, &current.obj) < 0)
+        throw std::runtime_error("cannot read the module's tensor context");
+    if (current.obj == saved) return;
+    PyObjHolder token(PyContextVar_Set(variable, saved));
+    if (!token.obj) throw std::runtime_error("cannot restore the module's tensor context");
+}
+} // namespace
+
+PyObject* enter_module_tensor_type(PyObject* type) {
+    PyObjHolder current;
+    current.obj = selected_type();
+    if (current.obj == type) return current.release();
+    return set_tensor_frontend_type(type);
+}
+
+void leave_module_tensor_type(PyObject* saved) {
+    if (PyType_Check(saved)) restore_context_value(context_variable(), saved);
+    else reset_tensor_frontend_type(saved);
+}
+
+PyObject* enter_module_tensor_placement(int backend, int device) {
+    if (device == 0 && placement_context_set && backend >= 0 && backend <= int(BackendId::Corex)
+            && device_zero_placements[backend]) {
+        PyObjHolder current;
+        if (PyContextVar_Get(placement_variable(), nullptr, &current.obj) < 0)
+            throw std::runtime_error("cannot read tensor placement context");
+        if (current.obj == device_zero_placements[backend]) return current.release();
+    }
+    return set_tensor_placement_context(backend, device);
+}
+
+void leave_module_tensor_placement(PyObject* saved) {
+    if (PyTuple_CheckExact(saved)) restore_context_value(placement_variable(), saved);
+    else reset_tensor_placement_context(saved);
 }
 
 PyObject* set_construction_placement(int backend, int device) {
@@ -207,6 +237,74 @@ void reset_float32_precision_context(PyObject* token) {
     USER_CHECK(matmul >= -1 && matmul <= 2 && cudnn >= -1 && cudnn <= 2)
         << "invalid previous precision tiers";
     set_float32_precision_policy({matmul, cudnn});
+}
+
+PyObject* enter_tensor_frontend_scope(PyObject* type, PyObject* resolve_placement,
+                                      PyObject* args, bool stop, bool preserve) {
+    struct Setup {
+        PyObjHolder type, placement;
+        Float32PrecisionPolicy precision{};
+        bool precision_set = false;
+        int policy = -1;
+        bool committed = false;
+        ~Setup() {
+            if (committed) return;
+            PyObject *error_type, *error_value, *error_tb;
+            PyErr_Fetch(&error_type, &error_value, &error_tb);
+            if (policy >= 0) set_autograd_policy(policy & 1, policy & 2);
+            if (precision_set) set_float32_precision_policy(precision);
+            if (placement.obj) PyContextVar_Reset(placement_variable(), placement.obj);
+            if (type.obj) PyContextVar_Reset(context_variable(), type.obj);
+            PyErr_Restore(error_type, error_value, error_tb);
+        }
+    } setup;
+    setup.type.obj = set_tensor_frontend_type(type);
+    PyObjHolder tiers;
+    {
+        GraphLockSuspend python_call;
+        tiers.obj = PyObject_CallMethod(type, "_frontend_precision_policy", nullptr);
+    }
+    if (!tiers.obj) return nullptr;
+    int matmul, cudnn;
+    if (!PyArg_ParseTuple(tiers.obj, "ii", &matmul, &cudnn)) return nullptr;
+    USER_CHECK(matmul >= 0 && matmul <= 2 && cudnn >= 0 && cudnn <= 2)
+        << "frontend precision tiers must be in [0, 2]";
+    setup.precision = current_float32_precision_policy();
+    set_float32_precision_policy({matmul, cudnn});
+    setup.precision_set = true;
+
+    PyObjHolder placement;
+    {
+        GraphLockSuspend python_call;
+        placement.obj = PyObject_CallObject(resolve_placement, args);
+    }
+    if (!placement.obj) return nullptr;
+    if (placement.obj != Py_None) {
+        int backend, device;
+        if (!PyArg_ParseTuple(placement.obj, "ii", &backend, &device)) return nullptr;
+        setup.placement.obj = set_tensor_placement_context(backend, device);
+    }
+    setup.policy = get_autograd_policy();
+    set_autograd_policy(stop, preserve);
+    PyObject* token = Py_BuildValue("(OOiii)", setup.type.obj,
+        setup.placement.obj ? setup.placement.obj : Py_None,
+        setup.precision.matmul, setup.precision.cudnn, setup.policy);
+    setup.committed = token != nullptr;
+    return token;
+}
+
+void leave_tensor_frontend_scope(PyObject* token) {
+    PyObject *type, *placement;
+    int matmul, cudnn, policy;
+    if (!PyArg_ParseTuple(token, "OOiii", &type, &placement, &matmul, &cudnn, &policy))
+        throw std::runtime_error("invalid tensor frontend scope");
+    USER_CHECK(matmul >= -1 && matmul <= 2 && cudnn >= -1 && cudnn <= 2
+               && policy >= 0 && policy <= 3)
+        << "invalid saved tensor frontend policy";
+    set_autograd_policy(policy & 1, policy & 2);
+    set_float32_precision_policy({matmul, cudnn});
+    if (placement != Py_None) reset_tensor_placement_context(placement);
+    reset_tensor_frontend_type(type);
 }
 
 namespace {

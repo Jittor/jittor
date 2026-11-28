@@ -76,7 +76,6 @@ def _sdpa_flash_float32_cast_target():
 def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
                                             dropout_p, is_causal, sf,
                                             enable_gqa=False, *, allow_math_fallback=True):
-    _sdpa_flash_backend_cache = get_install_context(jt).state["sdpa_backend_cache"]
     acl_attention = _backend_hooks.acl_scaled_dot_product_attention
     # The hook answers with whatever kernel the backend registered. On CUDA
     # that is the native flash kernel, which loads the same flash library the
@@ -178,9 +177,9 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     q_dtype, k_dtype, v_dtype = _jittor_dtype_name(query.dtype), _jittor_dtype_name(key.dtype), _jittor_dtype_name(value.dtype)
     original_dtype = q_dtype
     cast_back = False
-    if not (q_dtype == k_dtype == v_dtype and _jittor_dtype_name(q_dtype) in ("float16", "bfloat16")):
+    if not (q_dtype == k_dtype == v_dtype and q_dtype in ("float16", "bfloat16")):
         cast_target = _sdpa_flash_float32_cast_target()
-        if cast_target is None or not (_jittor_dtype_name(q_dtype) == _jittor_dtype_name(k_dtype) == _jittor_dtype_name(v_dtype) == "float32"):
+        if cast_target is None or not (q_dtype == k_dtype == v_dtype == "float32"):
             _sdpa_flash_miss("dtype")
             return None
         query = query.to(cast_target)
@@ -218,8 +217,8 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
     token_fn = getattr(_fa_jittor, "backend_cache_token", None)
     backend_token = (token_fn() if static_cache and callable(token_fn)
                      else None)
-    cached = (_sdpa_flash_backend_cache.get(cache_key)
-              if static_cache and backend_token is not None else None)
+    backend_cache = get_install_context(jt).state["sdpa_backend_cache"] if static_cache else None
+    cached = backend_cache.get(cache_key) if backend_token is not None else None
     if cached is not None and cached[0] == backend_token:
         backend, capability_miss = cached[1], None
     else:
@@ -234,7 +233,7 @@ def _try_flash_scaled_dot_product_attention(query, key, value, attn_mask,
         if (static_cache and backend_token is not None
                 and publication_token == backend_token
                 and backend is not None and capability_miss is None):
-            _sdpa_flash_backend_cache[cache_key] = (
+            backend_cache[cache_key] = (
                 backend_token,
                 backend,
             )
@@ -443,7 +442,8 @@ def scaled_dot_product_attention(query, key, value, attn_mask=None,
         if route is not None:
             miss, kernel = route
             out = kernel(query, key, value, attn_mask=attn_mask, dropout_p=0.0,
-                         is_causal=is_causal, scale=scale, **precision_options)
+                         is_causal=is_causal, scale=scale, enable_gqa=enable_gqa,
+                         **precision_options)
             if out is not None:
                 _sdpa_flash_miss(miss)
                 return out

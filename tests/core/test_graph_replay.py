@@ -895,3 +895,164 @@ def test_cpu_dynamic_ternary_condition_survives_replay_input_writes():
             assert replay.stats["replayed"] == len(feed)
         finally:
             replay.invalidate()
+
+
+def test_graph_replay_specializes_4d_shapes_only_during_capture():
+    observed = []
+
+    class Probe(nn.Module):
+        def execute(self, value):
+            observed.append(int(jt.flags.auto_compile_shapes_rank))
+            return value * 2 + 1
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0, auto_compile_shapes_rank=8), jt.no_grad():
+        x = jt.array(np.ones((2, 2), dtype="float32"))
+        replay = GraphReplay(Probe())
+        try:
+            out = replay(x)
+            np.testing.assert_array_equal(out.numpy(), np.full((2, 2), 3., dtype="float32"))
+            assert observed == [8, 4]
+            assert int(jt.flags.auto_compile_shapes_rank) == 8
+        finally:
+            replay.invalidate()
+
+    observed.clear()
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0, auto_compile_shapes_rank=0), jt.no_grad():
+        x = jt.array(np.ones((2, 2), dtype="float32"))
+        replay = GraphReplay(Probe())
+        try:
+            out = replay(x)
+            np.testing.assert_array_equal(out.numpy(), np.full((2, 2), 3., dtype="float32"))
+            assert observed == [0, 0]
+            assert int(jt.flags.auto_compile_shapes_rank) == 0
+        finally:
+            replay.invalidate()
+
+
+def test_graph_replay_folds_constant_parameter_and_mask_subgraphs():
+    class MaskedBias(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.table = jt.array(np.arange(16, dtype="float32").reshape(4, 4))
+            self.register_buffer("idx", jt.array(np.array([0, 2, 1, 3], dtype="int32")))
+
+        def execute(self, x):
+            bias = self.table[self.idx].transpose(1, 0).contiguous()
+            mask = jt.zeros((4, 4), dtype="float32")
+            mask[2:, :2] = -10.0
+            return x + bias + mask
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0), jt.no_grad():
+        model = MaskedBias()
+        x1 = jt.array(np.ones((4, 4), dtype="float32"))
+        x2 = jt.array(np.full((4, 4), 2.0, dtype="float32"))
+        expected1 = model(x1).numpy()
+        expected2 = model(x2).numpy()
+        replay = GraphReplay(model)
+        try:
+            np.testing.assert_allclose(replay(x1).numpy(), expected1, rtol=1e-5, atol=1e-5)
+            # Both constant branches (indexed/transposed bias and setitem mask)
+            # must be folded into finished leaves so replay skips them.
+            out = replay._capture.outputs[0]
+            assert not out.is_finished
+            # Output is (x + bias) + mask; mask (rhs of outer add) and bias (rhs of inner add)
+            # must both be finished constant leaves.
+            assert out._input(1).is_finished
+            assert out._input(0)._input(1).is_finished
+            # In-place mutation of a guarded parameter must invalidate the folded graph.
+            before_captures = replay.stats["captured"]
+            model.table._write_inplace(np.full((4, 4), 5.0, dtype="float32"))
+            expected3 = model(x2).numpy()
+            np.testing.assert_allclose(replay(x2).numpy(), expected3, rtol=1e-5, atol=1e-5)
+            assert replay.stats["captured"] > before_captures
+        finally:
+            replay.invalidate()
+
+
+def test_graph_replay_does_not_fold_unguarded_external_tensor():
+    external = jt.array(np.full((4, 4), 3.0, dtype="float32"))
+    external.sync(True, False)
+
+    class UsesExternal(nn.Module):
+        def execute(self, x):
+            return x + (external * 2.0)
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0), jt.no_grad():
+        model = UsesExternal()
+        x = jt.array(np.ones((4, 4), dtype="float32"))
+        replay = GraphReplay(model)
+        try:
+            np.testing.assert_allclose(replay(x).numpy(), np.full((4, 4), 7.0, dtype="float32"))
+            external._write_inplace(np.full((4, 4), 10.0, dtype="float32"))
+            np.testing.assert_allclose(replay(x).numpy(), np.full((4, 4), 21.0, dtype="float32"))
+        finally:
+            replay.invalidate()
+
+
+def test_step_capture_folds_stateless_inference_constants_and_guards_mutation():
+    from jittor._runtime.step_capture import StepCapture
+
+    table = jt.array(np.arange(16, dtype="float32").reshape(4, 4))
+    idx = jt.array(np.array([0, 2, 1, 3], dtype="int32"))
+    jt.sync([table, idx], True, False)
+
+    def forward(x):
+        bias = table[idx].transpose(1, 0).contiguous()
+        mask = jt.zeros((4, 4), dtype="float32")
+        mask[2:, :2] = -10.0
+        return x + bias + mask
+
+    with jt.flag_scope(use_cuda=0, use_acl=0, auto_graph_replay=0), jt.no_grad():
+        x1 = jt.array(np.ones((4, 4), dtype="float32"))
+        x2 = jt.array(np.full((4, 4), 2.0, dtype="float32"))
+        want1 = forward(x1).numpy()
+        want2 = forward(x2).numpy()
+        step = StepCapture(forward, record=False)
+        try:
+            # First call is eager warmup, second captures and folds constants.
+            np.testing.assert_allclose(step(x1).numpy(), want1, rtol=1e-5, atol=1e-5)
+            np.testing.assert_allclose(step(x2).numpy(), want2, rtol=1e-5, atol=1e-5)
+            assert step.stats["captured"] == 1
+            out = step._capture.outputs[0]
+            assert not out.is_finished
+            assert out._input(1).is_finished
+            assert out._input(0)._input(1).is_finished
+            # In-place mutation of a folded leaf invalidates the capture.
+            table._write_inplace(np.full((4, 4), 5.0, dtype="float32"))
+            want3 = forward(x2).numpy()
+            np.testing.assert_allclose(step(x2).numpy(), want3, rtol=1e-5, atol=1e-5)
+            assert step.stats["captured"] == 2
+        finally:
+            step.invalidate()
+
+
+def test_step_capture_checks_versions_only_for_folded_dependencies():
+    from jittor._runtime.step_capture import StepCapture
+
+    devices = [0]
+    if _test_capability.check_accelerator("cuda", backend=jt).enabled:
+        devices.append(1)
+    for use_cuda in devices:
+        with jt.flag_scope(use_cuda=use_cuda, use_acl=0, auto_graph_replay=0,
+                           backend_fallback="error"), jt.no_grad():
+            table = jt.full((4, 4), 2.0)
+            live = jt.full((4, 4), 3.0)
+            x = jt.full((4, 4), 1.0)
+            jt.sync([table, live, x], bool(use_cuda), False)
+
+            def forward(value):
+                return (value + table * table) * live
+
+            step = StepCapture(forward, record=bool(use_cuda))
+            try:
+                for _ in range(6):
+                    np.testing.assert_array_equal(step(x).numpy(), np.full((4, 4), 15.0))
+                assert {value.var_ptr for value, _, _ in step._capture.folded_leaves} == {table.var_ptr}
+                live._write_inplace(np.full((4, 4), 5.0, dtype="float32"))
+                np.testing.assert_array_equal(step(x).numpy(), np.full((4, 4), 25.0))
+                assert step.stats["captured"] == 1
+                table._write_inplace(np.full((4, 4), 4.0, dtype="float32"))
+                np.testing.assert_array_equal(step(x).numpy(), np.full((4, 4), 85.0))
+                assert step.stats["captured"] == 2
+            finally:
+                step.invalidate()

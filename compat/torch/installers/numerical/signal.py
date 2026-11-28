@@ -76,3 +76,15 @@ def stft(input, n_fft, hop_length=None, win_length=None, window=None,
         normalized=normalized, onesided=True if onesided is None else onesided,
         return_complex=return_complex,
     )
+
+
+def istft(input, n_fft, hop_length=None, win_length=None, window=None,
+          center=True, normalized=False, onesided=None, length=None,
+          return_complex=False):
+    """Adapt Torch's ISTFT protocol to the shared native signal operation."""
+    from jittor.fft import istft as native_istft
+    return native_istft(
+        input, n_fft, hop_length=hop_length, win_length=win_length,
+        window=window, center=center, normalized=normalized,
+        onesided=onesided, length=length, return_complex=return_complex,
+    )

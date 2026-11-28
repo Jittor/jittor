@@ -11,6 +11,22 @@ def _require_cuda():
     require_accelerator("cuda")
 
 
+def test_storage_only_views_do_not_record_compute_launches():
+    _require_cuda()
+    import jittor as jt
+
+    with jt.flag_scope(auto_flush_ops=0):
+        source = jt.arange(12).float32()
+        source.sync()
+        assert source.location() == "device"
+        before = jt.core.async_launch_history("cuda", source.device_id)
+        view = source.reshape(3, 4)
+        view.sync()
+        assert view.location() == "device"
+        assert jt.core.async_launch_history("cuda", source.device_id) == before
+        assert view.numpy().tolist() == [list(range(i, i + 4)) for i in range(0, 12, 4)]
+
+
 def test_launch_history_survives_graph_release():
     _require_cuda()
     result = run_child_script(textwrap.dedent('''
@@ -31,6 +47,27 @@ def test_launch_history_survives_graph_release():
     assert result.returncode == 0, result.stdout + result.stderr
     assert "NORMAL-RELEASE-PASS" in result.stdout
     assert "CUDA error at" not in result.stderr
+
+
+def test_warm_internal_frame_points_to_each_call_site():
+    _require_cuda()
+    import sys
+    import jittor as jt
+
+    helper = {"__name__": "jittor._launch_history_test", "jt": jt}
+    exec("def run(x): return x + jt.ones(x.shape)", helper)
+    with jt.flag_scope(use_cuda=1, auto_flush_ops=0):
+        x = jt.zeros(4)
+        for _ in range(2):
+            first_line = sys._getframe().f_lineno + 1
+            first = helper["run"](x)
+            first.sync()
+            second_line = sys._getframe().f_lineno + 1
+            second = helper["run"](first)
+            assert second.numpy().tolist() == [2.0] * 4
+            history = jt.core.async_launch_history("cuda", x.device_id)
+            assert f"{__file__}:{first_line}" in history, history
+            assert f"{__file__}:{second_line}" in history, history
 
 
 @pytest.mark.parametrize("access", ["getitem", "setitem"])

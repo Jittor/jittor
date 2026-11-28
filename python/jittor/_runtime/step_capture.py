@@ -32,7 +32,7 @@ step is captured:
 
 What cannot be seen is refused rather than replayed wrongly: a step that reads
 a value back to the host (its Python path then depends on tensor values), or
-a result that is not Vars in plain containers. Explicit CUDA captures use a
+a result that replay cannot reconstruct. Explicit CUDA captures use a
 live Philox seed/counter for supported random draws, including dropout; draws
 stay fresh but need not match the eager RNG stream. Exact automatic captures
 refuse random draws instead.
@@ -65,7 +65,7 @@ import numpy as np
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
+from .graph_replay import (_auto_inputs, _capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
                            _host_state, _module_vars, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
@@ -131,6 +131,36 @@ def _pool_allocations(pool):
 def active():
     """Whether a step is being captured right now."""
     return _ACTIVE is not None
+
+
+def _guarded_read(read):
+    cap = _ACTIVE
+    if cap is None or cap.scalar_epoch is None:
+        return None
+    result = read(cap.scalar_epoch)
+    if result is None:
+        return None
+    value, guards = result
+    for source, version in guards:
+        cap.scalar_guards.setdefault(id(source), (source, version))
+    cap.used_guarded_scalar = True
+    return value
+
+
+def guarded_scalar(value):
+    """Read a shape scalar from small pure expressions over pre-trace leaves."""
+    return _guarded_read(value._step_guarded_scalar)
+
+
+def guarded_array(value):
+    """Read a small pure tensor as an independent copy for Python list conversion."""
+    return _guarded_read(value._step_guarded_array)
+
+
+def guarded_predicate(value):
+    """Read a pure boolean predicate over constants and pre-trace leaves."""
+    result = _guarded_read(value._step_guarded_predicate)
+    return None if result is None else bool(result)
 
 
 def tracing():
@@ -207,6 +237,14 @@ def publish_gradients(leaves):
         _ACTIVE.published_gradients.extend(leaves)
 
 
+def keep_shape_dependency(indices):
+    # Some dynamic outputs are used only through their Python shape. Their
+    # coordinate producers still need to run during replay preflight, before
+    # optimizer hooks or graph launch, so a changed extent re-enters Python.
+    if _ACTIVE is not None:
+        _ACTIVE.shape_dependencies.append(indices)
+
+
 def guard(read):
     """Re-capture whenever `read()` differs from its value now."""
     if _ACTIVE is not None:
@@ -254,12 +292,13 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
     on_replay(advance)
     first = indices[0]
     live_hyper = bool(getattr(impl, 'accepts_live_hyperparameters', False))
+    dtype = getattr(impl, "live_hyperparameter_dtype", "float32")
     if live_hyper:
         def refresh():
             betas, decay, epsilon = frozen()
             return [float(steps[first]), float(read_lr()), 0.,
                     float(betas[0]), float(betas[1]), float(decay), float(epsilon)]
-        hyper = live_array(refresh(), refresh)
+        hyper = live_array(refresh(), refresh, dtype=dtype)
     else:
         guard(frozen)
         hyper = live_array([float(steps[first]), float(read_lr())],
@@ -272,7 +311,7 @@ def live_fused_update(impl, lr, steps, indices, read_lr, frozen, found_inf=None,
         _materialize(skipped)
         owner._amp_skipped_steps = skipped
     found = found_inf.float32().reshape((1,))
-    parts = [hyper[:1] - skipped, hyper[1:2], found]
+    parts = [hyper[:1] - skipped.cast(dtype), hyper[1:2], found.cast(dtype)]
     if live_hyper:
         parts.append(hyper[3:])
     hyper = jt.concat(parts)
@@ -507,7 +546,9 @@ class _Capture:
     __slots__ = ("inputs", "host_inputs", "outputs", "template", "roots", "state",
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
-                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix")
+                 "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
+                 "shape_dependencies", "pending_roots", "folded_leaves", "scalar_epoch", "scalar_guards",
+                 "used_guarded_scalar", "short_attention", "mask_terms", "object_arguments")
 
     def __init__(self):
         self.prologue = []
@@ -520,6 +561,14 @@ class _Capture:
         self.gradient_leaves = []
         self.differentiable_leaves = []
         self.dynamic_prefix = None
+        self.shape_dependencies = []
+        self.folded_leaves = None
+        self.scalar_epoch = None
+        self.scalar_guards = {}
+        self.used_guarded_scalar = False
+        self.short_attention = {}
+        self.mask_terms = {}
+        self.object_arguments = None
 
 
 def _finish_normally(roots):
@@ -631,7 +680,9 @@ class StepCapture:
         self._capture = None
         self._refused = None
         self._seen = None
+        self._linear_groups = ()
         self._recaptures = 0
+        self._cap_replays = 0
         self._cuda_graph = 0
         self._pool = None
         self._graph_out = None
@@ -710,6 +761,15 @@ class StepCapture:
         # Everything that exists now becomes a leaf of the graph: a replay
         # re-runs whatever is still pending, including a leaf's own producer.
         jt.sync_all()
+        from jittor.nn.functional._parallel_linear import PackedLinears, parallel_linear_scope
+
+        grouping = PackedLinears(self._linear_groups, self._max_retained_bytes) if self._linear_groups else None
+        self._linear_groups = ()
+        scalar_epoch = _core._step_scalar_epoch() if jt.flags.no_grad else None
+        objects = []
+        if jt.flags.no_grad:
+            _auto_inputs((args, kwargs), None, objects)
+        host_state = _host_state(objects) if objects else None
 
         def private_copy(value):
             copy = _empty_like(value)
@@ -719,6 +779,7 @@ class StepCapture:
         private_args, private_kwargs = _map_inputs((args, kwargs), private_copy)
 
         cap = _Capture()
+        cap.scalar_epoch = scalar_epoch
         cap.exact = self._exact_random
         working = _WorkingSet()
         before = jt.flags.keep_graph
@@ -728,16 +789,25 @@ class StepCapture:
         # a partial capture can make the final sync repeat state updates.
         flush_before = jt.flags.auto_flush_ops
         async_flush_before = jt.flags.async_flush_ops
+        rank_before = jt.flags.auto_compile_shapes_rank
         _ACTIVE = cap
         _core._state_capture_begin()
         jt.flags.keep_graph = 2
         jt.flags.auto_flush_ops = 0
         jt.flags.async_flush_ops = 0
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         records = []
+        outputs = []
+        template = None
         readbacks = _core._host_readback_count()
         try:
-            with _capture_barriers() as barriers, _no_auto():
+            with _capture_barriers() as barriers, _no_auto(), parallel_linear_scope(grouping):
                 result = self._fn(*private_args, **private_kwargs)
+                try:
+                    template = _output_template(result, outputs, {}, _object_ids((args, kwargs)))
+                except _Unreplayable as exc:
+                    cap.refused = cap.refused or str(exc)
                 if barriers:
                     cap.refused = cap.refused or (
                         "the step contains an opaque operation: " + barriers[0])
@@ -745,21 +815,21 @@ class StepCapture:
             try:
                 records = _core._state_capture_end()
             finally:
+                jt.flags.auto_compile_shapes_rank = rank_before
                 jt.flags.async_flush_ops = async_flush_before
                 jt.flags.auto_flush_ops = flush_before
                 jt.flags.keep_graph = before
                 _ACTIVE = None
+                cap.short_attention.clear()
+                cap.mask_terms.clear()
         if _core._host_readback_count() != readbacks:
             cap.refused = cap.refused or (
                 "the step read a value back to the host, so its path depends on "
                 "tensor values and cannot be replayed")
+        object_tensors = []
+        if objects and (host_state is None or _host_state(objects, object_tensors) != host_state):
+            cap.refused = cap.refused or "the step changed or could not inspect Python argument state"
 
-        outputs = []
-        try:
-            template = _output_template(result, outputs, {}, _object_ids((args, kwargs)))
-        except _Unreplayable as exc:
-            template = None
-            cap.refused = cap.refused or str(exc)
         # Dense inside the graph, since every replay copies these as raw bytes
         # (see `_dense`).
         outputs[:] = [_dense(o) for o in outputs]
@@ -776,12 +846,19 @@ class StepCapture:
         gradient_sources = [(holder, _core._snapshot_step_gradient(holder))
                             for holder in published.values()]
         roots = _unique([source for _, source in gradient_sources]
-                        + outputs + [new for _, _, new in records])
+                        + outputs + [new for _, _, new in records] + cap.shape_dependencies)
+        ready_roots = {id(root) for root in roots if root.is_finished}
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --
         # running it kept, then putting the state back and running it again --
         # took a step twice wherever an update writes storage the capture
         # cannot see: the fused SGD writes its velocities into its own inputs.
+        packed_leaves = grouping.guarded_leaves() if grouping is not None else []
+        if packed_leaves:
+            written = {old.var_ptr for _, old, _ in records}
+            if any(ptr in written or tensor.var_ptr != ptr or tensor._saved_storage_version() != version
+                   for tensor, ptr, version in packed_leaves):
+                cap.refused = cap.refused or "the step writes a packed projection parameter"
         if cap.refused is None and not roots:
             cap.refused = "the step computes nothing"
         # A host-generator draw left in the graph re-runs, and so draws again,
@@ -790,6 +867,11 @@ class StepCapture:
         if cap.frozen_random and cap.exact and cap.refused is None:
             cap.refused = ("the call draws random numbers, which a replay would draw "
                            "again on every run")
+        if cap.used_guarded_scalar and cap.refused is None:
+            if (records or gradient_sources or cap.prologue or cap.frozen_random
+                    or any(source._step_guarded_storage_version() != version
+                           for source, version in cap.scalar_guards.values())):
+                cap.refused = "the step baked a scalar while updating captured state"
         if cap.refused is None:
             prefix = _core._step_shape_prefix_create(roots)
             if prefix < 0:
@@ -803,14 +885,36 @@ class StepCapture:
             _commit_captured_state(records)
             return None, result
 
+        # Fold pure input-independent constant subgraphs (e.g. static position
+        # biases, shifted-window masks, cuDNN attention mask checks) for
+        # stateless inference captures before materializing the kept graph.
+        private_inputs = _input_vars((private_args, private_kwargs), [])
+        if (bool(jt.flags.no_grad) and not records and not gradient_sources
+                and not cap.prologue and not cap.frozen_random
+                and cap.dynamic_prefix is None):
+            private_ptrs = {v.var_ptr for v in private_inputs}
+            guarded_leaves = [v for v in _core._step_leaf_holders(roots)
+                              if v.var_ptr not in private_ptrs]
+            folded_ids = set(_core._fold_graph_constants(roots, private_inputs, guarded_leaves))
+            if folded_ids:
+                cap.folded_leaves = [
+                    (v, v.var_ptr, v._saved_storage_version())
+                    for v in guarded_leaves if int(v.id) in folded_ids
+                ]
+
+        if packed_leaves:
+            cap.folded_leaves = (cap.folded_leaves or []) + packed_leaves
         # Finish pending outputs without repeating already executed updates.
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         try:
             # A fresh detach/clone or post-update readout can still be pending
             # even when the optimizer already ran. Resolve only new work,
             # using successfully executed kept values as temporary boundaries.
             _core._materialize_step_readouts(roots, bool(gradient_sources))
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
 
         # Point every rebound holder back at its old Var, which the graph
@@ -826,14 +930,22 @@ class StepCapture:
         # replayed against a new batch returned the loss of the batch it was
         # captured on, and its update used that step's gradients.
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         try:
             state = _commit_captured_state(records)
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         with jt.no_grad():
             state = _write_back_in_graph(state, roots)
 
         recorded_holders = {id(holder) for holder, _, _ in records}
+        if objects:
+            # Keep the objects alive for their identity guard. _adopt checks
+            # tensor holders whose writes belong to the capture.
+            reads = [(v, v.var_ptr) for v in object_tensors if id(v) not in recorded_holders]
+            cap.object_arguments = objects, host_state, reads
         with jt.no_grad():
             for holder, source in gradient_sources:
                 if id(holder) not in recorded_holders:
@@ -854,6 +966,9 @@ class StepCapture:
         cap.outputs = outputs
         cap.template = template
         cap.roots = roots
+        # Keep already materialized outputs as graph leaves for address checks
+        # and readout copies. Only a root with captured work can lose that work.
+        cap.pending_roots = [root for root in roots if id(root) not in ready_roots]
         cap.state = state
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
@@ -905,12 +1020,23 @@ class StepCapture:
 
     # -- guards --------------------------------------------------------
     def _stale(self, cap, args, kwargs):
-        if _core._first_finished(cap.roots) >= 0:
+        if _core._first_finished(cap.pending_roots) >= 0:
             return "the captured graph was finished, most likely by a read"
         if self._call_signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype, or the gradient mode changed"
+        if cap.object_arguments is not None:
+            objects, host_state, reads = cap.object_arguments
+            if _host_state(objects) != host_state or any(v.var_ptr != ptr for v, ptr in reads):
+                return "Python argument state changed"
         if cap.gradient_leaves and _core._first_changed_step_leaf(*cap.gradient_leaves) >= 0:
             return "a captured leaf was rebound or changed its gradient policy"
+        if cap.folded_leaves:
+            for holder, ptr, ver in cap.folded_leaves:
+                if holder.var_ptr != ptr or holder._saved_storage_version() != ver:
+                    return "a folded constant leaf was replaced or mutated"
+        if any(source._step_guarded_storage_version() != version
+               for source, version in cap.scalar_guards.values()):
+            return "a scalar dependency was replaced or mutated"
         # One native pass over the holders; `_adopt` only for those rebound.
         holders, olds = cap.state_lists
         start = 0
@@ -973,7 +1099,10 @@ class StepCapture:
             jt.flags.keep_graph = before
         outs = [_empty_like(o) for o in cap.outputs]
         before = jt.flags.keep_graph
+        rank_before = jt.flags.auto_compile_shapes_rank
         jt.flags.keep_graph = 2
+        if rank_before > 4:
+            jt.flags.auto_compile_shapes_rank = 4
         handle = 0
         try:
             with _pool_scope(self._pool, allocate=True):
@@ -996,6 +1125,7 @@ class StepCapture:
                 _core.graph_release(handle)
             return
         finally:
+            jt.flags.auto_compile_shapes_rank = rank_before
             jt.flags.keep_graph = before
         if not handle:
             refusal = _core.graph_capture_refusal()
@@ -1084,11 +1214,10 @@ class StepCapture:
                 self.stats["preserved"] = self.stats.get("preserved", 0) + 1
             if not dynamic_prefix:
                 # Dynamic replay has already staged the inputs for preflight.
-                staged = (jt.flags.no_grad and self._cuda_graph
-                          and not self._graph_has_host_prefix and not cap.prologue
-                          and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))
-                if not staged:
-                    with jt.no_grad():
+                with jt.no_grad():
+                    staged = (self._cuda_graph and not self._graph_has_host_prefix
+                              and _core._try_stage_cuda_step_inputs(cap.inputs, given, True))
+                    if not staged:
                         for target, source in zip(cap.inputs, given):
                             target._copy_into(source)
             if self._cuda_graph and not _core.graph_leaves_moved(self._cuda_graph):
@@ -1130,9 +1259,15 @@ class StepCapture:
                 self.invalidate()
                 raise RuntimeError("a replay hook changed the dynamic prefix; "
                                    "the training step was not launched")
-            with _pool_allocations(self._pool):
-                jt.sync(cap.roots, False, False)
-                self._write_back(cap)
+            rank_before = jt.flags.auto_compile_shapes_rank
+            if rank_before > 4:
+                jt.flags.auto_compile_shapes_rank = 4
+            try:
+                with _pool_allocations(self._pool):
+                    jt.sync(cap.roots, False, False)
+                    self._write_back(cap)
+            finally:
+                jt.flags.auto_compile_shapes_rank = rank_before
             return self._results(cap, cap.outputs, (args, kwargs))
         finally:
             jt.flags.keep_graph = before
@@ -1152,13 +1287,17 @@ class StepCapture:
         cap = self._capture
         reason = self._stale(cap, args, kwargs) if cap is not None else None
         if reason is not None:
+            reused = self._cap_replays
             self.last_invalidated = reason
             self.invalidate()
             cap = None
-            self._recaptures += 1
-            if self._recaptures >= _GIVE_UP_AFTER:
-                self._refused = "the step kept changing, so it was re-captured too often"
-                return self._eager(args, kwargs)
+            if reused >= 8:
+                self._recaptures = 0
+            else:
+                self._recaptures += 1
+                if self._recaptures >= _GIVE_UP_AFTER:
+                    self._refused = "the step kept changing, so it was re-captured too often"
+                    return self._eager(args, kwargs)
         if cap is None:
             signature = self._call_signature(args, kwargs)
             if signature != self._seen:
@@ -1166,6 +1305,13 @@ class StepCapture:
                 # whatever the step creates lazily, which must exist -- and
                 # be executed -- before a capture can treat it as a leaf.
                 self._seen = signature
+                if jt.flags.no_grad and jt.flags.use_cuda and self._graph_refused is None:
+                    from jittor.nn.functional._parallel_linear import LinearDiscovery, parallel_linear_scope
+                    discovery = LinearDiscovery(_input_vars((args, kwargs), []))
+                    with parallel_linear_scope(discovery):
+                        result = self._eager(args, kwargs)
+                    self._linear_groups = discovery.groups() if self._refused is None else ()
+                    return result
                 return self._eager(args, kwargs)
             cap, result = self._capture_now(args, kwargs)
             self.stats["captured"] += 1
@@ -1190,6 +1336,7 @@ class StepCapture:
             # cap must be gone: otherwise eager's writes can resolve its now
             # unmarked pending readers, executing the stale update once more.
             return self._eager(args, kwargs)
+        self._cap_replays += 1
         self.stats["replayed"] += 1
         return out
 
@@ -1221,6 +1368,8 @@ class StepCapture:
         self._graph_has_host_prefix = False
         self._graph_has_dynamic_prefix = False
         self._graph_host_prefix_bytes = 0
+        self._cap_replays = 0
+        self._linear_groups = ()
         cap, self._capture = self._capture, None
         if cap is None:
             self._pool = None
@@ -1237,53 +1386,36 @@ class _PolicyStep(StepCapture):
     """A module call the automatic replay policy captures, state included.
 
     See the policy in `graph_replay`. Nobody asked for this capture, so it
-    guards what an explicit one leaves to its caller, and re-captures when
-    any of it changes:
-
-      - the host-side state of the objects the call was given (`_host_state`),
-        which the capture run must also have left as it found it;
-      - which Var every parameter and registered buffer of the module, and
-        every Var those objects hold, is: a load or an assignment outside the
-        call rebinds one, and
-        the graph would go on reading the old one. State the step updates is
-        put back first (`_adopt`), so a cache reset between two `generate`
-        calls is taken over rather than re-captured;
-      - the module's training mode.
+    guards the module's parameters, buffers and training mode in addition
+    to the inference step's argument-state guards.
 
     And it refuses a call that draws random numbers (`exact_random`).
     """
 
-    def __init__(self, module, objects, signature, max_retained_bytes):
+    def __init__(self, module, signature, max_retained_bytes):
         ref = weakref.ref(module)
 
         def call(*args, **kwargs):
             return ref()(*args, **kwargs)
         super().__init__(call, exact_random=True, max_retained_bytes=max_retained_bytes)
         self._module_ref = ref
-        self._objects = objects
         # The policy has run this signature as written already, which is what
         # the first call of a signature is for.
         self._seen = signature
 
     def _capture_now(self, args, kwargs):
-        objects = self._objects
-        before = _host_state(objects)
         cap, result = super()._capture_now(args, kwargs)
         if cap is None:
             return cap, result
-        leaves = []
-        after = _host_state(objects, leaves)
         module = self._module_ref()
-        if after is None or after != before or module is None:
-            # What the capture baked in is out of date already.
-            self._refused = "the call changes the host-side state of what it was given"
+        if module is None:
+            self._refused = "the captured module is no longer alive"
             for root in cap.roots:
                 if not root.is_finished:
                     root._release_kept()
             return None, result
-        leaves.extend(v for v in _module_vars(module) if isinstance(v, jt.Var))
+        leaves = [v for v in _module_vars(module) if isinstance(v, jt.Var)]
         ref = self._module_ref
-        cap.guards.append((lambda: _host_state(objects), after))
         cap.guards.append((lambda: [v.var_ptr for v in leaves], [v.var_ptr for v in leaves]))
         cap.guards.append((lambda: _training(ref()), _training(module)))
         return cap, result

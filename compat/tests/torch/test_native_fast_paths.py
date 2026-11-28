@@ -47,6 +47,15 @@ _CUDA_KERNELS = torch.cuda.is_available() and bool(getattr(jt.compiler, "is_cuda
 
 
 class TestFastCat(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "requires CUDA")
+    def test_cuda_cat_checks_ambient_placement_natively(self):
+        a = torch.arange(3, device="cuda")
+        b = torch.arange(3, 6, device="cuda")
+        with torch.no_grad(), _refusing(jt.core, "_current_tensor_placement"):
+            joined = torch.cat((a, b))
+        self.assertTrue(joined.is_cuda)
+        np.testing.assert_array_equal(joined.cpu().numpy(), np.arange(6))
+
     def test_torch_autocast_cat_preserves_float32_values_and_gradients(self):
         values = np.array([1.00123, -3.14159, 0.12345, -2.71828], dtype=np.float32)
         for device in ("cpu", _cuda()):
@@ -97,6 +106,27 @@ class TestFastCat(unittest.TestCase):
                     self.assertEqual(c.dtype, dtype)
                     np.testing.assert_array_equal(
                         c.numpy(), np.concatenate([a.numpy(), b.numpy()], axis=dim))
+
+    @unittest.skipUnless(_CUDA_KERNELS, "requires CUDA")
+    def test_cuda_dense_pair_appends_to_independent_storage(self):
+        rng = np.random.default_rng(17)
+        lhs = rng.integers(-8, 8, size=(2, 3, 17, 8)).astype(np.float32)
+        rhs = rng.integers(-8, 8, size=(2, 3, 1, 8)).astype(np.float32)
+        for dtype in (torch.float32, torch.bfloat16):
+            with self.subTest(dtype=dtype), torch.no_grad(), jt.flag_scope(auto_flush_ops=0):
+                a = torch.tensor(lhs, dtype=dtype, device="cuda").requires_grad_(True)
+                b = torch.tensor(rhs, dtype=dtype, device="cuda")
+                for _ in range(3):
+                    joined = torch.cat((a, b), dim=-2)
+                    self.assertEqual(joined._producer_name(), "code")
+                    self.assertFalse(joined.requires_grad)
+                    expected = np.concatenate((a.detach().float().cpu().numpy(), rhs), axis=2)
+                    jt.sync([joined], device_sync=True)
+                    self.assertEqual(joined.location(), "device")
+                    np.testing.assert_array_equal(joined.float().cpu().numpy(), expected)
+                    a = joined
+                joined[:, :, -1].fill_(0)
+                np.testing.assert_array_equal(b.float().cpu().numpy(), rhs)
 
     def test_the_cases_it_hands_back(self):
         a = torch.ones(2, 3, dtype=torch.uint8)
@@ -317,6 +347,18 @@ class TestFastCatRegisteredBackend(unittest.TestCase):
 
 
 class TestFastGetitem(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "requires the CUDA indexing fast path")
+    def test_basic_index_bypasses_sequence_normalization(self):
+        from jittor.compat.torch.installers.tensor import method_api
+
+        x = torch.arange(12, device="cuda").view(3, 4)
+        with _refusing(method_api, "_normalize_index_sequence"):
+            result = x[..., 1:3]
+        self.assertTrue(result.is_cuda)
+        np.testing.assert_array_equal(result.cpu().numpy(), np.arange(12).reshape(3, 4)[:, 1:3])
+        with self.assertRaisesRegex(IndexError, "too many indices for tensor of dimension 2"):
+            x[0, :, :]
+
     def test_basic_indices(self):
         a = torch.randn(4, 5, 6, device=_cuda())
         n = a.numpy()
@@ -726,7 +768,10 @@ class TestFastViews(unittest.TestCase):
         # transposes above; anything else is `jittor.transpose`'s to report.
         a = torch.randn(2, 3, 4, 5, device=_cuda())
         n = a.numpy()
-        heads = a.permute(0, 2, 1, 3)
+        from jittor._core import var
+
+        with _refusing(var, "_transpose_permutation"):
+            heads = a.permute(0, 2, 1, 3)
         np.testing.assert_array_equal(heads.numpy(), n.transpose(0, 2, 1, 3))
         np.testing.assert_array_equal(a.permute((3, 0, 2, 1)).numpy(), n.transpose(3, 0, 2, 1))
         np.testing.assert_array_equal(a.permute([1, 0, 3, 2]).numpy(), n.transpose(1, 0, 3, 2))
@@ -825,6 +870,21 @@ class TestRegisteredRmsInference(unittest.TestCase):
     def _reference(self):
         return self.values / np.sqrt((self.values ** 2).mean(-1, keepdims=True)
                                      + self.norm.variance_epsilon)
+
+    def test_attribute_override_can_decline_a_registered_provider(self):
+        class UnweightedRMSNorm(_ToyRMSNorm):
+            def __getattr__(self, name):
+                if name == "pass_weight":
+                    return False
+                return super().__getattr__(name)
+
+        def unexpected(*args):
+            raise AssertionError("the module's attribute override declined this provider")
+
+        outer = torch.nn.Sequential(UnweightedRMSNorm(8).cpu().eval()).eval()
+        with torch.no_grad(), self.dispatch.override_kernel("nn.rms_norm.inference", "cpu", unexpected):
+            outer(self.x).sync()
+            np.testing.assert_allclose(outer(self.x).numpy(), self._reference(), rtol=1e-6, atol=1e-6)
 
     def test_registered_provider_runs_once_and_reads_current_weight_and_epsilon(self):
         seen = []
@@ -966,6 +1026,24 @@ class TestRegisteredRmsInference(unittest.TestCase):
 
 
 class TestNativeModuleDispatch(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "the prepared inference source needs CUDA")
+    def test_layer_norm_reuses_source_with_live_parameters(self):
+        values = np.linspace(-3, 5, 4 * 64, dtype=np.float32).reshape(4, 64)
+        centered = values - values.mean(axis=-1, keepdims=True)
+        layer = torch.nn.LayerNorm(64).cuda().eval()
+        function = torch.nn.Sequential(layer).eval()
+        x = torch.tensor(values, device="cuda")
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error", auto_graph_replay=0):
+            function(x).sync()
+            for epsilon, bias in ((0.25, 3.0), (0.03125, -2.0)):
+                layer.eps = epsilon
+                layer.bias.fill_(bias)
+                out = function(x)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                expected = centered / np.sqrt((centered ** 2).mean(axis=-1, keepdims=True) + epsilon)
+                np.testing.assert_allclose(out.cpu().numpy(), expected + bias, rtol=2e-5, atol=2e-6)
+
     """What `_dispatch_module_call` does, taken natively inside a module."""
 
     def test_a_bias_free_linear(self):
@@ -1191,6 +1269,24 @@ class TestNativeModuleDispatch(unittest.TestCase):
         with torch.no_grad(), self.assertRaises(Exception):
             torch.nn.Sequential(torch.nn.LayerNorm(16).cuda())(torch.randn(3, 8, device="cuda"))
 
+    @unittest.skipUnless(_CUDA_KERNELS, "the native LayerNorm build is CUDA's")
+    def test_bias_free_layer_norm_at_inference(self):
+        from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _layer_norm_no_grad_cuda
+        from jittor.nn.functional import normalization
+
+        for rows in (4, 1024):
+            with self.subTest(rows=rows), torch.no_grad():
+                norm = torch.nn.LayerNorm(32, bias=False).cuda()
+                norm.weight.fill_(0.75)
+                outer = torch.nn.Sequential(norm)
+                x = torch.arange(rows * 32, device="cuda", dtype=torch.float32).view(rows, 32)
+                outer(x)
+                expected = _layer_norm_no_grad_cuda(x, (32,), norm.weight, 0.0, norm.eps)
+                with _refusing(normalization, "_layer_norm_no_grad_cuda"):
+                    actual = outer(x)
+                self.assertTrue(actual.is_cuda)
+                np.testing.assert_array_equal(actual.cpu().numpy(), expected.cpu().numpy())
+
 
 class TestNativeGelu(unittest.TestCase):
     def test_the_native_build_matches_the_python_one(self):
@@ -1286,7 +1382,7 @@ class TestNativeGelu(unittest.TestCase):
                 "CUDA BF16 GELU formula %s rel_l2=%g"
                 % (name, relative_l2))
 
-        x32 = jt.array(x_np)
+        x32 = jt.array(x_np).stop_grad()
         self.assertIsNone(select_kernel(
             "nn.gelu.training", x32, approximate="none"))
 
@@ -1335,6 +1431,43 @@ class TestNativeGelu(unittest.TestCase):
                 np.testing.assert_array_equal(got.float().numpy(), want.float().numpy())
         finally:
             jt.flags.auto_graph_replay = flags
+
+
+class TestFastSilu(unittest.TestCase):
+    def test_narrow_inference_matches_the_widened_expression(self):
+        from jittor.nn.functional import activation
+
+        values = np.linspace(-12.0, 12.0, 51, dtype=np.float32).reshape(3, 17)
+        for device in ("cpu", _cuda()) if _CUDA_KERNELS else ("cpu",):
+            for dtype in (torch.float16, torch.bfloat16):
+                with self.subTest(device=device, dtype=dtype), torch.no_grad():
+                    x = torch.tensor(values, device=device, dtype=dtype).transpose(0, 1)
+                    got = activation.silu(x)
+                    wide = x.float()
+                    want = (wide * wide.sigmoid()).to(dtype)
+                    self.assertEqual(got.device.type, device)
+                    self.assertEqual(got.dtype, dtype)
+                    np.testing.assert_array_equal(got.float().cpu().numpy(), want.float().cpu().numpy())
+
+
+class TestDeferredSliceStore(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "requires CUDA")
+    def test_slice_store_keeps_a_pending_clone_lazy(self):
+        with torch.no_grad(), jt.flag_scope(auto_flush_ops=0, async_flush_ops=0):
+            source = torch.arange(24, device="cuda", dtype=torch.float32).reshape(2, 12)
+            source.sync()
+            updated = source.clone()
+            version = updated._version
+            batches = jt.flags.exec_called
+            updated[:, :4] = -1.0
+            self.assertEqual(jt.flags.exec_called, batches)
+            updated[:, 8:] = -2.0
+            self.assertEqual(updated._version, version + 2)
+            expected = np.arange(24, dtype=np.float32).reshape(2, 12)
+            np.testing.assert_array_equal(source.cpu().numpy(), expected)
+            expected[:, :4] = -1
+            expected[:, 8:] = -2
+            np.testing.assert_array_equal(updated.cpu().numpy(), expected)
 
 
 class TestSdpaRoutes(unittest.TestCase):
@@ -1424,6 +1557,77 @@ class TestSdpaRoutes(unittest.TestCase):
 
 
 class TestNativeRules(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "masked row softmax needs CUDA")
+    def test_softmax_reads_scale_mask_and_bias_from_pending_scores(self):
+        rng = np.random.default_rng(87)
+        raw = rng.standard_normal((2, 3, 2, 271)).astype(np.float32)
+        mask = rng.random((2, 1, 2, 271)) > .75
+        mask[0, :, 0] = True
+        bias = rng.standard_normal((1, 1, 1, 271)).astype(np.float32)
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error", auto_flush_ops=0,
+                                             async_flush_ops=0):
+            x, hide, add = (torch.tensor(data, device="cuda") for data in (raw, mask, bias))
+            scores = (x * .125).masked_fill(hide, torch.finfo(torch.float32).min) + add
+            out = torch.nn.functional.softmax(scores, dim=-1)
+            self.assertEqual(len(out._inputs()), 3)
+            scores.sync()
+            reference = torch.nn.functional.softmax(scores, dim=-1)
+            out.sync()
+            self.assertEqual(out.location(), "device")
+            np.testing.assert_allclose(out.cpu().numpy(), reference.cpu().numpy(),
+                                       rtol=2e-5, atol=2e-7)
+
+    @unittest.skipUnless(_CUDA_KERNELS, "cuBLAS requires CUDA")
+    def test_frontend_batched_matmul_honors_live_provider_override(self):
+        from jittor._runtime.dispatch import override_kernel
+
+        a = torch.ones((2, 3, 4), device="cuda")
+        b = torch.ones((2, 5, 4), device="cuda").transpose(-1, -2)
+        overridden = torch.zeros((2, 3, 5), device="cuda")
+        calls = []
+
+        def provider(left, right, trans_a, trans_b):
+            calls.append((trans_a, trans_b))
+            return overridden
+
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            regular = torch.matmul(a, b)
+            regular.sync()
+            self.assertEqual(regular.location(), "device")
+            np.testing.assert_array_equal(regular.cpu().numpy(), np.full((2, 3, 5), 4.))
+            with override_kernel("batched_matmul", "cuda", provider):
+                self.assertIs(torch.matmul(a, b), overridden)
+            self.assertEqual(calls, [(False, True)])
+
+    @unittest.skipUnless(_CUDA_KERNELS, "the batched cuBLAS relay needs CUDA")
+    def test_batched_matmul_inference_with_transpose_and_broadcast(self):
+        rng = np.random.default_rng(14)
+        a = rng.normal(size=(2, 3, 4)).astype(np.float32)
+        b = rng.normal(size=(2, 5, 4)).astype(np.float32)
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            left = torch.tensor(a, device="cuda")
+            for rhs in (b, b[:1]):
+                right = torch.tensor(rhs, device="cuda").transpose(-1, -2)
+                out = torch.matmul(left, right)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                np.testing.assert_allclose(out.cpu().numpy(), a @ rhs.swapaxes(-1, -2),
+                                           rtol=2e-5, atol=2e-5)
+
+    def test_nested_selector_arguments_beyond_inline_capacity(self):
+        from jittor._runtime.dispatch import override_kernel, select_kernel
+
+        def provider(*args, **kwargs):
+            return None
+
+        op = "test.selector_nested_placement"
+        operands = [torch.tensor(i, device="cpu", dtype=torch.float32) for i in range(10)]
+        with override_kernel(op, "cpu", provider, dtypes={"float32"}):
+            self.assertIs(select_kernel(op, operands[:5], extra={"tail": tuple(operands[5:])}), provider)
+            operands[-1] = operands[-1].to(torch.int32)
+            self.assertIsNone(select_kernel(op, operands[:5], extra={"tail": tuple(operands[5:])}))
+        self.assertIsNone(select_kernel(op, operands))
+
     @unittest.skipUnless(_CUDA_KERNELS, "the LayerNorm relay is CUDA's")
     def test_the_layer_norm_relay_is_chosen_natively_as_before(self):
         from jittor._runtime.dispatch import select_kernel
