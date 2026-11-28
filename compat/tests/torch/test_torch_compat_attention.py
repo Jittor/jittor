@@ -177,6 +177,43 @@ class TestSDPA(Base):
             self.assertTrue(any(layout & attention._TUNE_FORWARD for layout in seen_layouts))
             self.assertGreater(run.stats["graph"], 0, run.graph_refused)
 
+    @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled, "No CUDA found")
+    def test_cudnn_consumes_and_produces_sequence_major_attention(self):
+        from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda as attention
+
+        if attention._library() is None:
+            self.skipTest("needs cuDNN frontend headers")
+        rng = np.random.default_rng(312)
+        arrays = tuple(rng.normal(0, 0.5, (1, length, 4, 64)).astype(np.float16)
+                       for length in (269, 301, 301))
+        expected = _sdpa_ref(*(value.swapaxes(1, 2).astype(np.float32) for value in arrays))
+        layouts = []
+        source = attention._forward_source
+
+        def observe(dtype, layout, *args):
+            layouts.append(layout)
+            return source(dtype, layout, *args)
+
+        def forward(*values):
+            dense = [tensor.transpose(1, 2).contiguous() for tensor in values]
+            output = nn.functional.scaled_dot_product_attention(*dense)
+            return output.transpose(1, 2).contiguous()
+
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error", auto_graph_replay=0), \
+                mock.patch.object(attention, "_forward_source", observe):
+            inputs = tuple(torch.tensor(value, device="cuda") for value in arrays)
+            run = torch.compile(forward, mode="reduce-overhead")
+            for _ in range(6):
+                actual = run(*inputs)
+                actual.sync()
+            self.assertEqual(actual.device.type, "cuda")
+            self.assertTrue(actual.is_contiguous())
+            self.ac(actual.float().cpu().numpy(), expected.swapaxes(1, 2), atol=2e-3, rtol=2e-3)
+            seq_major = attention._Q | attention._K | attention._V | attention._TUNE_FORWARD
+            self.assertIn(seq_major | attention._DENSE_OUTPUT, layouts)
+            self.assertIn(seq_major, layouts)
+            self.assertGreater(run.stats["graph"], 0, run.graph_refused)
+
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_explicit_cudnn_backend_accepts_grouped_query_attention(self):
         import importlib.util

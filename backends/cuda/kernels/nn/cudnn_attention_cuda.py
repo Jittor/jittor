@@ -157,7 +157,7 @@ int jt_cudnn_sdpa_backward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_
 # in. `layout` has a bit per tensor (q 1, k 2, v 4) for one given to the kernel
 # as [batch, seq, heads, head_dim] -- the tensor a transpose view was taken of
 # -- rather than [batch, heads, seq, head_dim]; see cudnn_sdpa.cc.
-_Q, _K, _V, _PACKED_QKV, _TUNE_FORWARD = 1, 2, 4, 8, 16
+_Q, _K, _V, _PACKED_QKV, _TUNE_FORWARD, _DENSE_OUTPUT = 1, 2, 4, 8, 16, 32
 
 
 def _dims(layout):
@@ -257,6 +257,42 @@ def _physical(t):
     return t, False
 
 
+def _pending_sequence_input(tensor):
+    if not tensor._is_pending_contiguous():
+        return None
+    view = tensor._input(0)
+    # A detach may retain the strided storage through a CloneOp after the
+    # transpose's Python holder has died.
+    while view._producer_name() == "clone":
+        view = view._input(0)
+    source, sequence_major = _physical(view)
+    if sequence_major and source._storage_is_contiguous():
+        return source
+    return None
+
+
+def _version(tensor):
+    return tensor.var_ptr, tensor._saved_storage_version()
+
+
+def contiguous_attention_output(view):
+    """Produce the sequence-major copy requested from a pending SDPA result."""
+    if tuple(view._transpose_view_axes()) != (0, 2, 1, 3):
+        return None
+    output = view._view_base_object()
+    offer = getattr(output, "_jt_attention_output_layout", None)
+    if offer is None or output.is_finished:
+        return None
+    operands, versions, output_version, scale, layout = offer
+    if (tuple(view.shape) != (output.shape[0], output.shape[2], output.shape[1], output.shape[3])
+            or tuple(view._storage_strides()) != tuple(output._storage_strides()[i] for i in (0, 2, 1, 3))
+            or view._storage_offset() != output._storage_offset()
+            or _version(output) != output_version
+            or any(_version(tensor) != version for tensor, version in zip(operands, versions))):
+        return None
+    return _forward(*operands, scale, False, False, layout=layout)[0]
+
+
 def _header():
     return _HEADER.format(descriptor=os.path.abspath(_DESCRIPTOR))
 
@@ -324,7 +360,8 @@ def _forward(query, key, value, scale, causal, training, bias=None, layout=0):
     bias_b, bias_h = _bias_dims(bias)
     packed = bool(layout & _PACKED_QKV)
     b, h, sq, d = _logical(query, layout & _Q)
-    out_shape = (b, sq, h, d) if packed else query.shape
+    out_shape = (b, h, sq, d) if layout & _DENSE_OUTPUT else (
+        (b, sq, h, d) if packed else query.shape)
     stats_shape = (b, h, sq, 1)
     if _HEADER_TEXT[0] is None:
         _HEADER_TEXT[0] = _header()
@@ -504,7 +541,7 @@ def _reduced_precision_admitted(query, key, value, attn_mask, dropout_p, is_caus
 def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
                            is_causal=False, scale=None, *, grouped=False,
                            allow_reduced_precision=False, enable_gqa=False,
-                           split_kv=False):
+                           optimize_inference=False):
     """Run attention through cuDNN, or return None to decline.
 
     ``grouped``: `key` and `value` may have fewer heads than `query`, each
@@ -540,7 +577,7 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         # Inference mask preparation is pure device graph ops and capture-safe.
         if step_capture.tracing() and training:
             return None
-    if (split_kv and not training and not is_causal and query.shape[3] > 0
+    if (optimize_inference and not training and not is_causal and query.shape[3] > 0
             and 0 < query.shape[2] <= 32 and key.shape[2] >= 256):
         from .split_kv_attention_cuda import split_kv_attention
 
@@ -556,6 +593,19 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         # The public mask may carry more precision than Q/K/V.
         return None
     scale = float(scale) if scale is not None else float(query.shape[3]) ** -0.5
+    if (optimize_inference and not training and attn_mask is None and not is_causal
+            and dtype == "float16" and min(query.shape[2], key.shape[2]) >= 256
+            and jt.flags.keep_graph == 2):
+        operands = tuple(_pending_sequence_input(tensor) for tensor in (query, key, value))
+        if all(tensor is not None for tensor in operands):
+            layout = _Q | _K | _V | _TUNE_FORWARD
+            if (_supported(*operands[:2], scale, False, False, layout=layout)
+                    and _supported(*operands[:2], scale, False, False,
+                                   layout=layout | _DENSE_OUTPUT)):
+                out = _forward(*operands, scale, False, False, layout=layout | _DENSE_OUTPUT)[0]
+                out._jt_attention_output_layout = (
+                    operands, tuple(map(_version, operands)), _version(out), scale, layout)
+                return out
     packed_qkv = None if training else _packed_qkv_view(query, key, value)
     if packed_qkv is not None:
         query = key = value = packed_qkv
@@ -708,12 +758,12 @@ def _supports(query, key, value, attn_mask=None, dropout_p=0.0, is_causal=False,
 # would take a float16 call off this kernel. `supports` looks at the query
 # only, which also keeps float32 for `fused_attention_f32_cuda.py`.
 register_kernel("nn.fused_attention", "cuda",
-                functools.partial(_cudnn_fused_attention, split_kv=True), supports=_supports)
+                functools.partial(_cudnn_fused_attention, optimize_inference=True), supports=_supports)
 register_kernel("nn.cudnn_attention", "cuda", _cudnn_fused_attention, supports=_supports)
 
 
 def _cudnn_fused_attention_gqa(query, key, value, **kwargs):
-    return _cudnn_fused_attention(query, key, value, grouped=True, split_kv=True, **kwargs)
+    return _cudnn_fused_attention(query, key, value, grouped=True, optimize_inference=True, **kwargs)
 
 
 # Grouped-query attention without repeating the key and value heads first: a
