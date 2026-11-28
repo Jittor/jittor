@@ -170,6 +170,13 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False, alpha=1.0):
+    if (jt.flags.keep_graph == 2 and jt.flags.no_grad and not trans_a and not trans_b
+            and alpha == 1.0 and _jittor_dtype_name(a.dtype) == "float32"):
+        from jittor.backends.cuda.kernels.nn.batched_matmul_cuda import narrow_batched_matmul
+
+        specialized = narrow_batched_matmul(a, b)
+        if specialized is not None:
+            return specialized
     if type(alpha) is float:
         result = jt.core._cublas_matmul_matching_batch(a, b, trans_a, trans_b, alpha)
         if result is not None:
