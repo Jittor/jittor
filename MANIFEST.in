@@ -284,6 +284,7 @@ include backends/cuda/kernels/nn/cudnn_sdpa.cc
 include backends/cuda/kernels/nn/efficient_attention.cu
 include backends/cuda/kernels/nn/efficient_attention.h
 include backends/cuda/kernels/nn/fused_attention_f32_vjp.cc
+include backends/cuda/kernels/nn/split_kv_attention.cuh
 include backends/cuda/libraries/cub/include/cub_test.h
 include backends/cuda/libraries/cublas/include/cublas_compute_type.h
 include backends/cuda/libraries/cublas/include/cublas_wrapper.h
