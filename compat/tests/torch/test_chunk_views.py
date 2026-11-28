@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 import jittor as jt
+from _helpers.capability import require_accelerator
 
 
 @pytest.fixture(autouse=True)
@@ -62,3 +63,20 @@ def test_unit_chunks_weighted_input_gradient(chunks, dim, native):
         expected[tuple(selection)] = cotangent * (index + 1)
     gradient, = torch.autograd.grad(loss, (x,))
     np.testing.assert_allclose(gradient.numpy(), expected, rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.cuda
+def test_cat_then_chunk_preserves_cuda_values_and_views():
+    require_accelerator("cuda")
+    data = (np.arange(2 * 6 * 12 * 64, dtype=np.float32) % 117).reshape(2, 6, 12, 64)
+    with jt.flag_scope(use_cuda=1, backend_fallback="error"), torch.no_grad():
+        left = torch.tensor(data[:, :, :6].copy(), device="cuda", dtype=torch.bfloat16)
+        right = torch.tensor(data[:, :, 6:].copy(), device="cuda", dtype=torch.bfloat16)
+        output = torch.cat((left, right), dim=2)
+        first, second = output.chunk(2, dim=2)
+        assert output.device.type == "cuda"
+        np.testing.assert_array_equal(first.float().numpy(), data[:, :, :6])
+        np.testing.assert_array_equal(second.float().numpy(), data[:, :, 6:])
+        second.fill_(-7)
+        data[:, :, 6:] = -7
+        np.testing.assert_array_equal(output.float().numpy(), data)

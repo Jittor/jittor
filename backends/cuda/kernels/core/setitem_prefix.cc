@@ -3,6 +3,7 @@
 #include "helper_cuda.h"
 #include "type/cuda_atomic.h"
 #include "indexing_codegen.h"
+#include "packed_slice.cuh"
 
 // The common indexing body is expanded before KernelIR builds the CUDA kernel.
 // Colliding scatter reductions need raw-IEEE atomics; its storage is copied
