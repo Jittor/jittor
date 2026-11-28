@@ -198,6 +198,96 @@ def _reduction_source(points, alignments):
     return header, source
 
 
+@lru_cache(maxsize=32)
+def _tiled_reduction_source(points, alignments):
+    arguments, parameters, setup, terms = [], [], [], []
+    for level, align in enumerate(alignments):
+        src = 1 + 2 * level
+        arguments.extend((f"in{src}_p", f"in{src + 1}_p",
+                          f"in{src}_shape2", f"in{src}_shape3"))
+        parameters.append(f"const float* image{level}, const float* grid{level}, "
+                          f"int height{level}, int width{level}")
+        setup.append(f"""
+        for (int p = threadIdx.y; p < {points}; p += blockDim.y) {{
+            const float* location = grid{level} + (item * {points} + p) * 2;
+            taps[{level * points} + p][lane] = make_tap<{str(align).lower()}>(
+                location, height{level}, width{level});
+        }}
+        """)
+        terms.append(f"""
+        const float* plane{level} = image{level} + row * height{level} * width{level};
+        #pragma unroll
+        for (int p = 0; p < {points}; ++p) {{
+            float value = apply_tap(plane{level}, taps[{level * points} + p][lane]);
+            sum += __fmul_rn(value, query_weights[{level * points} + p]);
+        }}
+        """)
+    header = _HEADER + r"""
+    struct BilinearTap {
+        int nw, sw, ne, se;
+        float dx, dy, dnx, dny;
+    };
+
+    __device__ static inline int pixel_offset(int y, int x, int height, int width) {
+        return x >= 0 && x < width && y >= 0 && y < height ? y * width + x : -1;
+    }
+
+    template<bool align_corners>
+    __device__ static inline BilinearTap make_tap(const float* grid, int height, int width) {
+        float x = grid_coordinate<align_corners>(grid[0], width);
+        float y = grid_coordinate<align_corners>(grid[1], height);
+        if (!isfinite(x) || !isfinite(y)) return {-2, -1, -1, -1, 0, 0, 0, 0};
+        if (x < -1.0f || x >= float(width) || y < -1.0f || y >= float(height))
+            return {-1, -1, -1, -1, 0, 0, 0, 0};
+        int left = int(floorf(x)), top = int(floorf(y));
+        int right = left + 1, bottom = top + 1;
+        return {pixel_offset(top, left, height, width), pixel_offset(bottom, left, height, width),
+                pixel_offset(top, right, height, width), pixel_offset(bottom, right, height, width),
+                x - float(left), y - float(top), float(right) - x, float(bottom) - y};
+    }
+
+    __device__ static inline float apply_tap(const float* plane, const BilinearTap& tap) {
+        if (tap.nw == -2) return NAN;
+        float nw = tap.nw < 0 ? 0.0f : plane[tap.nw];
+        float sw = tap.sw < 0 ? 0.0f : plane[tap.sw];
+        float ne = tap.ne < 0 ? 0.0f : plane[tap.ne];
+        float se = tap.se < 0 ? 0.0f : plane[tap.se];
+        return nw * tap.dnx * tap.dny + sw * tap.dnx * tap.dy
+             + ne * tap.dx * tap.dny + se * tap.dx * tap.dy;
+    }
+    """ + f"""
+    __global__ static void reduce_bilinear_grids_tiled(
+        const float* weights, float* out, int channels, int queries, {', '.join(parameters)}) {{
+        // A warp writes one output channel over 32 queries. Four such warps
+        // share their grid coordinates and neighbor indices.
+        __shared__ BilinearTap taps[{points * len(alignments)}][32];
+        int lane = threadIdx.x;
+        int query = blockIdx.x * 32 + lane;
+        int channel = blockIdx.y * blockDim.y + threadIdx.y;
+        int64_t item = int64_t(blockIdx.z) * queries + query;
+        if (query < queries) {{
+            {''.join(setup)}
+        }}
+        __syncthreads();
+        if (query >= queries || channel >= channels) return;
+        int64_t row = int64_t(blockIdx.z) * channels + channel;
+        const float* query_weights = weights + item * {points * len(alignments)};
+        float sum = 0.0f;
+        {''.join(terms)}
+        out[row * queries + query] = sum;
+    }}
+    """
+    source = f"""
+    const dim3 threads(32, 4);
+    const dim3 blocks((int64_t(out0_shape2) + threads.x - 1) / threads.x,
+                      (out0_shape1 + threads.y - 1) / threads.y, out0_shape0);
+    reduce_bilinear_grids_tiled<<<blocks, threads>>>(in0_p, out0_p, out0_shape1, out0_shape2,
+                                                    {', '.join(arguments)});
+    CHECK(0 == cudaGetLastError());
+    """
+    return header, source
+
+
 def try_reduce_sampled_grids(product):
     """Weighted last-axis sum over stacked bilinear grids with shared channel weights."""
     if (product.ndim != 4 or not jt.flags.no_grad or jt.flags.amp_reg
@@ -218,7 +308,12 @@ def try_reduce_sampled_grids(product):
         result = _stacked_samples(sampled, shape)
         if result is not None:
             inputs, geometry = result
-            header, source = _reduction_source(*geometry)
+            batches, channels, queries, _samples = shape
+            tiled = (batches <= 65535 and 16 <= channels <= 4 * 65535
+                     and 128 <= queries < 1 << 31
+                     and all(int(t.shape[-2]) * int(t.shape[-1]) < 1 << 31 for t in inputs[::2]))
+            generate = _tiled_reduction_source if tiled else _reduction_source
+            header, source = generate(*geometry)
             return jt.code(shape[:-1], product.dtype, [weights[:, 0], *inputs],
                            cuda_header=header, cuda_src=source, backend="cuda")
     return None
