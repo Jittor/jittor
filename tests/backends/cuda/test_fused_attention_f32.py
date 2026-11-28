@@ -582,6 +582,22 @@ class TestFusedAttentionF32(unittest.TestCase):
         self.assertIsNone(self.kernel._fused_attention_f32(
             q, q, q, attn_mask=jt.ones((3, 8), dtype="bool")))
 
+    def test_many_wide_heads_use_tiled_inference(self):
+        rng = np.random.default_rng(301)
+        queries, keys, depth, heads = 27, 53, 72, 128
+        arrays = [rng.normal(0, 0.3, size=(2, heads // 2, length, depth)).astype("float32")
+                  for length in (queries, keys, keys)]
+        self.assertFalse(self.kernel._use_short_forward(queries, keys, depth, heads))
+        self.assertTrue(self.kernel._use_short_forward(queries, keys, depth, heads - 1))
+        self.assertTrue(self.kernel._use_short_forward(queries, 32, depth, heads))
+        with jt.no_grad(), jt.flag_scope(use_cuda=0):
+            expected = scaled_dot_product_attention(*(jt.array(a) for a in arrays)).numpy()
+        with jt.no_grad(), jt.flag_scope(backend_fallback="error"):
+            result = scaled_dot_product_attention(*(jt.array(a) for a in arrays))
+            result.sync()
+            self.assertEqual(result.location(), "device")
+            np.testing.assert_allclose(result.numpy(), expected, rtol=2e-5, atol=3e-6)
+
     def test_short_inference_fast_path(self):
         rng = np.random.RandomState(42)
         cases = [

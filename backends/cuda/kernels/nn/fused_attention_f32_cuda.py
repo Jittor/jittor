@@ -1295,8 +1295,11 @@ _FORWARD_SOURCES = {}
 _SHORT_FORWARD_SOURCES = {}
 
 
-def _use_short_forward(lq, lk):
-    return (lk <= 32) or (lq <= 64 and lk <= 128)
+def _use_short_forward(lq, lk, depth, batch_heads):
+    # With enough independent wide heads to fill the device, sharing K and V
+    # across the query tile outweighs the warp kernel's lower setup cost.
+    prefer_tiled = batch_heads >= _SM_BLOCKS and depth >= 64 and lq >= 16
+    return lk <= 32 or (lq <= 64 and lk <= 128 and not prefer_tiled)
 
 
 def _short_forward_kernel(d, lq, lk, causal, mask_kind):
@@ -1357,7 +1360,7 @@ def _forward_view(query, key, value, scale, causal, mask):
     for index, (_, strides, offset) in enumerate(layouts):
         pointers.append(f"(in{index}_p + {offset})")
         rows.append(f"mea::Rows{{{h}, {strides[0]}LL, {strides[1]}LL, {strides[2]}LL, 1}}")
-    if _use_short_forward(lq, lk):
+    if _use_short_forward(lq, lk, d, b * h):
         kernel, header, rows_per_block = _short_forward_kernel(d, lq, lk, causal, mask[0])
         src = (
             kernel +
@@ -1450,7 +1453,7 @@ def _forward(query, key, value, call, native_vjp=False, need_normalizer=True):
     else:
         b, h, lq, d = (int(size) for size in query.shape)
     lk = int(key.shape[1] if call.seq[1] else key.shape[2])
-    if not need_normalizer and call.seed is None and _use_short_forward(lq, lk):
+    if not need_normalizer and call.seed is None and _use_short_forward(lq, lk, d, b * h):
         kernel, header, rows_per_block = _short_forward_kernel(d, lq, lk, call.causal, call.mask[0])
         key_ = (kernel, call.mask[2], call.seq, call.group, float(call.scale))
         src = _SHORT_FORWARD_SOURCES.get(key_)
@@ -1627,7 +1630,7 @@ def _fused_attention_f32(query, key, value, attn_mask=None, dropout_p=0.0,
     training = _output_requires_grad(query, key, value)
     shape = (b, h, lq, lk)
     mask = None
-    if not training and not dropout_p and not _use_short_forward(lq, lk):
+    if not training and not dropout_p and not _use_short_forward(lq, lk, query.shape[-1], b * h):
         mask = _factorized_mask(attn_mask, shape)
     if mask is None:
         mask = _mask_layout(attn_mask, shape)
