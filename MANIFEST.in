@@ -335,6 +335,12 @@ include backends/rocm/libraries/rocprim/scan.cu
 include backends/rocm/libraries/rocprim/scan.h
 include backends/rocm/runtime/driver.cc
 include docs/_myst_autodoc.py
+include docs/_static/architecture-layers-en.svg
+include docs/_static/architecture-layers-zh.svg
+include docs/_static/ecosystem-collab-en.svg
+include docs/_static/ecosystem-collab-zh.svg
+include docs/_static/execution-pipeline-en.svg
+include docs/_static/execution-pipeline-zh.svg
 include docs/_static/logo.png
 include docs/api/contrib.en.md
 include docs/api/contrib.md
@@ -371,6 +377,8 @@ include docs/compatibility/torch.en.md
 include docs/compatibility/torch.md
 include docs/conf.py
 include docs/content-manifest.json
+include docs/development/architecture-overview.en.md
+include docs/development/architecture-overview.md
 include docs/development/backends/acl-backend-contracts.en.md
 include docs/development/backends/acl-backend-contracts.md
 include docs/development/backends/backend-build.en.md

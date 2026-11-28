@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 560" width="1120" height="560" role="img" aria-label="Jittor 2.0 graph construction and execution pipeline">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+    <style>
+      .bg { fill: #FAFBFD; stroke: #E2E8F0; stroke-width: 1.5; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 19px; font-weight: 700; fill: #0F172A; }
+      .sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; fill: #475569; }
+      .stage { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; font-weight: 700; fill: #334155; }
+      .box-t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12.5px; font-weight: 600; fill: #0F172A; }
+      .box-b { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.3px; fill: #334155; }
+      .note { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10.8px; fill: #475569; }
+      .edge { stroke: #475569; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-muted { stroke: #94A3B8; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="4" y="4" width="1112" height="552" rx="14" class="bg"/>
+  <text x="30" y="36" class="title">End-to-End Execution Pipeline: From Call to Device Launch</text>
+  <text x="30" y="56" class="sub">Phase A Lazy graph construction → Phase B Planning, fusion &amp; parallel compile → Phase C Sync/async execution &amp; reclamation</text>
+
+  <!-- Row 1 -->
+  <rect x="24" y="74" width="1072" height="106" rx="10" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.3"/>
+  <text x="38" y="95" class="stage">Stage A · Lazy Graph Construction &amp; Submission Boundary (Python thread)</text>
+
+  <rect x="38" y="106" width="225" height="60" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="50" y="126" class="box-t">1. Frontend Operator Call</text>
+  <text x="50" y="143" class="box-b">Native jt.* / compat torch.*</text>
+  <text x="50" y="157" class="box-b">TensorFrontendScope selects type</text>
+
+  <rect x="292" y="106" width="235" height="60" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="304" y="126" class="box-t">2. Dispatch &amp; Node Attachment</text>
+  <text x="304" y="143" class="box-b">try_dispatch / op_register</text>
+  <text x="304" y="157" class="box-b">Append Op/Var, register VarHolder</text>
+
+  <rect x="556" y="106" width="240" height="60" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="568" y="126" class="box-t">3. Submission Trigger Check</text>
+  <text x="568" y="143" class="box-b">.numpy() / .sync() / auto_flush</text>
+  <text x="568" y="157" class="box-b">module_boundary / dynamic shape</text>
+
+  <rect x="826" y="106" width="254" height="60" rx="7" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="4 3"/>
+  <text x="838" y="126" class="box-t">No trigger: return lazy Var</text>
+  <text x="838" y="143" class="note">Graph grows without device allocation</text>
+  <text x="838" y="157" class="note">Enables wider cross-op fusion later</text>
+
+  <line x1="263" y1="136" x2="290" y2="136" class="edge"/>
+  <line x1="527" y1="136" x2="554" y2="136" class="edge"/>
+  <line x1="796" y1="136" x2="824" y2="136" class="edge-muted"/>
+
+  <!-- Row 2 -->
+  <rect x="24" y="202" width="1072" height="122" rx="10" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.3"/>
+  <text x="38" y="223" class="stage">Stage B · Planning, Graph Optimization, Fusion &amp; Pre-Compilation (Executor::run_sync)</text>
+
+  <rect x="38" y="234" width="236" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="50" y="254" class="box-t">4. Batch Collection &amp; gopt</text>
+  <text x="50" y="271" class="box-b">async_exec_wait() drains prior</text>
+  <text x="50" y="286" class="box-b">build_exec_plan: BFS + gopt</text>
+  <text x="50" y="301" class="note">planning_hold pins raw node ptrs</text>
+
+  <rect x="302" y="234" width="242" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="314" y="254" class="box-t">5. Fusion &amp; Liveness Schedule</text>
+  <text x="314" y="271" class="box-b">Fuser::count_fuse builds segments</text>
+  <text x="314" y="286" class="box-b">schedule_hold_release (last use)</text>
+  <text x="314" y="301" class="note">Edge snapshots prevent mutation races</text>
+
+  <rect x="572" y="234" width="248" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="584" y="254" class="box-t">6. Tiered Pre-Compile &amp; Lookup</text>
+  <text x="584" y="271" class="box-b">jit_cache_map (zero-copy) / Tier-0</text>
+  <text x="584" y="286" class="box-b">In-process NVRTC / OpCompiler</text>
+  <text x="584" y="301" class="note">CPU PCH + CAS shared cache + cubin</text>
+
+  <rect x="848" y="234" width="232" height="76" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="860" y="254" class="box-t">7. Execution Route Decision</text>
+  <text x="860" y="271" class="box-b">may_run_async(plan)?</text>
+  <text x="860" y="286" class="note">Pure device batch → async worker</text>
+  <text x="860" y="301" class="note">Sync / capture / CPU / callback → main</text>
+
+  <path d="M 676 166 L 676 188 L 156 188 L 156 232" class="edge"/>
+  <line x1="274" y1="272" x2="300" y2="272" class="edge"/>
+  <line x1="544" y1="272" x2="570" y2="272" class="edge"/>
+  <line x1="820" y1="272" x2="846" y2="272" class="edge"/>
+
+  <!-- Row 3 -->
+  <rect x="24" y="346" width="1072" height="190" rx="10" fill="#FFFBEB" stroke="#FCD34D" stroke-width="1.3"/>
+  <text x="38" y="367" class="stage">Stage C · Batch Execution, Multi-Path Kernel Launch &amp; Reclamation (run_exec_plan)</text>
+
+  <rect x="38" y="378" width="242" height="66" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="50" y="398" class="box-t">8a. Async Worker Execution</text>
+  <text x="50" y="415" class="box-b">async_exec_submit → worker_main</text>
+  <text x="50" y="431" class="note">Caller resumes building; deferred finish</text>
+
+  <rect x="38" y="456" width="242" height="66" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="50" y="476" class="box-t">8b. Main Thread / Graph Capture</text>
+  <text x="50" y="493" class="box-b">run_exec_plan / graph_replay</text>
+  <text x="50" y="509" class="note">Supports CUDA Graph capture &amp; replay</text>
+
+  <rect x="312" y="378" width="448" height="144" rx="7" fill="#FFFFFF" stroke="#F59E0B" stroke-width="1.3"/>
+  <text x="326" y="399" class="box-t">9. Allocate &amp; Launch per Segment (BackendStreamKind::Compute)</text>
+
+  <rect x="326" y="410" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="336" y="428" class="box-t">Tiered JIT / NVRTC Kernels</text>
+  <text x="336" y="445" class="box-b">Tier-0 / NVRTC / OpCompiler</text>
+
+  <rect x="542" y="410" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="552" y="428" class="box-t">Accelerated Libraries</text>
+  <text x="552" y="445" class="box-b">cuBLAS / cuDNN / ACL / MKL</text>
+
+  <rect x="326" y="466" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="336" y="484" class="box-t">Native External / Custom Ops</text>
+  <text x="336" y="501" class="box-b">CudaLaunchOp / TvmFfiLaunchOp</text>
+
+  <rect x="542" y="466" width="204" height="46" rx="5" fill="#FEF3C7" stroke="#F59E0B" stroke-width="1"/>
+  <text x="552" y="484" class="box-t">Static &amp; Layer Graph Replay</text>
+  <text x="552" y="501" class="box-b">graph_launch / graphed_module</text>
+
+  <rect x="790" y="378" width="290" height="144" rx="7" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+  <text x="804" y="399" class="box-t">10. Reclamation &amp; Stream Handoff</text>
+  <text x="804" y="421" class="box-b">• reuse_dying_inputs buffer takeover</text>
+  <text x="804" y="440" class="box-b">• finish_pending_liveness free temp</text>
+  <text x="804" y="459" class="box-b">• ComputeHandoff cross-thread event</text>
+  <text x="804" y="478" class="box-b">• Synchronize touched devices on demand</text>
+  <text x="804" y="502" class="note">Failure path: mark_failed_batch + attribution</text>
+
+  <path d="M 964 310 L 964 332 L 159 332 L 159 376" class="edge"/>
+  <path d="M 964 332 L 16 332 L 16 489 L 36 489" class="edge"/>
+  <line x1="280" y1="411" x2="310" y2="430" class="edge"/>
+  <line x1="280" y1="489" x2="310" y2="472" class="edge"/>
+  <line x1="760" y1="450" x2="788" y2="450" class="edge"/>
+</svg>

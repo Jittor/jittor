@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 490" width="1120" height="490" role="img" aria-label="Three-repository collaboration between Jittor and JittorEcosystem">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#2563EB"/>
+    </marker>
+    <style>
+      .bg { fill: #FAFBFD; stroke: #E2E8F0; stroke-width: 1.5; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 19px; font-weight: 700; fill: #0F172A; }
+      .sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; fill: #475569; }
+      .card-t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; font-weight: 700; fill: #0F172A; }
+      .card-sub { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.8px; fill: #475569; }
+      .body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11.2px; fill: #334155; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.5px; fill: #1E293B; }
+      .lbl { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 10.8px; font-weight: 600; fill: #1D4ED8; }
+      .edge { stroke: #475569; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-blue { stroke: #2563EB; stroke-width: 1.8; fill: none; marker-end: url(#arrow-blue); }
+      .edge-dash { stroke: #64748B; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="4" y="4" width="1112" height="482" rx="14" class="bg"/>
+  <text x="30" y="36" class="title">Jittor &amp; JittorEcosystem Multi-Repository Collaboration Loop</text>
+  <text x="30" y="56" class="sub">Clear ownership boundaries, one-way dependencies, fork-only PR workflow, and pinned-commit evidence binding</text>
+
+  <!-- Repo 1 -->
+  <rect x="28" y="80" width="440" height="236" rx="10" fill="#EFF6FF" stroke="#60A5FA" stroke-width="1.5"/>
+  <text x="46" y="106" class="card-t">1. Core Repo: Jittor/jittor</text>
+  <text x="46" y="124" class="card-sub">Base branch: 2.0-refactor · Rules: AGENTS.md</text>
+
+  <rect x="46" y="138" width="404" height="58" rx="6" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.1"/>
+  <text x="58" y="158" class="body">• Core compute, lazy graph, autograd, JIT &amp; backends (src/, python/, backends/)</text>
+  <text x="58" y="177" class="body">• Shared Torch compatibility package (compat/: torch, shim, fsdp2, triton)</text>
+
+  <rect x="46" y="206" width="404" height="94" rx="6" fill="#FFFFFF" stroke="#93C5FD" stroke-width="1.1"/>
+  <text x="58" y="226" class="body">• Workflow: task branch on fork → minimal repro + tests → PR to 2.0-refactor</text>
+  <text x="58" y="245" class="body">• Test tiers: --tier core (~44s) → --tier smoke (~390s) → full</text>
+  <text x="58" y="264" class="body">• Pre-commit: check_repo_layout.sh + generate_manifest --check + structure</text>
+  <text x="58" y="283" class="body">• Never push/merge upstream directly; no per-library adapters/ in main repo</text>
+
+  <!-- Repo 2 -->
+  <rect x="652" y="80" width="440" height="236" rx="10" fill="#ECFDF5" stroke="#34D399" stroke-width="1.5"/>
+  <text x="670" y="106" class="card-t">2. Downstream Repos: JittorEcosystem/jittor-*</text>
+  <text x="670" y="124" class="card-sub">vllm / transformers / accelerate / deepspeed / trl / verl ...</text>
+
+  <rect x="670" y="138" width="404" height="58" rx="6" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.1"/>
+  <text x="682" y="158" class="body">• Owns library-private adapters, upstream/ snapshots &amp; official suite runs</text>
+  <text x="682" y="177" class="body">• compatibility.json pins upstream version + framework/compat SHA</text>
+
+  <rect x="670" y="206" width="404" height="94" rx="6" fill="#FFFFFF" stroke="#6EE7B7" stroke-width="1.1"/>
+  <text x="682" y="226" class="body">• Evidence ladder: host/pkg → official L1 → L2 native PyTorch → perf</text>
+  <text x="682" y="245" class="body">• Support pages: support/{scope,tasks,results}.json → support_matrix.py</text>
+  <text x="682" y="264" class="body">• Auto-generates bilingual docs/support*.md &amp; docs/validation*.md</text>
+  <text x="682" y="283" class="body">• Workflow: task/&lt;slug&gt; → PR to main; re-pin requires re-running evidence</text>
+
+  <!-- Cross-repo arrows -->
+  <path d="M 468 158 L 648 158" class="edge-blue"/>
+  <rect x="476" y="132" width="164" height="22" rx="4" fill="#DBEAFE"/>
+  <text x="484" y="147" class="lbl">Merged SHA → re-pin</text>
+
+  <path d="M 652 246 L 472 246" class="edge"/>
+  <rect x="474" y="253" width="170" height="36" rx="4" fill="#F1F5F9"/>
+  <text x="482" y="268" class="body">Minimal core/compat repro</text>
+  <text x="482" y="283" class="body">upstreamed via fork PR</text>
+
+  <!-- Repo 3 & External Lab -->
+  <rect x="28" y="344" width="520" height="118" rx="10" fill="#FFFBEB" stroke="#FBBF24" stroke-width="1.5"/>
+  <text x="46" y="369" class="card-t">3. Shared Skills: JittorEcosystem/jittor-dev-skills</text>
+  <text x="46" y="387" class="card-sub">Cloned to $JITTOR_LAB_ROOT/jittor-dev-skills (never copied into main repo)</text>
+  <text x="46" y="410" class="body">• Reusable engineering workflows: triage, isolation, parity/perf, PR &amp; bootstrap</text>
+  <text x="46" y="429" class="body">• Precedence: target repository AGENTS.md overrides shared skill guidance</text>
+  <text x="46" y="448" class="mono">Gate: python3 tools/check_skills.py (catalogue, frontmatter &amp; link checks)</text>
+
+  <rect x="572" y="344" width="520" height="118" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.5"/>
+  <text x="590" y="369" class="card-t">External Runtime State: $JITTOR_LAB_ROOT</text>
+  <text x="590" y="387" class="card-sub">Defaults to sibling jittor-lab/ (keep checkouts free of state &amp; caches)</text>
+  <text x="590" y="410" class="mono">worktrees/&lt;task&gt;/          Isolated Git worktree per task</text>
+  <text x="590" y="429" class="mono">_state/&lt;topic&gt;/&lt;run&gt;/      Dedicated JITTOR_HOME / TMPDIR / logs</text>
+  <text x="590" y="448" class="body">Never share compilation caches across tests, benchmarks, or concurrent runs</text>
+
+  <line x1="250" y1="344" x2="250" y2="318" class="edge-dash"/>
+  <line x1="480" y1="344" x2="760" y2="318" class="edge-dash"/>
+  <line x1="650" y1="344" x2="410" y2="318" class="edge-dash"/>
+  <line x1="870" y1="344" x2="870" y2="318" class="edge-dash"/>
+</svg>

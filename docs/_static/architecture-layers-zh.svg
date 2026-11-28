@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 760" width="1120" height="760" role="img" aria-label="Jittor 2.0 五层整体架构图">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-dashed" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 1 1.5 L 9 5 L 1 8.5 z" fill="#64748B"/>
+    </marker>
+    <style>
+      .bg { fill: #FAFBFD; stroke: #E2E8F0; stroke-width: 1.5; }
+      .title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 20px; font-weight: 700; fill: #0F172A; }
+      .subtitle { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 12.5px; fill: #475569; }
+      .layer-label { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 13px; font-weight: 700; fill: #1E293B; }
+      .layer-path { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; fill: #64748B; }
+      .box-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 13px; font-weight: 600; fill: #0F172A; }
+      .box-body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.8px; fill: #334155; }
+      .box-note { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif; font-size: 11px; fill: #475569; }
+      .edge { stroke: #475569; stroke-width: 1.6; fill: none; marker-end: url(#arrow); }
+      .edge-bi { stroke: #64748B; stroke-width: 1.4; stroke-dasharray: 4 3; fill: none; marker-end: url(#arrow-dashed); }
+    </style>
+  </defs>
+
+  <rect x="4" y="4" width="1112" height="752" rx="14" class="bg"/>
+  <text x="32" y="38" class="title">Jittor 2.0 整体五层架构原理图</text>
+  <text x="32" y="58" class="subtitle">一套统一延迟计算图（Var / Op IR）支撑原生前端、独立 Torch 兼容前端、JIT 编译与多后端硬件执行</text>
+
+  <!-- Layer 1 -->
+  <rect x="24" y="76" width="1072" height="106" rx="10" fill="#EFF6FF" stroke="#93C5FD" stroke-width="1.4"/>
+  <text x="40" y="98" class="layer-label">L1 · 前端与生态接口层</text>
+  <text x="200" y="98" class="layer-path">python/jittor/  ·  compat/ (jittor-compat 独立发行物)</text>
+
+  <rect x="40" y="108" width="332" height="62" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="54" y="128" class="box-title">原生 Jittor 前端</text>
+  <text x="54" y="146" class="box-body">_core (Var/Module/Function) · nn · ops</text>
+  <text x="54" y="161" class="box-body">optim · linalg · fft · autograd · distributed</text>
+
+  <rect x="394" y="108" width="348" height="62" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="408" y="128" class="box-title">独立 Torch 兼容层（jittor-compat）</text>
+  <text x="408" y="146" class="box-body">compat/torch (独立 Tensor + Installers)</text>
+  <text x="408" y="161" class="box-body">compat/shim · compat/fsdp2 · compat/triton</text>
+
+  <rect x="764" y="108" width="316" height="62" rx="7" fill="#FFFFFF" stroke="#60A5FA" stroke-width="1.2"/>
+  <text x="778" y="128" class="box-title">外部内核与构建引导</text>
+  <text x="778" y="146" class="box-body">python/jittor/kernels (triton/tilelang)</text>
+  <text x="778" y="161" class="box-body">python/jittor/build (compiler/codegen)</text>
+
+  <!-- Layer 2 -->
+  <rect x="24" y="204" width="1072" height="100" rx="10" fill="#F5F3FF" stroke="#C4B5FD" stroke-width="1.4"/>
+  <text x="40" y="226" class="layer-label">L2 · Python-C++ 绑定、分派与静态图捕获层</text>
+  <text x="342" y="226" class="layer-path">src/bindings/  ·  python/jittor/_runtime/</text>
+
+  <rect x="40" y="236" width="332" height="56" rx="7" fill="#FFFFFF" stroke="#A78BFA" stroke-width="1.2"/>
+  <text x="54" y="256" class="box-title">PyJT 绑定与前端身份接缝</text>
+  <text x="54" y="274" class="box-body">py_tensor_frontend · py_compat_fast · py_module_call · dlpack</text>
+
+  <rect x="394" y="236" width="348" height="56" rx="7" fill="#FFFFFF" stroke="#A78BFA" stroke-width="1.2"/>
+  <text x="408" y="256" class="box-title">能力注册、算子分派与设备放置</text>
+  <text x="408" y="274" class="box-body">_runtime/dispatch · src/ops/op_register · TensorPlacement</text>
+
+  <rect x="764" y="236" width="316" height="56" rx="7" fill="#FFFFFF" stroke="#A78BFA" stroke-width="1.2"/>
+  <text x="778" y="256" class="box-title">静态图重放、步捕获与分层图</text>
+  <text x="778" y="274" class="box-body">graph_replay · capture_step · graphed_module</text>
+
+  <!-- Layer 3 -->
+  <rect x="24" y="326" width="1072" height="122" rx="10" fill="#ECFDF5" stroke="#6EE7B7" stroke-width="1.4"/>
+  <text x="40" y="348" class="layer-label">L3 · 统一延迟计算图与调度执行核心（唯一 IR）</text>
+  <text x="358" y="348" class="layer-path">src/core/  ·  src/runtime/</text>
+
+  <rect x="40" y="358" width="248" height="78" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="54" y="378" class="box-title">计算图、对象池与生命周期</text>
+  <text x="54" y="396" class="box-body">Node · Var · Op · VarHolder · NodePool</text>
+  <text x="54" y="411" class="box-body">RuntimeHolderState · StorageVersion</text>
+  <text x="54" y="426" class="box-note">Slab 池、显式 stride、别名与存活性跟踪</text>
+
+  <rect x="304" y="358" width="240" height="78" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="318" y="378" class="box-title">自动微分与反向快照</text>
+  <text x="318" y="396" class="box-body">Grad · Tape · Op::grad</text>
+  <text x="318" y="411" class="box-body">saved_storage_readers</text>
+  <text x="318" y="426" class="box-note">延迟构造反向图，共享同一 IR</text>
+
+  <rect x="560" y="358" width="252" height="78" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="574" y="378" class="box-title">执行规划与算子融合</text>
+  <text x="574" y="396" class="box-body">build_exec_plan · graph_optimize</text>
+  <text x="574" y="411" class="box-body">Fuser (count_fuse) · FusedOp</text>
+  <text x="574" y="426" class="box-note">BFS 收集、图改写、融合切段</text>
+
+  <rect x="828" y="358" width="252" height="78" rx="7" fill="#FFFFFF" stroke="#34D399" stroke-width="1.2"/>
+  <text x="842" y="378" class="box-title">执行器与异步流水线</text>
+  <text x="842" y="396" class="box-body">Executor::run_sync · run_exec_plan</text>
+  <text x="842" y="411" class="box-body">async_exec Worker · GraphMutationMutex</text>
+  <text x="842" y="426" class="box-note">自动冲刷、异步发射、死输入复用</text>
+
+  <!-- Layer 4 -->
+  <rect x="24" y="470" width="1072" height="114" rx="10" fill="#FFFBEB" stroke="#FCD34D" stroke-width="1.4"/>
+  <text x="40" y="492" class="layer-label">L4 · 代码生成、JIT 编译与多路径算子发射层</text>
+  <text x="342" y="492" class="layer-path">src/codegen/  ·  src/ops/  ·  backends/*/kernels/</text>
+
+  <rect x="40" y="502" width="340" height="70" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="54" y="522" class="box-title">分层 JIT 与进程内编译管线</text>
+  <text x="54" y="540" class="box-body">Tier-0 (tier0_ops/cuda) · NVRTC (dlopen)</text>
+  <text x="54" y="555" class="box-body">OpCompiler · CPU PCH · CAS 共享缓存 · LRU</text>
+
+  <rect x="396" y="502" width="338" height="70" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="410" y="522" class="box-title">加速库算子与注册内建核</text>
+  <text x="410" y="540" class="box-body">cuBLAS / cuBLASLt / cuDNN / CUB / cuFFT / cuTT</text>
+  <text x="410" y="555" class="box-body">oneDNN · ACLNN · 融合 AdamW / Norm CUDA 核</text>
+
+  <rect x="750" y="502" width="330" height="70" rx="7" fill="#FFFFFF" stroke="#FBBF24" stroke-width="1.2"/>
+  <text x="764" y="522" class="box-title">原生外部核与自定义算子</text>
+  <text x="764" y="540" class="box-body">CudaLaunchOp (Triton) · TvmFfiLaunchOp (TileLang)</text>
+  <text x="764" y="555" class="box-body">CodeOp (jt.code) · ExternalKernelOp · DLPack</text>
+
+  <!-- Layer 5 -->
+  <rect x="24" y="606" width="1072" height="128" rx="10" fill="#F1F5F9" stroke="#94A3B8" stroke-width="1.4"/>
+  <text x="40" y="628" class="layer-label">L5 · 内存分配器、流同步与多硬件后端抽象层</text>
+  <text x="348" y="628" class="layer-path">src/mem/  ·  src/runtime/backend*  ·  backends/</text>
+
+  <rect x="40" y="638" width="340" height="82" rx="7" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+  <text x="54" y="658" class="box-title">统一内存与显存池（src/mem）</text>
+  <text x="54" y="676" class="box-body">SFRLAllocator · CudaDevice / Host / Dual / Managed</text>
+  <text x="54" y="691" class="box-body">Allocation · share_with 共享环 · Swap 换出</text>
+  <text x="54" y="707" class="box-note">支持零拷贝切片视图与按流安全延迟释放</text>
+
+  <rect x="396" y="638" width="338" height="82" rx="7" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+  <text x="410" y="658" class="box-title">后端操作表、流与图捕获原语</text>
+  <text x="410" y="676" class="box-body">BackendOps · BackendStream (Compute / Copy)</text>
+  <text x="410" y="691" class="box-body">ComputeHandoff · EventQueue · LaunchDiagnostics</text>
+  <text x="410" y="707" class="box-note">后端无关的流同步、异步错位诊断与图录制</text>
+
+  <rect x="750" y="638" width="330" height="82" rx="7" fill="#FFFFFF" stroke="#64748B" stroke-width="1.2"/>
+  <text x="764" y="658" class="box-title">硬件与集合通信后端（backends/）</text>
+  <text x="764" y="676" class="box-body">CPU (OpenMP) · CUDA · Ascend ACL · ROCm · CoreX</text>
+  <text x="764" y="691" class="box-body">backends/comm: MPI · NCCL · HCCL</text>
+  <text x="764" y="707" class="box-note">统一设备抽象与后端回退策略 (backend_fallback)</text>
+
+  <!-- Vertical flow arrows -->
+  <line x1="206" y1="170" x2="206" y2="234" class="edge"/>
+  <line x1="568" y1="170" x2="568" y2="234" class="edge"/>
+  <line x1="922" y1="170" x2="922" y2="234" class="edge"/>
+
+  <line x1="206" y1="292" x2="164" y2="356" class="edge"/>
+  <line x1="568" y1="292" x2="686" y2="356" class="edge"/>
+  <line x1="922" y1="292" x2="954" y2="356" class="edge"/>
+
+  <!-- Horizontal internal L3 arrows -->
+  <line x1="288" y1="397" x2="302" y2="397" class="edge-bi"/>
+  <line x1="544" y1="397" x2="558" y2="397" class="edge"/>
+  <line x1="812" y1="397" x2="826" y2="397" class="edge"/>
+
+  <!-- L3 -> L4 -->
+  <line x1="686" y1="436" x2="210" y2="500" class="edge"/>
+  <line x1="920" y1="436" x2="565" y2="500" class="edge"/>
+  <line x1="980" y1="436" x2="915" y2="500" class="edge"/>
+
+  <!-- L4 -> L5 -->
+  <line x1="210" y1="572" x2="210" y2="636" class="edge"/>
+  <line x1="565" y1="572" x2="565" y2="636" class="edge"/>
+  <line x1="915" y1="572" x2="915" y2="636" class="edge"/>
+</svg>
