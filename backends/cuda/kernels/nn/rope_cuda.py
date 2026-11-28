@@ -563,7 +563,7 @@ def _interleaved_rope_storage(x):
     return base, strides, offset
 
 
-def _interleaved_rope_contract(x, cos, sin):
+def _interleaved_rope_contract(x, cos, sin, pair_coefficients):
     if not all(isinstance(value, jt.Var) for value in (x, cos, sin)):
         return None
     if jt.flags.amp_reg or _output_requires_grad(x, cos, sin):
@@ -577,10 +577,14 @@ def _interleaved_rope_contract(x, cos, sin):
     storage = _interleaved_rope_storage(x)
     if storage is None:
         return None
+    if cos.dtype != sin.dtype:
+        return None
     strides = []
     for freqs in (cos, sin):
         if (_jittor_dtype_name(freqs.dtype) != "float32"
-                or not freqs._storage_is_contiguous() or freqs.ndim > x.ndim):
+                and not (pair_coefficients and _jittor_dtype_name(freqs.dtype) == dtype)):
+            return None
+        if not freqs._storage_is_contiguous() or freqs.ndim > x.ndim:
             return None
         dims = (1,) * (x.ndim - freqs.ndim) + tuple(freqs.shape)
         if dims[-1] != shape[-1] or any(a not in (1, b) for a, b in zip(dims, shape)):
@@ -609,7 +613,25 @@ def _interleaved_offset(shape, strides, offset=0):
 
 
 @lru_cache(maxsize=128)
-def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides):
+def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides, pair_coefficients):
+    if pair_coefficients:
+        operation = r"""
+            float c0 = static_cast<float>(c.first), s1 = static_cast<float>(s.second);
+            float ac = static_cast<float>(in1_type(__fmul_rn(real, c0)));
+            float bs = static_cast<float>(in1_type(__fmul_rn(imag, s1)));
+            float as = static_cast<float>(in1_type(__fmul_rn(real, s1)));
+            float bc = static_cast<float>(in1_type(__fmul_rn(imag, c0)));
+            RopePair<out0_type> out{
+                out0_type(__fsub_rn(ac, bs)), out0_type(__fadd_rn(as, bc)),
+            };
+        """
+    else:
+        operation = r"""
+            RopePair<out0_type> out{
+                out0_type(__fadd_rn(__fmul_rn(real, c.first), __fmul_rn(-imag, s.first))),
+                out0_type(__fadd_rn(__fmul_rn(imag, c.second), __fmul_rn(real, s.second))),
+            };
+        """
     x_index = _interleaved_offset(shape, x_strides, x_offset) if x_strides else "i"
     cos_index, sin_index = (_interleaved_offset(shape, strides) for strides in freq_strides)
     paired = x_offset % 2 == 0 and all(stride % 2 == 0 for stride in x_strides[:-1])
@@ -629,8 +651,8 @@ def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides):
 
     template <bool aligned>
     __global__ static void interleaved_rope(
-            const in0_type* __restrict__ x, const float* __restrict__ cos,
-            const float* __restrict__ sin, out0_type* __restrict__ y, index_t total) {
+            const in0_type* __restrict__ x, const in1_type* __restrict__ cos,
+            const in2_type* __restrict__ sin, out0_type* __restrict__ y, index_t total) {
         index_t stride = (index_t)gridDim.x * blockDim.x;
         for (index_t pair = (index_t)blockIdx.x * blockDim.x + threadIdx.x;
              pair < total; pair += stride) {
@@ -645,10 +667,7 @@ def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides):
             auto s = rope_load<aligned>(sin, si);
             float real = static_cast<float>(xy.first);
             float imag = static_cast<float>(xy.second);
-            RopePair<out0_type> out{
-                out0_type(__fadd_rn(__fmul_rn(real, c.first), __fmul_rn(-imag, s.first))),
-                out0_type(__fadd_rn(__fmul_rn(imag, c.second), __fmul_rn(real, s.second))),
-            };
+            %(operation)s
             if (aligned) {
                 reinterpret_cast<RopePair<out0_type>*>(y)[pair] = out;
             } else {
@@ -658,7 +677,8 @@ def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides):
         }
     }
     }
-    """ % {"dim": shape[-1], "x_index": x_index, "cos_index": cos_index, "sin_index": sin_index}
+    """ % {"dim": shape[-1], "x_index": x_index, "cos_index": cos_index, "sin_index": sin_index,
+           "operation": operation}
     launch = r"""
     index_t total = out0->num / 2;
     int blocks = std::min((index_t)65535, (total + 255) / 256);
@@ -673,13 +693,13 @@ def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides):
 
 
 @optional_kernel("nn.interleaved_rope.inference", "cuda")
-def _interleaved_rope_cuda(x, cos, sin):
-    """Apply adjacent-pair rotation with FP32 arithmetic and one output rounding."""
-    contract = _interleaved_rope_contract(x, cos, sin)
+def _interleaved_rope_cuda(x, cos, sin, *, pair_coefficients=False):
+    """Rotate adjacent pairs, keeping the rounding of the source expression."""
+    contract = _interleaved_rope_contract(x, cos, sin, pair_coefficients)
     if contract is None:
         return None
     (dense, strides, offset), freq_strides = contract
-    header, launch = _interleaved_rope_source(tuple(x.shape), strides, offset, freq_strides)
+    header, launch = _interleaved_rope_source(tuple(x.shape), strides, offset, freq_strides, pair_coefficients)
     return jt.code(x.shape, x.dtype, [dense, cos, sin], cuda_header=header, cuda_src=launch).stop_grad()
 
 

@@ -30,6 +30,116 @@ def _without_clone(value):
     return value
 
 
+def _without_broadcast(value):
+    while value._producer_name() == "broadcast_to":
+        parent = value._input(0)
+        extra = value.ndim - parent.ndim
+        shape = (1,) * extra + tuple(parent.shape)
+        strides = (0,) * extra + tuple(parent._storage_strides())
+        if (len(shape) != value.ndim
+                or any(a not in (1, b) for a, b in zip(shape, value.shape))
+                or any(s != (p if a == b else 0)
+                       for a, b, p, s in zip(shape, value.shape, strides, value._storage_strides())
+                       if b > 1)):
+            break
+        value = parent
+    return value
+
+
+def _pair_slice(value, lane, unpacked):
+    value = _without_clone(_without_broadcast(value))
+    if value._producer_name() != "getitem":
+        return None
+    parent = value._input(0)
+    shape, strides = tuple(parent.shape), tuple(parent._storage_strides())
+    offset = value._storage_offset() - parent._storage_offset()
+    if unpacked:
+        if (len(shape) < 2 or shape[-1] != 2 or tuple(value.shape) != shape[:-1]
+                or tuple(value._storage_strides()) != strides[:-1] or offset != lane * strides[-1]):
+            return None
+        parent = _without_clone(parent)
+        if parent._producer_name() != "reshape":
+            return None
+        source = parent._input(0)
+        if tuple(source.shape) == shape[:-2] + (2 * shape[-2],):
+            return source
+    elif (shape and shape[-1] == 2 * value.shape[-1]
+          and tuple(value.shape[:-1]) == shape[:-1]
+          and tuple(value._storage_strides()) == strides[:-1] + (2 * strides[-1],)
+          and offset == lane * strides[-1]):
+        return parent
+    return None
+
+
+def _pair_product(value, lane, freq_lane):
+    if value._producer_op() != "binary.multiply":
+        return None
+    operands = value._inputs()
+    if len(operands) != 2:
+        return None
+    for data, freq in (operands, operands[::-1]):
+        if dtype_name(data.dtype) == "float32" and data._producer_unary() == "float32":
+            data = data._input(0)
+        source = _pair_slice(data, lane, unpacked=True)
+        weights = _pair_slice(freq, freq_lane, unpacked=False)
+        if source is not None and weights is not None and weights.dtype == value.dtype:
+            return source, weights
+    return None
+
+
+def _pair_rotation(value, lane):
+    if value._producer_op() != ("binary.add" if lane else "binary.subtract"):
+        return None
+    inputs = value._inputs()
+    if len(inputs) != 2:
+        return None
+    first, second = inputs
+    if first.dtype != value.dtype or second.dtype != value.dtype:
+        return None
+    even = _pair_product(first, 0, lane)
+    odd = _pair_product(second, 1, 1 - lane)
+    if even is None or odd is None or _stamp(even[0]) != _stamp(odd[0]):
+        return None
+    return (even[0], odd[1], even[1]) if lane else (even[0], even[1], odd[1])
+
+
+def try_pair_assignment(dst, index, value):
+    """Return a fused value or the first half's operands for a pending write."""
+    if (not jt.flags.no_grad or jt.flags.amp_reg or dst.placement_backend != 1
+            or dst.is_finished or not dst._storage_is_contiguous()
+            or not isinstance(value, jt.Var) or not isinstance(index, tuple)
+            or len(index) != 2 or index[0] is not Ellipsis or not isinstance(index[1], slice)):
+        return None, None
+    lane = 0 if index[1].start is None else index[1].start
+    shape = tuple(dst.shape)
+    if (lane not in (0, 1) or index[1].stop is not None or index[1].step != 2
+            or not shape or shape[-1] % 2
+            or tuple(value.shape) != shape[:-1] + (shape[-1] // 2,)):
+        return None, None
+    from jittor._runtime import step_capture
+
+    if not step_capture.active() or dst._is_view():
+        return None, None
+    if dst._producer_name() == "empty":
+        operands = _pair_rotation(value, lane)
+        if operands is not None:
+            return None, (lane, tuple(tuple(v._saved_storage_version()) for v in operands))
+        return None, None
+    saved = getattr(dst, "_jt_pair_assignment", None)
+    if saved is None or saved[0] != tuple(dst._saved_storage_version()) or saved[1] == lane:
+        return None, None
+    operands = _pair_rotation(value, lane)
+    if (operands is None or tuple(tuple(v._saved_storage_version()) for v in operands) != saved[2]
+            or tuple(operands[0].shape) != shape or operands[0].dtype != dst.dtype):
+        return None, None
+    return try_dispatch("nn.interleaved_rope.inference", *operands, pair_coefficients=True), None
+
+
+def remember_pair_assignment(dst, tag):
+    if tag is not None:
+        dst._jt_pair_assignment = (tuple(dst._saved_storage_version()), *tag)
+
+
 def tag_stack(values, dim, out):
     if len(values) != 2 or not all(isinstance(v, jt.Var) for v in values):
         return out
@@ -110,18 +220,7 @@ def _cos_operand(term, x):
         if value.var_ptr != x.var_ptr and value._producer_unary() == "float32":
             value = value._input(0)
         if value.var_ptr == x.var_ptr:
-            while cos._producer_name() == "broadcast_to":
-                parent = cos._input(0)
-                # Only remove a right-aligned broadcast, as used by multiply.
-                extra = cos.ndim - parent.ndim
-                shape = (1,) * extra + tuple(parent.shape)
-                strides = (0,) * extra + tuple(parent._storage_strides())
-                expected = tuple(s if a == b else 0 for a, b, s in zip(shape, cos.shape, strides))
-                if (len(shape) != cos.ndim or any(a not in (1, b) for a, b in zip(shape, cos.shape))
-                        or any(s != t for a, s, t in zip(cos.shape, expected, cos._storage_strides()) if a != 1)):
-                    break
-                cos = parent
-            return cos
+            return _without_broadcast(cos)
     return None
 
 

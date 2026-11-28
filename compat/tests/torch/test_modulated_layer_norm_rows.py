@@ -79,6 +79,25 @@ def test_modulated_layer_norm_cast_preserves_mutation():
                                       np.full((2, 5, 128), 3, dtype=np.float32))
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_float_layer_norm_respects_narrow_modulation_rounding(device):
+    from jittor._runtime.dispatch import override_kernel
+
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA is unavailable")
+    with torch.no_grad(), forbid_backend_fallbacks():
+        x = torch.tensor([[1, -1] * 64] * 7, dtype=torch.bfloat16, device=device)
+        scale = torch.full((128,), 1 / 256, dtype=x.dtype, device=device)
+        shift = torch.full((128,), 1 / 256, dtype=x.dtype, device=device)
+        with override_kernel("nn.layer_norm.modulated.mixed", "cuda", None):
+            expected = (F.layer_norm(x.float(), (128,)) * (1 + scale) + shift).type_as(x)
+        actual = (F.layer_norm(x.float(), (128,)) * (1 + scale) + shift).type_as(x)
+        if device == "cuda":
+            assert actual._producer_name() == "code"
+        assert actual.device.type == device and actual.dtype == x.dtype
+        np.testing.assert_array_equal(actual.float().cpu().numpy(), expected.float().cpu().numpy())
+
+
 @pytest.mark.parametrize("width", [123, 768])
 def test_modulated_layer_norm_reads_broadcast_add_slices(width):
     import jittor as jt

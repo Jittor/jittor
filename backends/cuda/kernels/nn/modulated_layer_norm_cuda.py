@@ -87,7 +87,7 @@ def _modulated_layer_norm_contract(x, scale, shift, eps, output_dtype=None):
         if modulation_dtype != dtype:
             return None
         output_dtype = dtype
-    elif (dtype not in ("bfloat16", "float16") or modulation_dtype != "float32"
+    elif (dtype not in ("bfloat16", "float16") or modulation_dtype not in (dtype, "float32")
           or output_dtype not in (dtype, "float32") or jt.flags.amp_reg):
         return None
     try:
@@ -114,7 +114,7 @@ def _supports_modulated_layer_norm(x, scale, shift, eps, one_plus=True):
 
 
 @functools.lru_cache(maxsize=256)
-def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False, additive=False):
+def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows, additive, mixed):
     """Build vectorized + register-cached CUDA kernel for modulated LayerNorm.
 
     ``mod_mode``: 0 = broadcast single row, 1 = per-batch (row / rows_per_mod),
@@ -131,7 +131,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode, many_rows=False, additive=F
         "0LL" if mod_mode == 0 else ("(row / rows_per_mod)" if mod_mode == 1 else "row")
     )
     one_plus_int = 1 if one_plus else 0
-    compute = "float" if additive else "in1_type"
+    compute = "float" if mixed else "in1_type"
     additive_args = (
         "const in3_type* scale_add, const in4_type* shift_add, "
         "long long rows_per_add, long long scale_add_pitch, long long shift_add_pitch, "
@@ -655,7 +655,7 @@ def _modulated_layer_norm_code(x, scale, shift, eps, one_plus, output_dtype=None
         output_dtype,
         [x, scale, shift, *extra_inputs],
         cuda_header=_PACK_HEADER,
-        cuda_src=_modulated_ln_source(hidden, bool(one_plus), mod_mode, many_rows, bool(extra_inputs)),
+        cuda_src=_modulated_ln_source(hidden, bool(one_plus), mod_mode, many_rows, bool(extra_inputs), mixed),
         data={
             "eps": eps_value,
             "rows_per_mod": float(rows_per_mod),
