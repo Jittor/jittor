@@ -131,6 +131,15 @@ class TestCudnnConvPlan(unittest.TestCase):
                         self.assertEqual(actual.location(), "device")
                         np.testing.assert_allclose(actual.numpy(), expected, atol=2e-6, rtol=2e-5)
 
+    def test_heuristic_fp32_weight_gradients_match_cpu(self):
+        cudnn = jt.cudnn
+        self.addCleanup(cudnn.set_benchmark, cudnn.get_benchmark())
+        self.addCleanup(cudnn.cudnn_clear_plan_cache)
+        cudnn.set_benchmark(0)
+        for n, channels, spatial, filters in ((2, 64, 10, 64), (1, 80, 16, 96)):
+            with self.subTest(channels=channels, spatial=spatial, filters=filters):
+                self._check(n, channels, spatial, filters, 3, padding=1, tf32=False)
+
     def test_stride_dilation(self):
         self._check(2, 6, 20, 5, 3, stride=2, padding=2, dilation=2)
 
