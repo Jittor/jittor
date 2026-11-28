@@ -2833,7 +2833,15 @@ def _api_exponential(self, lambd=1.0, *, generator=None):
 
 
 def _api_tolist(self):
-    return self.item() if getattr(self, '_torch_0d', False) else self.numpy().tolist()
+    if getattr(self, '_torch_0d', False):
+        return self.item()
+    if _owner.jt.flags.keep_graph == 2:
+        from jittor._runtime.step_capture import guarded_array
+
+        array = guarded_array(self)
+        if array is not None:
+            return array.tolist()
+    return self.numpy().tolist()
 
 
 _FAST_CONTIGUOUS = None

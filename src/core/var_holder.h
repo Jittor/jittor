@@ -182,6 +182,7 @@ struct VarHolder {
      */
     // @pyjt(fetch_sync,numpy)
     ArrayArgs fetch_sync();
+    ArrayArgs read_array(bool weak_sync);
 
     inline void release_holder() {var->holder = nullptr;}
     inline void own_holder() {var->holder = this;}
@@ -741,6 +742,9 @@ public:
 
     // @pyjt(_step_guarded_scalar)
     PyObject* step_guarded_scalar(int64 epoch);
+
+    // @pyjt(_step_guarded_array)
+    PyObject* step_guarded_array(int64 epoch);
 
     // @pyjt(_step_guarded_predicate)
     PyObject* step_guarded_predicate(int64 epoch);

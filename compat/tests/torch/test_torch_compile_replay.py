@@ -176,6 +176,40 @@ class _Case:
 @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled,
                  "no usable CUDA in this build")
 class TestCompileReplayCuda(_Case, unittest.TestCase):
+    def test_step_guards_small_tensor_reads_used_by_python(self):
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            sizes = torch.tensor([3, 1], device=self.device)
+
+            def apply(values):
+                extent = sizes.max().item()
+                prefix = torch.arange(extent, device=self.device).cumsum(0)
+                indices = (prefix + sizes[1]).tolist()
+                return values[indices] * 2
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            for offset in range(6):
+                values = torch.arange(10, device=self.device) + offset
+                self.assertEqual(compiled(values).tolist(), [2 + 2 * offset, 4 + 2 * offset, 8 + 2 * offset])
+            self.assertIsNone(compiled.refused)
+            self.assertGreater(compiled.stats["graph"], 0)
+
+            sizes.copy_(torch.tensor([4, 2], device=self.device))
+            self.assertEqual(compiled(values).tolist(), [14, 16, 20, 26])
+            self.assertEqual(compiled.stats["captured"], 2)
+
+    def test_step_refuses_a_list_read_from_a_runtime_input(self):
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+            def apply(sizes, values):
+                return values[:sum(sizes.tolist())] + 1
+
+            compiled = torch.compile(apply, mode="reduce-overhead")
+            values = torch.arange(6, device=self.device)
+            for size in (2, 3, 4):
+                sizes = torch.tensor([size, 1], device=self.device)
+                self.assertEqual(compiled(sizes, values).tolist(), list(range(1, size + 2)))
+            self.assertIn("read a value back", compiled.refused)
+            self.assertEqual(compiled.stats["replayed"], 0)
+
     device = "cuda"
 
     def test_the_step_is_recorded_as_one_launch(self):

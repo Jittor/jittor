@@ -133,34 +133,34 @@ def active():
     return _ACTIVE is not None
 
 
-def guarded_scalar(value):
-    """Read a shape scalar from small pure expressions over pre-trace leaves."""
+def _guarded_read(read):
     cap = _ACTIVE
     if cap is None or cap.scalar_epoch is None:
         return None
-    result = value._step_guarded_scalar(cap.scalar_epoch)
+    result = read(cap.scalar_epoch)
     if result is None:
         return None
-    scalar, guards = result
+    value, guards = result
     for source, version in guards:
         cap.scalar_guards.setdefault(id(source), (source, version))
     cap.used_guarded_scalar = True
-    return scalar
+    return value
+
+
+def guarded_scalar(value):
+    """Read a shape scalar from small pure expressions over pre-trace leaves."""
+    return _guarded_read(value._step_guarded_scalar)
+
+
+def guarded_array(value):
+    """Read a small pure tensor as an independent copy for Python list conversion."""
+    return _guarded_read(value._step_guarded_array)
 
 
 def guarded_predicate(value):
     """Read a pure boolean predicate over constants and pre-trace leaves."""
-    cap = _ACTIVE
-    if cap is None or cap.scalar_epoch is None:
-        return None
-    result = value._step_guarded_predicate(cap.scalar_epoch)
-    if result is None:
-        return None
-    scalar, guards = result
-    for source, version in guards:
-        cap.scalar_guards.setdefault(id(source), (source, version))
-    cap.used_guarded_scalar = True
-    return bool(scalar)
+    result = _guarded_read(value._step_guarded_predicate)
+    return None if result is None else bool(result)
 
 
 def tracing():
