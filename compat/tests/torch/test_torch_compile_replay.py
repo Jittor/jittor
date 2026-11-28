@@ -40,6 +40,32 @@ class _Net(nn.Module):
 
 
 class _Case:
+    def test_dense_concat_replays_two_pitched_inputs(self):
+        from jittor._runtime.step_capture import tracing
+
+        for dim, left_shape, right_shape in (
+                (1, (3, 5, 16), (3, 7, 16)),
+                (-1, (3, 5, 13), (3, 5, 5))):
+            with self.subTest(dim=dim), torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+                left = np.arange(np.prod(left_shape), dtype=np.int32).reshape(left_shape)
+                right = np.arange(np.prod(right_shape), dtype=np.int32).reshape(right_shape)
+
+                def concatenate(x, y):
+                    output = torch.cat((x, y), dim)
+                    if x.device.type == "cuda" and tracing():
+                        self.assertEqual(output._producer_name(), "code")
+                    return output
+
+                run = torch.compile(concatenate, mode="reduce-overhead")
+                for offset in range(7):
+                    actual = run(torch.tensor(left + offset, device=self.device),
+                                 torch.tensor(right - offset, device=self.device))
+                    self.assertEqual(actual.device.type, self.device)
+                    np.testing.assert_array_equal(actual.cpu().numpy(),
+                                                  np.concatenate((left + offset, right - offset), dim))
+                if self.device == "cuda":
+                    self.assertGreater(run.stats["graph"], 0, run.graph_refused)
+
     """The tests, run once per device by the classes below."""
 
     device = "cpu"
