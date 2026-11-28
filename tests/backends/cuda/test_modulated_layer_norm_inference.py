@@ -66,6 +66,27 @@ class TestModulatedLayerNormInference(unittest.TestCase):
             self._check((1, 32, 1536), (1, 1, 1536), dtype, one_plus=False)
             self._check((16, 1536), (1536,), dtype, one_plus=True)
 
+    def test_strided_modulation_views_do_not_materialize_rows(self):
+        hidden = 768
+        inputs = self.rs.randn(2, 13, hidden).astype(np.float32)
+        terms = self.rs.randn(2, 13, 4, hidden).astype(np.float32)
+        for dtype in ("float32", "bfloat16"):
+            with jt.no_grad():
+                x = jt.array(inputs).cast(dtype)
+                packed = jt.array(terms).cast(dtype)
+                scale, shift = packed[:, :, 1, :], packed[:, :, 3, :]
+                op = "nn.layer_norm.modulated"
+                expected = try_dispatch(op, x, scale.contiguous(), shift.contiguous(), 1e-6)
+                expected.sync(True)
+                with jt.profile(device=True, memory=False) as profile:
+                    output = try_dispatch(op, x, scale, shift, 1e-6)
+                    output.sync(True)
+                assert output.location() == "device"
+                assert any("mln_vec" in kernel["name"] for kernel in profile.result.kernel_records)
+                assert all(profile.result.strings[record["name"]] != "contiguous"
+                           for record in profile.result.op_records)
+                np.testing.assert_array_equal(output.float32().numpy(), expected.float32().numpy())
+
     def test_overflow_row_double_fallback(self):
         self._check((2, 8, 768), (2, 1, 768), "float32", one_plus=True, huge_row=True)
 

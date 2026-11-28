@@ -30,6 +30,39 @@ def _resolve_mod_layout(x_shape, mod_shape):
     return None
 
 
+def _strided_modulation_operand(value, hidden, rows):
+    """Find the dense storage and row pitch of a uniformly strided view."""
+    strides = tuple(value._storage_strides())
+    if strides[-1] != 1:
+        return None
+    pitch, outer = hidden, 1
+    for extent, stride in reversed(tuple(zip(value.shape[:-1], strides[:-1]))):
+        if extent == 1:
+            continue
+        if outer == 1:
+            pitch = stride
+            if pitch < hidden:
+                return None
+        elif stride != outer * pitch:
+            return None
+        outer *= extent
+
+    root = value
+    while not root._storage_is_contiguous():
+        parent = root._view_base_object()
+        if parent is None:
+            if root.is_finished or not root._producer_is_view():
+                return None
+            parent = root._input(0)
+        if parent is None or parent.var_ptr == root.var_ptr:
+            return None
+        root = parent
+    offset = value._storage_offset() - root._storage_offset()
+    if root.dtype != value.dtype or offset < 0 or offset + (rows - 1) * pitch + hidden > root.numel():
+        return None
+    return root, pitch, offset
+
+
 def _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=True):
     import jittor as jt
     if not all(isinstance(value, jt.Var) for value in (x, scale, shift)):
@@ -118,7 +151,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             const in1_type* __restrict__ scale,
             const in2_type* __restrict__ shift,
             out0_type* __restrict__ y,
-            long long rows_per_mod, double eps) {{
+            long long rows_per_mod, long long scale_pitch, long long shift_pitch, double eps) {{
         if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0) {{
             constexpr int kVecN = {vec2_n};
             constexpr int kThreads = {vec2_t};
@@ -127,6 +160,8 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             constexpr bool kVecCache = kVecPer <= 4;
             long long row = blockIdx.x;
             long long mrow = {mod_idx_expr};
+            scale += mrow * scale_pitch;
+            shift += mrow * shift_pitch;
             int tid = threadIdx.x;
             __shared__ float wbuf[kWarps];
             __shared__ double dwbuf[kWarps];
@@ -134,8 +169,8 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             __shared__ double d_mean, d_inv;
             __shared__ int use_d;
             const uint4* x8 = reinterpret_cast<const uint4*>(x + row * {hidden}LL);
-            const uint4* sc8 = reinterpret_cast<const uint4*>(scale + mrow * {hidden}LL);
-            const uint4* sh8 = reinterpret_cast<const uint4*>(shift + mrow * {hidden}LL);
+            const uint4* sc8 = reinterpret_cast<const uint4*>(scale);
+            const uint4* sh8 = reinterpret_cast<const uint4*>(shift);
             uint4* y8 = reinterpret_cast<uint4*>(y + row * {hidden}LL);
             uint4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
@@ -260,10 +295,10 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             for (int d = tid; d < {hidden}; d += kThreads) {{
                 out0_type nv = out0_type(static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - dm) * di));
                 out0_type ms = {one_plus_int}
-                    ? out0_type(1.0f + static_cast<float>(scale[mrow * {hidden}LL + d]))
-                    : out0_type(static_cast<float>(scale[mrow * {hidden}LL + d]));
+                    ? out0_type(1.0f + static_cast<float>(scale[d]))
+                    : out0_type(static_cast<float>(scale[d]));
                 out0_type pr = out0_type(static_cast<float>(nv) * static_cast<float>(ms));
-                y[row * {hidden}LL + d] = out0_type(static_cast<float>(pr) + static_cast<float>(shift[mrow * {hidden}LL + d]));
+                y[row * {hidden}LL + d] = out0_type(static_cast<float>(pr) + static_cast<float>(shift[d]));
             }}
         }}
     }}
@@ -272,7 +307,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             const in1_type* __restrict__ scale,
             const in2_type* __restrict__ shift,
             out0_type* __restrict__ y,
-            long long rows_per_mod, double eps) {{
+            long long rows_per_mod, long long scale_pitch, long long shift_pitch, double eps) {{
         if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0) {{
             constexpr int kVecN = {vec4_n};
             constexpr int kThreads = {vec4_t};
@@ -281,6 +316,8 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             constexpr bool kVecCache = kVecPer <= 4;
             long long row = blockIdx.x;
             long long mrow = {mod_idx_expr};
+            scale += mrow * scale_pitch;
+            shift += mrow * shift_pitch;
             int tid = threadIdx.x;
             __shared__ float wbuf[kWarps];
             __shared__ double dwbuf[kWarps];
@@ -288,8 +325,8 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             __shared__ double d_mean, d_inv;
             __shared__ int use_d;
             const float4* x4 = reinterpret_cast<const float4*>(x + row * {hidden}LL);
-            const float4* sc4 = reinterpret_cast<const float4*>(scale + mrow * {hidden}LL);
-            const float4* sh4 = reinterpret_cast<const float4*>(shift + mrow * {hidden}LL);
+            const float4* sc4 = reinterpret_cast<const float4*>(scale);
+            const float4* sh4 = reinterpret_cast<const float4*>(shift);
             float4* y4 = reinterpret_cast<float4*>(y + row * {hidden}LL);
             float4 cache[kVecCache && kVecPer > 0 ? kVecPer : 1];
             float sum = 0.0f;
@@ -392,9 +429,9 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             double di = d_inv;
             for (int d = tid; d < {hidden}; d += kThreads) {{
                 float nv = static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - dm) * di);
-                float sv = static_cast<float>(scale[mrow * {hidden}LL + d]);
+                float sv = static_cast<float>(scale[d]);
                 float ms = {one_plus_int} ? (1.0f + sv) : sv;
-                y[row * {hidden}LL + d] = out0_type(nv * ms + static_cast<float>(shift[mrow * {hidden}LL + d]));
+                y[row * {hidden}LL + d] = out0_type(nv * ms + static_cast<float>(shift[d]));
             }}
         }}
     }}
@@ -403,9 +440,11 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             const in1_type* __restrict__ scale,
             const in2_type* __restrict__ shift,
             out0_type* __restrict__ y,
-            long long rows_per_mod, double eps) {{
+            long long rows_per_mod, long long scale_pitch, long long shift_pitch, double eps) {{
         long long row = blockIdx.x;
         long long mrow = {mod_idx_expr};
+        scale += mrow * scale_pitch;
+        shift += mrow * shift_pitch;
         int tid = threadIdx.x;
         __shared__ float wbuf[4];
         __shared__ double dwbuf[4];
@@ -452,8 +491,8 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
             float nf = use_d
                 ? static_cast<float>((static_cast<double>(x[row * {hidden}LL + d]) - d_mean) * d_inv)
                 : (static_cast<float>(x[row * {hidden}LL + d]) - s_mean) * s_inv;
-            float sv = static_cast<float>(scale[mrow * {hidden}LL + d]);
-            float shv = static_cast<float>(shift[mrow * {hidden}LL + d]);
+            float sv = static_cast<float>(scale[d]);
+            float shv = static_cast<float>(shift[d]);
             if (sizeof(out0_type) == 2) {{
                 out0_type nv = out0_type(nf);
                 out0_type ms = {one_plus_int} ? out0_type(1.0f + sv) : out0_type(sv);
@@ -468,14 +507,23 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
     double eps = data["eps"];
     long long rows = in0->num / {hidden};
     long long rows_per_mod = (long long)data["rows_per_mod"];
-    bool aligned16 = ((((size_t)in0_p | (size_t)in1_p | (size_t)in2_p | (size_t)out0_p) & 15u) == 0);
+    long long scale_pitch = (long long)data["scale_pitch"];
+    long long shift_pitch = (long long)data["shift_pitch"];
+    const auto* scale = in1_p + (long long)data["scale_offset"];
+    const auto* shift = in2_p + (long long)data["shift_offset"];
+    bool aligned16 = ((((size_t)in0_p | (size_t)scale | (size_t)shift | (size_t)out0_p |
+                        (size_t)scale_pitch * sizeof(in1_type) |
+                        (size_t)shift_pitch * sizeof(in2_type)) & 15u) == 0);
     if (rows > 0) {{
         if (sizeof(in0_type) == 2 && sizeof(out0_type) == 2 && {vec2_n} > 0 && aligned16) {{
-            mln_vec2b<<<(unsigned)rows, {vec2_t}>>>(in0_p, in1_p, in2_p, out0_p, rows_per_mod, eps);
+            mln_vec2b<<<(unsigned)rows, {vec2_t}>>>(
+                in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }} else if (sizeof(in0_type) == 4 && sizeof(out0_type) == 4 && {vec4_n} > 0 && aligned16) {{
-            mln_vec4b<<<(unsigned)rows, {vec4_t}>>>(in0_p, in1_p, in2_p, out0_p, rows_per_mod, eps);
+            mln_vec4b<<<(unsigned)rows, {vec4_t}>>>(
+                in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }} else {{
-            mln_scalar<<<(unsigned)rows, 128>>>(in0_p, in1_p, in2_p, out0_p, rows_per_mod, eps);
+            mln_scalar<<<(unsigned)rows, 128>>>(
+                in0_p, scale, shift, out0_p, rows_per_mod, scale_pitch, shift_pitch, eps);
         }}
     }}
     CHECK(0 == cudaGetLastError());
@@ -499,14 +547,23 @@ def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps, one_plus=True):
         mod_mode = 2
     else:
         mod_mode = 1
-    scale_flat = scale.reshape((mod_rows, hidden))
-    shift_flat = shift.reshape((mod_rows, hidden))
+    scale_layout = _strided_modulation_operand(scale, hidden, mod_rows)
+    shift_layout = _strided_modulation_operand(shift, hidden, mod_rows)
+    scale, scale_pitch, scale_offset = scale_layout or (scale.reshape((mod_rows, hidden)), hidden, 0)
+    shift, shift_pitch, shift_offset = shift_layout or (shift.reshape((mod_rows, hidden)), hidden, 0)
     return _stop_grad_outputs(jt.code(
         x.shape,
         x.dtype,
-        [x, scale_flat, shift_flat],
+        [x, scale, shift],
         cuda_src=_modulated_ln_source(hidden, one_plus_flag, mod_mode),
-        data={"eps": eps_value, "rows_per_mod": float(rows_per_mod)},
+        data={
+            "eps": eps_value,
+            "rows_per_mod": float(rows_per_mod),
+            "scale_pitch": float(scale_pitch),
+            "shift_pitch": float(shift_pitch),
+            "scale_offset": float(scale_offset),
+            "shift_offset": float(shift_offset),
+        },
     ))
 
 
