@@ -1119,7 +1119,8 @@ const NanoVector* transpose_axes(Op* op) {
 Var* before_matching_transpose(Var* value, const NanoVector& axes) {
     auto* op = pending_producer(value);
     const auto* inner_axes = transpose_axes(op);
-    return inner_axes && *inner_axes == axes && !op->_inputs.empty() ? op->input(0) : nullptr;
+    return inner_axes && nano_vector_content_eq(*inner_axes, axes) && !op->_inputs.empty()
+        ? op->input(0) : nullptr;
 }
 
 Var* matching_rotate_half_source(Var* negative, Var* positive, int64 dim) {
@@ -1176,9 +1177,9 @@ PyObject* neox_rope_cosine(PyObject* product, PyObject* source) {
         Py_RETURN_NONE;
     auto* original = GET_RAW_PTR(VarHolder, source)->var;
     auto* multiply = pending_producer(GET_RAW_PTR(VarHolder, product)->var);
-    const auto* transpose = dynamic_cast<TransposeOp*>(multiply);
-    if (transpose) {
-        const auto& axes = transpose->axes;
+    const auto* outer_axes = transpose_axes(multiply);
+    if (outer_axes) {
+        const auto& axes = *outer_axes;
         const int rank = axes.size();
         if (!rank || multiply->_inputs.empty()) Py_RETURN_NONE;
         for (int i = 0; i < rank; ++i) {
@@ -1192,9 +1193,9 @@ PyObject* neox_rope_cosine(PyObject* product, PyObject* source) {
         Py_RETURN_NONE;
     Var* left = multiply->input(0);
     Var* right = multiply->input(1);
-    if (transpose) {
-        left = before_matching_transpose(left, transpose->axes);
-        right = before_matching_transpose(right, transpose->axes);
+    if (outer_axes) {
+        left = before_matching_transpose(left, *outer_axes);
+        right = before_matching_transpose(right, *outer_axes);
         if (!left || !right) Py_RETURN_NONE;
     }
     left = rope_factor_source(left, original);

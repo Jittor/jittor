@@ -33,3 +33,12 @@ def test_rotary_operand_recognition():
         rotated = np.concatenate((-values[..., 4:], values[..., :4]), axis=-1)
         np.testing.assert_array_equal(result.cpu().numpy(), values * factors + rotated * factors)
         np.testing.assert_array_equal(factor.cpu().numpy(), factors.reshape(1, 1, 1, 8))
+
+        # Pending transposed inputs (e.g. attention Q/K views inside capture) wrap
+        # the multiply in FuseTransposeOp rather than TransposeOp.
+        raw = torch.tensor(values.transpose(0, 2, 1, 3), device="cuda")
+        qt = (raw + 1.0).transpose(1, 2)
+        scaled_t = qt * cosine
+        factor_t = jt.core._neox_rope_cosine(scaled_t, qt)
+        assert factor_t is not None and factor_t.is_cuda
+        np.testing.assert_array_equal(factor_t.cpu().numpy(), factors.reshape(1, 1, 1, 8))
