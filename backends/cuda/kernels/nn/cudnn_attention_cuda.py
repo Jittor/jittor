@@ -157,7 +157,7 @@ int jt_cudnn_sdpa_backward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_
 # in. `layout` has a bit per tensor (q 1, k 2, v 4) for one given to the kernel
 # as [batch, seq, heads, head_dim] -- the tensor a transpose view was taken of
 # -- rather than [batch, heads, seq, head_dim]; see cudnn_sdpa.cc.
-_Q, _K, _V, _PACKED_QKV, _TUNE_FORWARD, _DENSE_OUTPUT = 1, 2, 4, 8, 16, 32
+_Q, _K, _V, _PACKED_QKV, _TUNE_FORWARD = 1, 2, 4, 8, 16
 
 
 def _dims(layout):
@@ -239,14 +239,11 @@ def _packed_qkv_view(query, key, value):
     return root.detach().reshape((b, s, 3, h, d))
 
 
-def _physical(t, *, read_pending_copy=False):
+def _physical(t):
     """(tensor, seq_major): the [b, s, h, d] source of a [b, h, s, d] transpose
     view, which the kernel reads in place, or `t` itself."""
     if not isinstance(t, jt.Var):
         return t, False
-    original = t
-    if read_pending_copy and t._is_pending_contiguous():
-        t = t._input(0)
     if tuple(t._transpose_view_axes()) == (0, 2, 1, 3):
         source = t._transpose_view_source()
         if source is not None:
@@ -257,7 +254,7 @@ def _physical(t, *, read_pending_copy=False):
         inputs = t._inputs()
         if inputs:
             return inputs[0], True
-    return original, False
+    return t, False
 
 
 def _header():
@@ -327,10 +324,7 @@ def _forward(query, key, value, scale, causal, training, bias=None, layout=0):
     bias_b, bias_h = _bias_dims(bias)
     packed = bool(layout & _PACKED_QKV)
     b, h, sq, d = _logical(query, layout & _Q)
-    if layout & _DENSE_OUTPUT:
-        out_shape = (b, h, sq, d)
-    else:
-        out_shape = (b, sq, h, d) if packed else query.shape
+    out_shape = (b, sq, h, d) if packed else query.shape
     stats_shape = (b, h, sq, 1)
     if _HEADER_TEXT[0] is None:
         _HEADER_TEXT[0] = _header()
@@ -556,22 +550,16 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
     packed_qkv = None if training else _packed_qkv_view(query, key, value)
     if packed_qkv is not None:
         query = key = value = packed_qkv
-        q_seq = k_seq = v_seq = out_seq = True
+        q_seq = k_seq = v_seq = True
         layout = _PACKED_QKV
     else:
-        read_pending_copy = not training and jt.flags.keep_graph == 2
-        dense_query = read_pending_copy and query._is_pending_contiguous()
-        (query, q_seq), (key, k_seq), (value, v_seq) = (
-            _physical(t, read_pending_copy=read_pending_copy) for t in (query, key, value))
+        (query, q_seq), (key, k_seq), (value, v_seq) = (_physical(t) for t in (query, key, value))
         layout = (_Q if q_seq else 0) | (_K if k_seq else 0) | (_V if v_seq else 0)
-        out_seq = q_seq and not dense_query
-        if q_seq and dense_query:
-            layout |= _DENSE_OUTPUT
 
     def logical(out):
-        # Preserve the output layout requested by the original query, even
-        # when cuDNN reads its pending transpose directly.
-        return out.transpose(0, 2, 1, 3) if out_seq else out
+        # The output is laid out as the query is; hand it back as the
+        # [b, h, s, d] view the caller asked for.
+        return out.transpose(0, 2, 1, 3) if q_seq else out
 
     if attn_mask is None:
         if not training and min(_logical(query, q_seq)[2], _logical(key, k_seq)[2]) >= 256:
@@ -605,7 +593,7 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         out = _forward(query, key, value, scale, bool(is_causal), False, bias, layout)[0]
     # Empty rows were made safe before cuDNN computes statistics. This masks
     # their outputs and upstream gradients to zero in the kernel's layout.
-    if out_seq:
+    if q_seq:
         live = live._storage_permute(jt.NanoVector((0, 2, 1, 3)))
     return logical(jt.ternary(live.broadcast(out.shape), out, jt.zeros_like(out)))
 
