@@ -154,6 +154,34 @@ def test_trace_local_slice_offset_tracks_lazy_inplace_addition(device):
             assert compiled.stats["graph"], compiled.graph_refused
 
 
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)])
+def test_ready_output_does_not_invalidate_captured_work(device):
+    if device == "cuda":
+        require_accelerator("cuda")
+    bias = torch.tensor([1.0, 3.0], device=device)
+    bias.sync()
+
+    def forward(source):
+        return source + bias, bias
+
+    with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+        compiled = torch.compile(forward, mode="reduce-overhead")
+        for index in range(8):
+            source = torch.full((2,), float(index), device=device)
+            result, ready = compiled(source)
+            assert result.device.type == ready.device.type == device
+            np.testing.assert_array_equal(result.cpu().numpy(), [index + 1, index + 3])
+        assert compiled.stats["replayed"]
+        if device == "cuda":
+            assert compiled.stats["graph"], compiled.graph_refused
+
+        bias.add_(2)
+        result, updated = compiled(source)
+        np.testing.assert_array_equal(result.cpu().numpy(), [index + 3, index + 5])
+        np.testing.assert_array_equal(updated.cpu().numpy(), [3, 5])
+        np.testing.assert_array_equal(ready.cpu().numpy(), [1, 3])
+
+
 @pytest.mark.cuda
 def test_trace_predicate_guards_a_closed_over_tensor():
     require_accelerator("cuda")

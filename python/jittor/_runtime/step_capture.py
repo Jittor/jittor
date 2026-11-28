@@ -547,7 +547,7 @@ class _Capture:
                  "state_lists", "prologue", "guards", "signature", "refused", "random",
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
                  "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
-                 "shape_dependencies", "folded_leaves", "scalar_epoch", "scalar_guards",
+                 "shape_dependencies", "pending_roots", "folded_leaves", "scalar_epoch", "scalar_guards",
                  "used_guarded_scalar", "short_attention", "mask_terms")
 
     def __init__(self):
@@ -839,6 +839,7 @@ class StepCapture:
                             for holder in published.values()]
         roots = _unique([source for _, source in gradient_sources]
                         + outputs + [new for _, _, new in records] + cap.shape_dependencies)
+        ready_roots = {id(root) for root in roots if root.is_finished}
         # Everything that can refuse is decided before the graph runs: a
         # refused step then runs exactly once, as written. Deciding after --
         # running it kept, then putting the state back and running it again --
@@ -952,6 +953,9 @@ class StepCapture:
         cap.outputs = outputs
         cap.template = template
         cap.roots = roots
+        # Keep already materialized outputs as graph leaves for address checks
+        # and readout copies. Only a root with captured work can lose that work.
+        cap.pending_roots = [root for root in roots if id(root) not in ready_roots]
         cap.state = state
         cap.state_lists = ([holder for holder, _, _, _ in state],
                            [old for _, old, _, _ in state])
@@ -1003,7 +1007,7 @@ class StepCapture:
 
     # -- guards --------------------------------------------------------
     def _stale(self, cap, args, kwargs):
-        if _core._first_finished(cap.roots) >= 0:
+        if _core._first_finished(cap.pending_roots) >= 0:
             return "the captured graph was finished, most likely by a read"
         if self._call_signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype, or the gradient mode changed"
