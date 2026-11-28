@@ -365,6 +365,14 @@ def _concat_after_kernel(arr, dim, dtype):
     if _tracing is None:
         from .._runtime.step_capture import tracing as _tracing
     if _tracing():
+        if _jt().flags.no_grad and len(arr) == 2 and all(
+                _jittor_dtype_name(value.dtype) == _jittor_dtype_name(dtype) for value in arr):
+            from jittor.backends.cuda.kernels.misc import concat_cuda as _concat_cuda  # noqa: F401
+            kernel = select_kernel("tensor.concat.strided_inference", arr, dim)
+            if kernel is not None:
+                packed = kernel(arr, dim)
+                if packed is not None:
+                    return packed
         fused = _concat_fused(arr, dim, dtype)
         if fused is not None:
             if len(arr) == 2 and dim == len(arr[0].shape) - 1:
