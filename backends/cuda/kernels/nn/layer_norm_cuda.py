@@ -1202,6 +1202,26 @@ def _nchw_block_rows_source(hidden):
     """
 
 
+def _offer_narrow_layer_norm(y, x, normalized_shape, weight, bias, eps):
+    if not jt.flags.no_grad or jt.flags.amp_reg or x._producer_unary() != "float32":
+        return y
+    inputs = x._inputs()
+    if len(inputs) != 1 or _jittor_dtype_name(inputs[0].dtype) not in ("float16", "bfloat16"):
+        return y
+    narrow = inputs[0]
+    operands = tuple(value for value in (narrow, weight, bias) if isinstance(value, jt.Var))
+    versions = tuple(value._saved_storage_version() for value in operands)
+
+    def rebuild(dtype):
+        if (dtype != _jittor_dtype_name(narrow.dtype) or not jt.flags.no_grad or jt.flags.amp_reg
+                or tuple(value._saved_storage_version() for value in operands) != versions):
+            return None
+        return _layer_norm_no_grad_cuda(narrow, normalized_shape, weight, bias, eps)
+
+    y._jt_narrow_layer_norm = (y._saved_storage_version(), rebuild)
+    return y
+
+
 @optional_kernel("nn.layer_norm.inference", ("cuda", "rocm_legacy", "corex_legacy"),
                  dtypes=("float16", "bfloat16", "float32"),
                  supports=_supports_layer_norm_inference)
@@ -1241,18 +1261,21 @@ def _layer_norm_no_grad_cuda(
         y = jt.code(x.shape, x.dtype, [x, weight],
                     cuda_src=_weight_only_source(hidden, _warp_rows(x, hidden), float(bias)),
                     data={"eps": eps_value})
-        return _stop_grad_outputs(y)
+        return _offer_narrow_layer_norm(
+            _stop_grad_outputs(y), x, normalized_shape, weight, bias, eps)
     nchw_src = _nchw_physical(x)
     if nchw_src is not None:
         spatial = int(nchw_src.shape[2]) * int(nchw_src.shape[3])
         if spatial > 0:
             y = jt.code(x.shape, x.dtype, [nchw_src, weight, bias],
                         cuda_src=_nchw_block_rows_source(hidden), data={"eps": eps_value})
-            return _stop_grad_outputs(y)
+            return _offer_narrow_layer_norm(
+                _stop_grad_outputs(y), x, normalized_shape, weight, bias, eps)
     y = jt.code(x.shape, x.dtype, [x, weight, bias],
                 cuda_src=_affine_source(hidden, _warp_rows(x, hidden)),
                 data={"eps": eps_value})
-    return _stop_grad_outputs(y)
+    return _offer_narrow_layer_norm(
+        _stop_grad_outputs(y), x, normalized_shape, weight, bias, eps)
 
 
 def _weight_only_source(hidden, warp, offset_value=0.0):

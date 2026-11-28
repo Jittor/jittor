@@ -1378,6 +1378,12 @@ def _cast_if_needed(tensor, dtype):
                                         one_plus=one_plus, output_dtype=dtype)
                 if narrowed is not None:
                     return narrowed
+    if dtype in ("float16", "bfloat16") and _owner.jt.flags.no_grad:
+        offer = getattr(tensor, "_jt_narrow_layer_norm", None)
+        if offer is not None and not tensor.is_finished and tensor._saved_storage_version() == offer[0]:
+            result = offer[1](dtype)
+            if result is not None:
+                return result
     return tensor.cast(dtype)
 
 
