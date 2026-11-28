@@ -117,6 +117,39 @@ def _acl_sdpa_kernel(implementation):
 
 
 class TestSDPA(Base):
+    @unittest.skipIf(not _test_capability.check_accelerator("cuda", backend=jt).enabled, "No CUDA found")
+    def test_cudnn_attention_selects_a_plan_before_graph_replay(self):
+        from jittor.backends.cuda.kernels.nn import cudnn_attention_cuda as attention
+        from torch.nn.attention import SDPBackend, sdpa_kernel
+
+        if attention._library() is None:
+            self.skipTest("needs cuDNN frontend headers")
+
+        rng = np.random.default_rng(21)
+        q = rng.normal(0, 0.5, (1, 2, 257, 64)).astype(np.float16)
+        k = rng.normal(0, 0.5, (1, 2, 288, 64)).astype(np.float16)
+        v = rng.normal(0, 0.5, k.shape).astype(np.float16)
+        seen_layouts = []
+        build_source = attention._forward_source
+
+        def observe(dtype, layout, *args):
+            seen_layouts.append(layout)
+            return build_source(dtype, layout, *args)
+
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error"), \
+                sdpa_kernel(SDPBackend.CUDNN_ATTENTION), \
+                mock.patch.object(attention, "_forward_source", observe):
+            run = torch.compile(nn.functional.scaled_dot_product_attention, mode="reduce-overhead")
+            for i in range(7):
+                values = v * np.float16((i + 1) / 8)
+                out = run(*(torch.tensor(x, device="cuda") for x in (q, k, values)))
+                expected = _sdpa_ref(q.astype(np.float32), k.astype(np.float32),
+                                     values.astype(np.float32))
+                self.assertEqual(out.device.type, "cuda")
+                self.ac(out.float().cpu().numpy(), expected, atol=2e-3, rtol=2e-3)
+            self.assertTrue(any(layout & attention._TUNE_FORWARD for layout in seen_layouts))
+            self.assertGreater(run.stats["graph"], 0, run.graph_refused)
+
     @unittest.skipIf(not _test_capability.check_accelerator('cuda', backend=jt).enabled, "No CUDA found")
     def test_explicit_cudnn_backend_accepts_grouped_query_attention(self):
         import importlib.util

@@ -23,6 +23,7 @@
 // [bias_b, bias_h, seq_q, seq_kv] -- bias_b 1 or batch, bias_h 1 or heads, 0
 // for none -- carries a constant attention mask in both forward and backward.
 // Graphs are built once per shape and kept: building one costs milliseconds.
+#include <cuda_runtime_api.h>
 #include <cudnn.h>
 #include <cudnn_frontend.h>
 
@@ -39,12 +40,14 @@ namespace fe = cudnn_frontend;
 namespace {
 
 enum { DTYPE_HALF = 0, DTYPE_BF16 = 1 };
-enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4, LAYOUT_PACKED_QKV = 8 };
+enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4, LAYOUT_PACKED_QKV = 8, TUNE_FORWARD = 16 };
 
 using Key = std::tuple<int, int, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
                        int, uint32_t, int64_t, int64_t, cudnnHandle_t>;
 
 struct Forward {
+    std::mutex plan_mutex;
+    bool tune = false;
     std::shared_ptr<fe::graph::Graph> graph;
     std::shared_ptr<fe::graph::Tensor_attributes> q, k, v, bias, o, stats;
 };
@@ -153,7 +156,17 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
         entry->stats->set_output(true).set_data_type(fe::DataType_t::FLOAT)
             .set_dim(dims(b, h, sq, 1)).set_stride(dense(h, sq, 1));
     }
-    if (!build(graph, handle)) {
+    entry->tune = (layout & TUNE_FORWARD) && !training;
+    if (entry->tune) {
+        graph.deselect_workspace_greater_than(8 << 20);
+        auto status = graph.build(handle, {fe::HeurMode_t::A, fe::HeurMode_t::B},
+                                  fe::BuildPlanPolicy_t::ALL);
+        if (status.is_bad()) {
+            last_error = status.get_message();
+            unsupported[key] = true;
+            return nullptr;
+        }
+    } else if (!build(graph, handle)) {
         unsupported[key] = true;
         return nullptr;
     }
@@ -279,7 +292,10 @@ int64_t jt_cudnn_sdpa_forward_workspace(cudnnHandle_t handle, int dtype, int64_t
         int layout, int64_t bias_b, int64_t bias_h) {
     auto forward = forward_graph(handle, dtype, b, h, hk, sq, skv, d, scale, causal, training,
                                  layout, bias_b, bias_h);
-    return forward ? forward->graph->get_workspace_size() : -1;
+    if (!forward) return -1;
+    std::lock_guard<std::mutex> lock(forward->plan_mutex);
+    return forward->tune ? forward->graph->get_autotune_workspace_size()
+                         : forward->graph->get_workspace_size();
 }
 
 int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h, int64_t hk,
@@ -294,6 +310,24 @@ int jt_cudnn_sdpa_forward(cudnnHandle_t handle, int dtype, int64_t b, int64_t h,
             {forward->q, q}, {forward->k, k}, {forward->v, v}, {forward->o, o}};
         if (training) pack[forward->stats] = stats;
         if (bias_b) pack[forward->bias] = bias;
+        std::lock_guard<std::mutex> lock(forward->plan_mutex);
+        if (forward->tune) {
+            cudaStream_t stream;
+            cudaStreamCaptureStatus capture;
+            if (cudnnGetStream(handle, &stream) != CUDNN_STATUS_SUCCESS
+                    || cudaStreamIsCapturing(stream, &capture) != cudaSuccess) {
+                last_error = "could not query the cuDNN attention stream";
+                return 1;
+            }
+            if (capture == cudaStreamCaptureStatusNone) {
+                auto status = forward->graph->autotune(handle, pack, workspace);
+                if (status.is_bad()) {
+                    last_error = status.get_message();
+                    return 1;
+                }
+                forward->tune = false;
+            }
+        }
         return run(*forward->graph, handle, pack, workspace);
     } catch (const std::exception& e) {
         last_error = e.what();

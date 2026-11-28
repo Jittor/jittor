@@ -157,7 +157,7 @@ int jt_cudnn_sdpa_backward(cudnnHandle_t, int, int64_t, int64_t, int64_t, int64_
 # in. `layout` has a bit per tensor (q 1, k 2, v 4) for one given to the kernel
 # as [batch, seq, heads, head_dim] -- the tensor a transpose view was taken of
 # -- rather than [batch, heads, seq, head_dim]; see cudnn_sdpa.cc.
-_Q, _K, _V, _PACKED_QKV = 1, 2, 4, 8
+_Q, _K, _V, _PACKED_QKV, _TUNE_FORWARD = 1, 2, 4, 8, 16
 
 
 def _dims(layout):
@@ -558,6 +558,15 @@ def _cudnn_fused_attention(query, key, value, attn_mask=None, dropout_p=0.0,
         return out.transpose(0, 2, 1, 3) if q_seq else out
 
     if attn_mask is None:
+        if not training and min(_logical(query, q_seq)[2], _logical(key, k_seq)[2]) >= 256:
+            from jittor._runtime.step_capture import tracing
+
+            # Fixed-shape graph replay amortizes cuDNN's one-time search.
+            # Check the bounded set of plans before building the tuned op.
+            tuned_layout = layout | _TUNE_FORWARD
+            if tracing() and _supported(query, key, scale, is_causal, False, layout=tuned_layout):
+                return logical(_forward(query, key, value, scale, bool(is_causal), False,
+                                        layout=tuned_layout)[0])
         if not _supported(query, key, scale, is_causal, training, layout=layout):
             return None
         if training:
