@@ -95,6 +95,36 @@ def test_trace_local_shape_tensor_drives_cuda_arange():
         assert compiled.stats["graph"], compiled.graph_refused
 
 
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)])
+def test_linspace_guarded_float_endpoint_tracks_source_changes(device):
+    if device == "cuda":
+        require_accelerator("cuda")
+    start = torch.tensor([-0.5], device=device)
+
+    def forward(source):
+        extent = torch.tensor([source.shape[-1]], device=device)[0]
+        return source + torch.linspace(start[0], extent - 0.5, extent, device=device)
+
+    with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+        compiled = torch.compile(forward, mode="reduce-overhead")
+        for size in (1, 16):
+            source = torch.ones(size, device=device)
+            expected = 1 + np.linspace(-0.5, size - 0.5, size)
+            for _ in range(8):
+                actual = compiled(source)
+                assert actual.device.type == device
+                np.testing.assert_allclose(actual.cpu().numpy(), expected, atol=2e-6)
+            assert compiled.refused is None
+            assert compiled.stats["replayed"]
+            if device == "cuda":
+                assert compiled.stats["graph"], compiled.graph_refused
+
+        start.add_(2)
+        np.testing.assert_allclose(compiled(source).cpu().numpy(),
+                                   1 + np.linspace(1.5, size - 0.5, size), atol=2e-6)
+        assert "scalar dependency" in compiled.last_invalidated
+
+
 @pytest.mark.cuda
 def test_trace_predicate_guards_a_closed_over_tensor():
     require_accelerator("cuda")

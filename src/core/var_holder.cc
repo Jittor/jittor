@@ -2487,8 +2487,9 @@ static bool can_guard_step_readback() {
 }
 
 PyObject* VarHolder::step_guarded_scalar(int64 epoch) {
+    const auto dtype = var->dtype();
     if (!can_guard_step_readback() || var->num != 1
-            || !(var->dtype().is_int() || var->dtype().is_bool())) Py_RETURN_NONE;
+            || !(dtype.is_int() || dtype.is_bool() || dtype.is_float())) Py_RETURN_NONE;
     ExecutorEntryScope entry;
     PyObjHolder guards(collect_step_readback_guards(var, epoch, 64, 4096));
     if (!guards.obj) return nullptr;
