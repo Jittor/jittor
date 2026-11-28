@@ -111,27 +111,38 @@ def _gate_launch(has_bias):
     """
 
 
-@optional_kernel("nn.conv2d.single_pixel.inference", "cuda")
-def pointwise_pixel_cuda(x, weight, bias, padding, groups):
+def _supports_pointwise_pixel(x, weight, bias, stride, padding, dilation, groups,
+                              *, _depthwise_fast_path=True):
+    if (groups != 1 or tuple(padding) != (0, 0) or tuple(x.shape[2:]) != (1, 1)
+            or tuple(weight.shape[2:]) != (1, 1)):
+        return False
     import jittor as jt
 
-    if (groups != 1 or tuple(padding) != (0, 0) or not jt.flags.no_grad
-            or jt.flags.amp_reg or tuple(x.shape[2:]) != (1, 1)
-            or tuple(weight.shape[2:]) != (1, 1)):
-        return None
+    if not jt.flags.no_grad or jt.flags.amp_reg:
+        return False
     n, cin = x.shape[:2]
     cout = weight.shape[0]
-    if n <= 0 or cin <= 0 or cout <= 0 or not (256 <= n * cin * cout <= (1 << 20)):
-        return None
+    if (n <= 0 or cin <= 0 or cout <= 0 or cin != weight.shape[1]
+            or not (256 <= n * cin * cout <= (1 << 20))):
+        return False
     dtype = dtype_name(x.dtype)
     inputs = (x, weight) if bias is None else (x, weight, bias)
     if (dtype not in ("float16", "bfloat16") or
             any(not isinstance(value, jt.Var) or dtype_name(value.dtype) != dtype
                 or not value._storage_is_contiguous() for value in inputs)):
-        return None
-    if bias is not None and tuple(bias.shape) != (cout,):
-        return None
+        return False
+    return bias is None or tuple(bias.shape) == (cout,)
 
+
+@optional_kernel("conv2d", "cuda", dtypes={"float16", "bfloat16"}, priority=30,
+                 supports=_supports_pointwise_pixel)
+def pointwise_pixel_cuda(x, weight, bias, stride, padding, dilation, groups,
+                         *, _depthwise_fast_path=True):
+    import jittor as jt
+
+    n, cin = x.shape[:2]
+    cout = weight.shape[0]
+    inputs = (x, weight) if bias is None else (x, weight, bias)
     warps = 1 if n * cout <= 128 else 4
     shape = n, cout, 1, 1
 

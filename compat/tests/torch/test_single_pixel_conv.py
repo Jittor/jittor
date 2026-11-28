@@ -63,3 +63,19 @@ def test_single_pixel_conv_sigmoid_gates_channels_last_features(dtype):
         assert len(kernels) == 1 and "jt_pointwise_sigmoid_gate" in kernels[0]
         assert result.location() == "device" and result.stride() == feature.stride()
         np.testing.assert_array_equal(result.float().cpu().numpy(), ref.float().cpu().numpy())
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is unavailable")
+def test_single_pixel_conv_module_replays_the_fused_kernel():
+    with torch.no_grad(), forbid_backend_fallbacks(), jt.flag_scope(auto_graph_replay=0):
+        conv = torch.nn.Conv2d(24, 384, 1).to(device="cuda", dtype=torch.float16)
+        x = torch.ones((1, 24, 1, 1), dtype=torch.float16, device="cuda")
+        jt.sync([x, conv.weight, conv.bias], True)
+        forward = torch.compile(lambda x: F.silu(conv(x)), mode="reduce-overhead")
+        for _ in range(6):
+            forward(x).sync()
+        with jt.profile(device=True, memory=False) as trace:
+            out = forward(x)
+            out.sync()
+        assert out.location() == "device" and forward.stats["graph"] > 0
+        assert sum("jt_pointwise_pixel" in row["name"] for row in trace.result.kernel_records) == 1

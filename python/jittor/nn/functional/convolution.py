@@ -4,6 +4,7 @@ from operator import index
 
 import jittor as jt
 from jittor._core.dtypes import dtype_name
+from jittor.backends.cuda.kernels.nn.pointwise_pixel_cuda import pointwise_pixel_cuda  # noqa: F401
 from jittor.misc import _pair, _triple
 from jittor._runtime.dispatch import optional_kernel, select_kernel
 
@@ -138,12 +139,6 @@ def conv2d(x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1,
     # so validating inside the reindex branches only would leave CUDA silent.
     _check_conv2d_output_size(x, out_height, out_width, (Kh, Kw), stride,
                               padding, dilation)
-    if Kh == Kw == x.shape[2] == x.shape[3] == 1 and groups == 1 and jt.flags.no_grad:
-        from jittor.backends.cuda.kernels.nn.pointwise_pixel_cuda import pointwise_pixel_cuda
-
-        narrow = pointwise_pixel_cuda(x, weight, bias, padding, groups)
-        if narrow is not None:
-            return narrow
     kernel = select_kernel("conv2d", x, weight, bias, stride, padding, dilation, groups,
                            _depthwise_fast_path=_depthwise_fast_path)
     if kernel is not None:
