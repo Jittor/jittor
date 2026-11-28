@@ -149,23 +149,31 @@ __device__ __forceinline__ void bias4(const Mask& mask, long long row_at, int co
 // step no longer walks the score matrix once per layer just to rebuild a
 // number it already computed; BERT-large's backward was 136 of its 172 ms
 // here. Only one double per query is stored, never a score matrix.
-template <int D, bool CAUSAL, int MASK, bool DROPOUT>
+// Pack short rows into a block. The diffuse rows then have one active lane
+// per warp, while a peaked short row can do its reduction within its warp.
+constexpr int ROW_DELTA_THREADS = 256;
+constexpr int ROW_DELTA_WARPS = ROW_DELTA_THREADS / 32;
+
+template <int D, bool CAUSAL, int MASK, bool DROPOUT, int ROW_THREADS>
 __global__ void row_delta(const float* q, const float* k, const float* v,
         const float* dout, const float* normalizer, const double* approximate,
         double* delta, int lq, int lk, float scale, float recompute_inv,
         Mask mask, Rows ql, Rows kl, Rows vl, Dropout dropout) {
-    const int row = blockIdx.x, bh = blockIdx.y, tid = threadIdx.x;
-    const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
-        dob(dout, ql, bh);
+    constexpr int rows_per_block = ROW_DELTA_THREADS / ROW_THREADS;
+    const int row = blockIdx.x * rows_per_block + threadIdx.x / ROW_THREADS;
+    if (row >= lq) return;
+    const int bh = blockIdx.y, tid = threadIdx.x % ROW_THREADS;
     const size_t index = ((size_t)bh * lq + row) * 2;
     const float top = normalizer[index], inv = normalizer[index + 1];
     if (!(inv > recompute_inv)) {
         if (tid == 0) delta[(size_t)bh * lq + row] = approximate[(size_t)bh * lq + row];
         return;
     }
+    const RowPtr<const float> qb(q, ql, bh), kb(k, kl, bh), vb(v, vl, bh),
+        dob(dout, ql, bh);
     const long long mask_base = MASK ? mask.base(bh) : 0;
     double weighted = 0., total = 0.;
-    for (int col = tid; col < lk; col += blockDim.x) {
+    for (int col = tid; col < lk; col += ROW_THREADS) {
         if (CAUSAL && col > row) continue;
         float score = 0.f, dp = 0.f;
         #pragma unroll 4
@@ -184,20 +192,27 @@ __global__ void row_delta(const float* q, const float* k, const float* v,
         weighted += (double)p * (double)dp;
         total += (double)p;
     }
-    __shared__ double sums[2][256];
-    sums[0][tid] = weighted;
-    sums[1][tid] = total;
-    __syncthreads();
-    for (int step = 128; step; step >>= 1) {
-        if (tid < step) {
-            sums[0][tid] += sums[0][tid + step];
-            sums[1][tid] += sums[1][tid + step];
+    for (int offset = 16; offset; offset >>= 1) {
+        weighted += __shfl_down_sync(0xffffffffu, weighted, offset);
+        total += __shfl_down_sync(0xffffffffu, total, offset);
+    }
+    if constexpr (rows_per_block == 1) {
+        __shared__ double sums[2][ROW_DELTA_WARPS];
+        if ((tid & 31) == 0) {
+            sums[0][tid / 32] = weighted;
+            sums[1][tid / 32] = total;
         }
         __syncthreads();
+        if (tid == 0) {
+            #pragma unroll
+            for (int warp = 1; warp < ROW_DELTA_WARPS; warp++) {
+                weighted += sums[0][warp];
+                total += sums[1][warp];
+            }
+        }
     }
     // Normalize the reconstructed probabilities' small float32 rounding error.
-    if (tid == 0) delta[(size_t)bh * lq + row] = sums[1][0] > 0.
-        ? sums[0][0] / sums[1][0] : 0.;
+    if (tid == 0) delta[(size_t)bh * lq + row] = total > 0. ? weighted / total : 0.;
 }
 
 } // namespace mea
@@ -914,6 +929,23 @@ def _launch(kernel, grid, smem, args, threads):
     """
 
 
+def _row_delta_launch(d, call):
+    lq, lk = call.lengths()
+    heads = f"in0->shape[0] * {call.heads_expr()}"
+    kernel = f"mea::row_delta<{d}, {call.template()}"
+    args = (f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, {lq}, {lk}, "
+            f"{float(call.scale)!r}f, {_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}")
+    return f"""
+    if ({lk} <= mea::ROW_DELTA_THREADS) {{
+        int blocks = ({lq} + mea::ROW_DELTA_WARPS - 1) / mea::ROW_DELTA_WARPS;
+        {kernel}, 32><<<dim3(blocks, {heads}), mea::ROW_DELTA_THREADS>>>({args});
+    }} else {{
+        {kernel}, mea::ROW_DELTA_THREADS>
+            <<<dim3({lq}, {heads}), mea::ROW_DELTA_THREADS>>>({args});
+    }}
+    """
+
+
 #: The layout `_mask_layout` last gave, with the mask, the Var it held then and
 #: the shape it was for. Transformers builds one mask a forward and hands it
 #: to every layer; the entry holds the mask, so its id is not reused.
@@ -1183,11 +1215,7 @@ def _native_vjp_programs(d, rpt, causal, mask_kind, mask_strides, seq, scale,
         f"in0_p, in1_p, in2_p, out0_p, out1_p, {lq}, {lk}, "
         f"{scale!r}f, {call.args(3)}, "
         f"{_rows_args('out0', call.seq[0], call.heads_expr(), 1)}", threads="mea_fwd::THREADS")
-    row = _launch(
-        f"mea::row_delta<{d}, {call.template()}>",
-        f"{lq}, in0->shape[0] * {call.heads_expr()}", 0,
-        f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, {lq}, {lk}, "
-        f"{scale!r}f, {_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}", threads="256")
+    row = _row_delta_launch(d, call)
     backward = "cudaMemsetAsync(out0_p, 0, out0->size, 0);\n" + _launch(
         f"mea_bwd::backward<{d}, {call.template()}>",
         f"({lk} + 31) / 32, in0->shape[0] * {call.heads_expr()}",
@@ -1269,20 +1297,12 @@ def _row_delta(query, key, value, grad_out, normalizer, approximate, call):
     h = int(query.shape[2] if call.seq[0] else query.shape[1])
     lq = int(query.shape[1] if call.seq[0] else query.shape[2])
     d = int(query.shape[3])
-    lq_expr, lk_expr = call.lengths()
-    # `approximate` is dO . O, `call.args(6)` because it is a sixth fixed input
-    # ahead of the mask and dropout the call appends.
+    # `approximate` is dO . O, the sixth fixed input ahead of mask and dropout.
     return jt.code(
         (b, h, lq), "float64",
         [query, key, value, grad_out, normalizer, approximate] + call.extras(),
         cuda_header=_KERNELS,
-        cuda_src=_launch(
-            f"mea::row_delta<{d}, {call.template()}>",
-            f"{lq_expr}, in0->shape[0] * {call.heads_expr()}", 0,
-            f"in0_p, in1_p, in2_p, in3_p, in4_p, in5_p, out0_p, "
-            f"{lq_expr}, {lk_expr}, {float(call.scale)!r}f, "
-            f"{_RECOMPUTE_INV_ABOVE!r}f, {call.args(6)}",
-            threads="256"))
+        cuda_src=_row_delta_launch(d, call))
 
 
 def _backward(query, key, value, grad_out, normalizer, delta, call):

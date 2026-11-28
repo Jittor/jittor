@@ -174,15 +174,14 @@ class TestFusedAttentionF32(unittest.TestCase):
                     self.assertLess(float((error / (np.abs(want) + 1e-3)).max()), pe_tol)
 
     def test_mixed_saturated_and_diffuse_rows_backward(self):
-        # One launch can see both decisions: rows 0 and 2 put their mass on a
-        # single key and reconstruct it, rows 1 and 3 spread it and take the
-        # cheap term. Neither branch may disturb the other's rows.
-        shape = (1, 1, 4, 6)
+        # A block can see both decisions and the last block has unused warps.
+        # Check the peaked rows alongside their diffuse neighbors.
+        shape = (1, 1, 11, 6)
         rng = np.random.RandomState(507)
         q, k, v = (rng.uniform(-1, 1, size=shape).astype("float32")
                    for _ in range(3))
         q = q.copy()
-        q[0, 0, (0, 2)] *= 80
+        q[0, 0, (0, 2, 8)] *= 80
         dout = rng.standard_normal(shape).astype("float32")
         for causal in (False, True):
             with self.subTest(causal=causal):
@@ -190,6 +189,8 @@ class TestFusedAttentionF32(unittest.TestCase):
                 jq, jk, jv = (jt.array(a) for a in (q, k, v))
                 out = scaled_dot_product_attention(jq, jk, jv, is_causal=causal)
                 grads = jt.grad((out * jt.array(dout)).sum(), [jq, jk, jv])
+                jt.sync([out, *grads], device_sync=True)
+                self.assertTrue(all(t.location() == "device" for t in [out, *grads]))
                 actual = [a.numpy().copy() for a in [out] + list(grads)]
                 for index, (got, want) in enumerate(zip(actual, expected)):
                     self.assertTrue(np.isfinite(got).all())
