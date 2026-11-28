@@ -3,7 +3,6 @@
 import functools
 import math
 
-import jittor as jt
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 from jittor._runtime.core_api import _output_requires_grad, _stop_grad_outputs
 from jittor._runtime.dispatch import optional_kernel
@@ -32,6 +31,7 @@ def _resolve_mod_layout(x_shape, mod_shape):
 
 
 def _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=True):
+    import jittor as jt
     if not all(isinstance(value, jt.Var) for value in (x, scale, shift)):
         return None
     if _output_requires_grad((x, scale, shift)):
@@ -64,16 +64,6 @@ def _supports_modulated_layer_norm(x, scale, shift, eps, one_plus=True):
     return _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=one_plus) is not None
 
 
-def _vec_threads(hidden, elem_per_vec):
-    if hidden % elem_per_vec != 0:
-        return 0, 128, 4
-    vec_n = hidden // elem_per_vec
-    threads = 32
-    while threads < min(vec_n, 256):
-        threads *= 2
-    return vec_n, threads, threads // 32
-
-
 @functools.lru_cache(maxsize=256)
 def _modulated_ln_source(hidden, one_plus, mod_mode):
     """Build vectorized + register-cached CUDA kernel for modulated LayerNorm.
@@ -81,8 +71,9 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
     ``mod_mode``: 0 = broadcast single row, 1 = per-batch (row / rows_per_mod),
     2 = per-row (row).
     """
-    vec2_n, vec2_t, vec2_w = _vec_threads(hidden, 8)
-    vec4_n, vec4_t, vec4_w = _vec_threads(hidden, 4)
+    from jittor.backends.cuda.kernels.nn.layer_norm_cuda import _ln_vec_threads
+    vec2_n, vec2_t, vec2_w = _ln_vec_threads(hidden, 8)
+    vec4_n, vec4_t, vec4_w = _ln_vec_threads(hidden, 4)
     mod_idx_expr = (
         "0LL" if mod_mode == 0 else ("(row / rows_per_mod)" if mod_mode == 1 else "row")
     )
@@ -496,6 +487,7 @@ def _modulated_ln_source(hidden, one_plus, mod_mode):
                  supports=_supports_modulated_layer_norm)
 def _modulated_layer_norm_no_grad_cuda(x, scale, shift, eps, one_plus=True):
     """Fuse inference LayerNorm with per-channel scale and shift."""
+    import jittor as jt
     contract = _modulated_layer_norm_contract(x, scale, shift, eps, one_plus=one_plus)
     if contract is None:
         return None
