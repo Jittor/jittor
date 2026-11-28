@@ -717,6 +717,30 @@ auto make_empty = op_constructor<VarPtr, NanoVector, NanoString>("empty");
 auto make_setitem = op_constructor<VarPtr, Var*, VarSlices&&, Var*, NanoString>("setitem");
 auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
 auto make_cat_cast = op_constructor<VarPtr, Var*, NanoString>("unary");
+auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
+    vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+
+// Copy both portions of a dense row in one launch. The widths travel with
+// the op so a growing sequence can reuse the same compiled CUDA kernel.
+const char* cat_pair_cuda_source = R"(
+__global__ static void cat_pair_cuda(const in0_type* left, const in1_type* right,
+                                    out0_type* output, unsigned left_width,
+                                    unsigned right_width, unsigned count) {
+    const unsigned row_width = left_width + right_width;
+    const unsigned step = blockDim.x * gridDim.x;
+    for (unsigned index = blockIdx.x * blockDim.x + threadIdx.x;
+            index < count; index += step) {
+        const unsigned row = index / row_width;
+        const unsigned column = index % row_width;
+        output[index] = column < left_width ? left[row * left_width + column]
+            : right[row * right_width + column - left_width];
+    }
+}
+const unsigned count = out0->num;
+const unsigned blocks = std::min((count + 255) / 256, 4096u);
+cat_pair_cuda<<<blocks, 256>>>(in0_p, in1_p, out0_p, data["left_width"],
+                             data["right_width"], count);
+)";
 
 struct ConcatAmpScope {
     int saved = amp_reg;
@@ -887,6 +911,26 @@ PyObject* fast_cat(PyObject* tensors, int64 dim) {
     // `setitem` would each have entered.
     NanoVector out_shape;
     for (int d = 0; d < ndim; d++) out_shape.push_back(d == dim ? total : shape[d]);
+
+    // For small dense pairs, launch overhead dominates two slice copies.
+    // Large tensors can use the existing slice-copy optimizations.
+    constexpr int64 max_pair_elements = 1 << 20;
+    if (n == 2 && no_grad && runtime_use_cuda()
+            && accelerator_backend_id() == BackendId::Cuda && !dtype.is_complex()
+            && vars[0]->num <= max_pair_elements
+            && vars[1]->num <= max_pair_elements - vars[0]->num
+            && vars[0]->is_contiguous() && vars[1]->is_contiguous()
+            && query_dispatch_context(vars).backend == "cuda") {
+        int64 outer = 1;
+        for (int axis = 0; axis < dim; ++axis) outer *= shape[axis];
+        DataMap widths{
+            {"left_width", double(vars[0]->num / outer)},
+            {"right_width", double(vars[1]->num / outer)},
+        };
+        auto result = make_code(out_shape, dtype, move(vars), {}, {}, {},
+                                cat_pair_cuda_source, {}, {}, move(widths), "cuda");
+        return to_py_object<VarHolder*>(new VarHolder(move(result)));
+    }
     VarPtr out = make_empty(out_shape, dtype);
     // The scratch allocation is not a differentiable input to concatenation.
     // Only the tensors copied into it may contribute gradient edges.
@@ -1569,8 +1613,6 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code) {
 }
 
 namespace {
-auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
-    vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
 
 // The body below as one kernel, in the same order and precision: float32
 // throughout, the input widened and the result narrowed as `.float32()` and

@@ -98,6 +98,27 @@ class TestFastCat(unittest.TestCase):
                     np.testing.assert_array_equal(
                         c.numpy(), np.concatenate([a.numpy(), b.numpy()], axis=dim))
 
+    @unittest.skipUnless(_CUDA_KERNELS, "requires CUDA")
+    def test_cuda_dense_pair_appends_to_independent_storage(self):
+        rng = np.random.default_rng(17)
+        lhs = rng.integers(-8, 8, size=(2, 3, 17, 8)).astype(np.float32)
+        rhs = rng.integers(-8, 8, size=(2, 3, 1, 8)).astype(np.float32)
+        for dtype in (torch.float32, torch.bfloat16):
+            with self.subTest(dtype=dtype), torch.no_grad(), jt.flag_scope(auto_flush_ops=0):
+                a = torch.tensor(lhs, dtype=dtype, device="cuda").requires_grad_(True)
+                b = torch.tensor(rhs, dtype=dtype, device="cuda")
+                for _ in range(3):
+                    joined = torch.cat((a, b), dim=-2)
+                    self.assertEqual(joined._producer_name(), "code")
+                    self.assertFalse(joined.requires_grad)
+                    expected = np.concatenate((a.detach().float().cpu().numpy(), rhs), axis=2)
+                    jt.sync([joined], device_sync=True)
+                    self.assertEqual(joined.location(), "device")
+                    np.testing.assert_array_equal(joined.float().cpu().numpy(), expected)
+                    a = joined
+                joined[:, :, -1].fill_(0)
+                np.testing.assert_array_equal(b.float().cpu().numpy(), rhs)
+
     def test_the_cases_it_hands_back(self):
         a = torch.ones(2, 3, dtype=torch.uint8)
         b = torch.zeros(2, 3, dtype=torch.uint8)

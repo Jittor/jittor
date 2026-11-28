@@ -904,7 +904,7 @@ def _cat_impl(tensors, dim=0, out=None, axis=None):
 
 def _cat_grad_result(value, tensors):
     # Native concat may mark a new destination trainable for frozen inputs.
-    if isinstance(value, jt.Var) and (jt.flags.no_grad or not any(
+    if isinstance(value, jt.Var) and value.requires_grad and (jt.flags.no_grad or not any(
             isinstance(t, jt.Var) and t.requires_grad for t in tensors)):
         return value.detach()
     return value
