@@ -935,11 +935,14 @@ def _cat_result(value, out):
 
 def stack(tensors, dim=0, *, axis=None, out=None):
     if axis is not None: dim = axis
-    res = _jt_stack(list(tensors), dim)
+    from .interleaved_rope import tag_stack
+
+    values = list(tensors)
+    res = _jt_stack(values, dim)
     if out is not None:
         out.assign(res)
         return out
-    return res
+    return tag_stack(values, dim, res)
 
 
 class FloatTensor(metaclass=_TypedTensorMeta):

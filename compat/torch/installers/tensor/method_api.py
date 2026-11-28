@@ -12,6 +12,7 @@ from ...amp import _autocast_state, _preserve_autocast_arithmetic, _cuda_autocas
 from ...types import _PYTHON_SCALAR_DTYPES, _make_cpu_resident, _make_cuda_resident, _var_is_cpu_resident
 from ....stub_policy import degraded as _degraded, unimplemented as _unimplemented
 from ..core import _promote_pair
+from . import interleaved_rope
 
 _owner = import_module(__package__)
 _NativeVar = _owner.jt.Var
@@ -1114,11 +1115,16 @@ def _to(self, *args, **kwargs):
     # A dtype-only no-op is common between model layers. Explicit placement
     # already names this tensor's device, so there is no target to resolve.
     # A device tensor parked on the host must still take the migration path.
-    if (len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype)
-            and _jittor_dtype_name(self.dtype) == args[0].name):
-        placement = self.placement_backend
-        if placement == 0 or (placement > 0 and self.location() != "cpu"):
-            return self
+    if len(args) == 1 and not kwargs and isinstance(args[0], _owner.dtype):
+        tag = getattr(self, "_jt_interleaved_rope", None)
+        if tag is not None:
+            fused = interleaved_rope.cast(self, args[0].name, tag)
+            if fused is not None:
+                return _owner._mark_cpu_like(fused, self)
+        if _jittor_dtype_name(self.dtype) == args[0].name:
+            placement = self.placement_backend
+            if placement == 0 or (placement > 0 and self.location() != "cpu"):
+                return self
     # Matching another tensor need not turn its explicit placement into a
     # Python device and resolve it again. Keep copies, casts, meta tensors and
     # accelerator storage parked on the host on the ordinary conversion path.
@@ -2203,15 +2209,36 @@ def _tag_one_plus(var_operand, scalar_operand, out):
     return out
 
 
+def _try_rope_add(self, other, cos_term, sin_term, tag, reflected=False):
+    if len(tag) == 2:
+        return _try_fused_neox_rope_add(cos_term, tag[0], tag[1])
+    if _autocast_state.order:
+        return None
+    operands = interleaved_rope.sum_operands(cos_term, sin_term, tag)
+    if operands is None:
+        return None
+    if _jittor_dtype_name(operands[0].dtype) == "float32":
+        fused = interleaved_rope.fuse(operands)
+        return None if fused is None else _owner._mark_cpu_like(fused, cos_term)
+    # The wide sum is a regular Tensor. Lower it if a caller narrows it back
+    # to the original input dtype, keeping a single output rounding.
+    fast = _FAST_BINARY
+    out = fast(self, other, int(reflected)) if fast is not None else None
+    if out is None:
+        name = "__radd__" if reflected else "__add__"
+        out = _promoting_binary(self, other, name, reflected)
+    return interleaved_rope.tag_sum(out, operands)
+
+
 def _tensor_add(self, other):
     rope_sin = getattr(other, "_jt_rope_sin", None)
     if rope_sin is not None:
-        fused = _try_fused_neox_rope_add(self, rope_sin[0], rope_sin[1])
+        fused = _try_rope_add(self, other, self, other, rope_sin)
         if fused is not None:
             return fused
     rope_sin = getattr(self, "_jt_rope_sin", None)
     if rope_sin is not None:
-        fused = _try_fused_neox_rope_add(other, rope_sin[0], rope_sin[1])
+        fused = _try_rope_add(self, other, other, self, rope_sin)
         if fused is not None:
             return fused
     mod_ln = getattr(self, "_jt_mod_ln_mul", None)
@@ -2235,12 +2262,12 @@ def _tensor_add(self, other):
 def _tensor_radd(self, other):
     rope_sin = getattr(self, "_jt_rope_sin", None)
     if rope_sin is not None:
-        fused = _try_fused_neox_rope_add(other, rope_sin[0], rope_sin[1])
+        fused = _try_rope_add(self, other, other, self, rope_sin, reflected=True)
         if fused is not None:
             return fused
     rope_sin = getattr(other, "_jt_rope_sin", None)
     if rope_sin is not None:
-        fused = _try_fused_neox_rope_add(self, rope_sin[0], rope_sin[1])
+        fused = _try_rope_add(self, other, self, other, rope_sin, reflected=True)
         if fused is not None:
             return fused
     mod_ln = getattr(self, "_jt_mod_ln_mul", None)
@@ -2315,6 +2342,12 @@ def _tag_rope_sin_mul(left, right, out):
         plain_ln = getattr(right, "_jt_plain_ln", None)
         if plain_ln is not None:
             out._jt_mod_ln_mul = (plain_ln[0], plain_ln[1], left)
+    rotated = getattr(left, "_jt_interleaved_rope", None)
+    if rotated is not None:
+        return interleaved_rope.tag_product(left, right, out, rotated)
+    rotated = getattr(right, "_jt_interleaved_rope", None)
+    if rotated is not None:
+        return interleaved_rope.tag_product(right, left, out, rotated)
     return out
 
 
@@ -3053,7 +3086,7 @@ def _cast_half(self):
 
 
 def _cast_float(self):
-    return _cast_if_needed(self, 'float32')
+    return interleaved_rope.tag_float(self, _cast_if_needed(self, 'float32'))
 
 
 def _cast_double(self):

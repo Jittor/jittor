@@ -1,4 +1,6 @@
 """CUDA inference kernels for rotary position embeddings."""
+from functools import lru_cache
+
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
 import jittor as jt
@@ -535,6 +537,151 @@ def _neox_rope_cuda(x, cos, sin):
     return _stop_grad_outputs(jt.code(
         x.shape, x.dtype, [x_dense, cos, sin], cuda_src=cuda_src,
     ))
+
+
+def _interleaved_rope_storage(x):
+    if x._storage_is_contiguous():
+        return x, (), 0
+    strides = tuple(x._storage_strides())
+    if strides[-1] != 1 or any(s <= 0 for s in strides):
+        return None
+    base = x
+    while not base._storage_is_contiguous() and not base.is_finished:
+        if not base._producer_is_view():
+            return None
+        inputs = base._inputs()
+        if len(inputs) != 1:
+            return None
+        base = inputs[0]
+    offset = x._storage_offset() - base._storage_offset()
+    if not base._storage_is_contiguous():
+        if not jt.flags.no_grad or base.location() != "device":
+            return None
+        base = base._physical_storage_window()
+    extent = sum((dim - 1) * stride for dim, stride in zip(x.shape, strides))
+    if base.dtype != x.dtype or offset < 0 or offset + extent >= base.numel():
+        return None
+    return base, strides, offset
+
+
+def _interleaved_rope_contract(x, cos, sin):
+    if not all(isinstance(value, jt.Var) for value in (x, cos, sin)):
+        return None
+    if jt.flags.amp_reg or _output_requires_grad(x, cos, sin):
+        return None
+    dtype = _jittor_dtype_name(x.dtype)
+    if dtype not in ("float32", "float16", "bfloat16"):
+        return None
+    shape = tuple(x.shape)
+    if not shape or not x.numel() or shape[-1] % 2:
+        return None
+    storage = _interleaved_rope_storage(x)
+    if storage is None:
+        return None
+    strides = []
+    for freqs in (cos, sin):
+        if (_jittor_dtype_name(freqs.dtype) != "float32"
+                or not freqs._storage_is_contiguous() or freqs.ndim > x.ndim):
+            return None
+        dims = (1,) * (x.ndim - freqs.ndim) + tuple(freqs.shape)
+        if dims[-1] != shape[-1] or any(a not in (1, b) for a, b in zip(dims, shape)):
+            return None
+        stride = 1
+        freq_strides = []
+        for dim in reversed(dims):
+            freq_strides.append(stride if dim != 1 else 0)
+            stride *= dim
+        strides.append(tuple(reversed(freq_strides)))
+    return storage, tuple(strides)
+
+
+def _interleaved_offset(shape, strides, offset=0):
+    # Compute one broadcast offset per pair, skipping axes whose frequencies
+    # are shared. Lanes always read and write adjacent elements within a row.
+    terms = ["col"]
+    if offset:
+        terms.append(str(offset))
+    row_stride = 1
+    for extent, stride in reversed(tuple(zip(shape[:-1], strides[:-1]))):
+        if extent > 1 and stride:
+            terms.append(f"(row / {row_stride} % {extent}) * {stride}")
+        row_stride *= extent
+    return " + ".join(terms)
+
+
+@lru_cache(maxsize=128)
+def _interleaved_rope_source(shape, x_strides, x_offset, freq_strides):
+    x_index = _interleaved_offset(shape, x_strides, x_offset) if x_strides else "i"
+    cos_index, sin_index = (_interleaved_offset(shape, strides) for strides in freq_strides)
+    paired = x_offset % 2 == 0 and all(stride % 2 == 0 for stride in x_strides[:-1])
+    header = r"""
+    namespace jittor {
+    template <typename T>
+    struct alignas(2 * sizeof(T)) RopePair {
+        T first, second;
+    };
+
+    template <bool aligned, typename T>
+    __device__ __forceinline__ RopePair<T> rope_load(const T* ptr, index_t i) {
+        if (aligned)
+            return reinterpret_cast<const RopePair<T>*>(ptr)[i / 2];
+        return {ptr[i], ptr[i + 1]};
+    }
+
+    template <bool aligned>
+    __global__ static void interleaved_rope(
+            const in0_type* __restrict__ x, const float* __restrict__ cos,
+            const float* __restrict__ sin, out0_type* __restrict__ y, index_t total) {
+        index_t stride = (index_t)gridDim.x * blockDim.x;
+        for (index_t pair = (index_t)blockIdx.x * blockDim.x + threadIdx.x;
+             pair < total; pair += stride) {
+            index_t i = pair * 2;
+            index_t row = i / %(dim)d;
+            index_t col = i %% %(dim)d;
+            index_t xi = %(x_index)s;
+            index_t ci = %(cos_index)s;
+            index_t si = %(sin_index)s;
+            auto xy = rope_load<aligned>(x, xi);
+            auto c = rope_load<aligned>(cos, ci);
+            auto s = rope_load<aligned>(sin, si);
+            float real = static_cast<float>(xy.first);
+            float imag = static_cast<float>(xy.second);
+            RopePair<out0_type> out{
+                out0_type(__fadd_rn(__fmul_rn(real, c.first), __fmul_rn(-imag, s.first))),
+                out0_type(__fadd_rn(__fmul_rn(imag, c.second), __fmul_rn(real, s.second))),
+            };
+            if (aligned) {
+                reinterpret_cast<RopePair<out0_type>*>(y)[pair] = out;
+            } else {
+                y[i] = out.first;
+                y[i + 1] = out.second;
+            }
+        }
+    }
+    }
+    """ % {"dim": shape[-1], "x_index": x_index, "cos_index": cos_index, "sin_index": sin_index}
+    launch = r"""
+    index_t total = out0->num / 2;
+    int blocks = std::min((index_t)65535, (total + 255) / 256);
+    if (%(paired)d && ((((size_t)in0_p | (size_t)in1_p | (size_t)in2_p | (size_t)out0_p) & 7u) == 0)) {
+        interleaved_rope<true><<<blocks, 256>>>(in0_p, in1_p, in2_p, out0_p, total);
+    } else {
+        interleaved_rope<false><<<blocks, 256>>>(in0_p, in1_p, in2_p, out0_p, total);
+    }
+    CHECK(0 == cudaGetLastError());
+    """ % {"paired": paired}
+    return header, launch
+
+
+@optional_kernel("nn.interleaved_rope.inference", "cuda")
+def _interleaved_rope_cuda(x, cos, sin):
+    """Apply adjacent-pair rotation with FP32 arithmetic and one output rounding."""
+    contract = _interleaved_rope_contract(x, cos, sin)
+    if contract is None:
+        return None
+    (dense, strides, offset), freq_strides = contract
+    header, launch = _interleaved_rope_source(tuple(x.shape), strides, offset, freq_strides)
+    return jt.code(x.shape, x.dtype, [dense, cos, sin], cuda_header=header, cuda_src=launch).stop_grad()
 
 
 __all__ = ["partial_rotary_embedding_cuda"]

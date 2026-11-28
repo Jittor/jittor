@@ -3,6 +3,7 @@ from ...fidelity import Fidelity, register_api_bindings, register_fidelity
 from ....transaction import set_attr
 from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 
+from . import interleaved_rope
 from .method_api import (
     _CAST_APIS, _UNARY_INPLACE_APIS,
     _api_fill,
@@ -611,6 +612,8 @@ def _install_tensor_methods(g, Var, _DTYPE_OBJS=None):
 
     for name, implementation in _CAST_APIS.items():
         setattr(Var, name, implementation)
+
+    Var.flatten = interleaved_rope.flatten
 
     # torch's Tensor.type(): with a dtype/typed-tensor-name it casts; with no
     # argument it returns the torch type-NAME string ('torch.FloatTensor' ...).
