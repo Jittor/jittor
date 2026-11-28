@@ -147,7 +147,10 @@ bool collect_cpu_prefix(Var* root, HostPrefix& prefix,
 // extent and can run outside the recording under the same shape guard.
 Var* dynamic_where_condition(Op* op) {
     if (auto* where = dynamic_cast<WhereOp*>(op)) return where->cond;
-    if (op->is_op(get_op_id("cub_where"))) return *op->inputs().begin();
+    if (op->executes_on_accelerator()) {
+        const auto cub_where = op_registry().definition("cub_where", false);
+        if (cub_where && op->is_op(cub_where->id)) return *op->inputs().begin();
+    }
     return nullptr;
 }
 
