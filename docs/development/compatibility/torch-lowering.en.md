@@ -293,7 +293,7 @@ shim. The translator **builds no IR** and does not participate in
    Same contract → thin forwarding and capture the native object at import time;
    different contract → compat owns the wrapper and documents the difference; no
    native owner → compat is the final owner. The criteria are in
-   [torch-api-cohort-promotion](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/torch-api-cohort-promotion/SKILL.md).
+   [jittor-torch-compat](https://github.com/JittorEcosystem/jittor-dev-skills/blob/main/skills/jittor-torch-compat/SKILL.md).
 2. **Register**: add to `API_PATHS` (`APPROXIMATE`) or `UNIMPLEMENTED_PATHS` in
    `compat/torch/api_manifest.py`.
 3. **Fidelity**: use `register_fidelity()` to state the level and the restriction
