@@ -20,13 +20,14 @@ import jittor.models as jtmodels
 
 @pytest.mark.cuda
 @pytest.mark.parametrize("use_bias", (False, True))
-def test_large_depthwise_filter_reuses_rows_with_numerical_gradients(use_bias):
+@pytest.mark.parametrize("width", (58, 59))
+def test_large_depthwise_filter_reuses_tiles_with_numerical_gradients(use_bias, width):
     _test_capability.require_accelerator("cuda")
     from jittor.backends.cuda.kernels.nn import depthwise
     from jittor.nn.modules import depthwise as depthwise_module
 
     rng = np.random.default_rng(274)
-    x = (rng.standard_normal((2, 64, 37, 59)) / 4).astype(np.float32)
+    x = (rng.standard_normal((2, 64, 37, width)) / 4).astype(np.float32)
     weight = (rng.standard_normal((64, 1, 7, 9)) / 8).astype(np.float32)
     padding = (3, 4)
     cotangent = rng.standard_normal(x.shape).astype(np.float32)

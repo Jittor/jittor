@@ -103,9 +103,10 @@ __global__ void depthwise_reuse_rows(
         int channels, int height, int width,
         int oh, int ow, int ph, int pw) {
     const int item = blockIdx.x * blockDim.x + threadIdx.x;
-    const int row = (item / ow) * ROWS;
+    const int column_tiles = (ow + 1) / 2;
+    const int row = (item / column_tiles) * ROWS;
     if (row >= oh) return;
-    const int column = item % ow;
+    const int column = (item % column_tiles) * 2;
     const int channel = blockIdx.y;
     const size_t plane = (size_t)blockIdx.z * channels + channel;
     x += plane * height * width;
@@ -115,28 +116,36 @@ __global__ void depthwise_reuse_rows(
     #pragma unroll
     for (int i = 0; i < KH * KW; ++i) filter[i] = weight[i];
 
-    float result[ROWS] = {};
+    float result[ROWS][2] = {};
     #pragma unroll
     for (int i = 0; i < KH + ROWS - 1; ++i) {
         const int h = row - ph + i;
         if ((unsigned)h >= (unsigned)height) continue;
         #pragma unroll
-        for (int j = 0; j < KW; ++j) {
+        for (int j = 0; j <= KW; ++j) {
             const int w = column - pw + j;
             if ((unsigned)w >= (unsigned)width) continue;
             const float pixel = x[h * width + w];
             #pragma unroll
             for (int r = 0; r < ROWS; ++r) {
-                if (i >= r && i < r + KH)
-                    result[r] = fmaf(filter[(i - r) * KW + j], pixel, result[r]);
+                if (i >= r && i < r + KH) {
+                    if (j < KW)
+                        result[r][0] = fmaf(filter[(i - r) * KW + j], pixel, result[r][0]);
+                    if (j > 0)
+                        result[r][1] = fmaf(filter[(i - r) * KW + j - 1], pixel, result[r][1]);
+                }
             }
         }
     }
     const float shift = BIAS ? bias[channel] : 0.f;
     #pragma unroll
     for (int r = 0; r < ROWS; ++r) {
-        if (row + r < oh)
-            out[(row + r) * ow + column] = BIAS ? result[r] + shift : result[r];
+        if (row + r < oh) {
+            float* pair = out + (row + r) * ow + column;
+            pair[0] = BIAS ? result[r][0] + shift : result[r][0];
+            if (column + 1 < ow)
+                pair[1] = BIAS ? result[r][1] + shift : result[r][1];
+        }
     }
 }
 """
@@ -147,7 +156,7 @@ def _depthwise_forward_rows(x, weight, output_shape, padding, bias=None):
     kh, kw = weight.shape[-2:]
     oh, ow = output_shape[-2:]
     rows = 4 if oh >= 8 else 2
-    items = ((oh + rows - 1) // rows) * ow
+    items = ((oh + rows - 1) // rows) * ((ow + 1) // 2)
     threads = 32 if items <= 64 else 128
     blocks = (items + threads - 1) // threads
     inputs = [x, weight] if bias is None else [x, weight, bias]
@@ -162,8 +171,8 @@ def _depthwise_forward_rows(x, weight, output_shape, padding, bias=None):
 
 def _supports_depthwise_rows(x, weight, output_shape, stride, dilation):
     kh, kw = weight.shape[-2:]
-    # Large filters reuse input pixels across adjacent output rows. Each
-    # output still accumulates its filter in row-major order. The bounds
+    # Large filters reuse input pixels across adjacent output rows and
+    # columns. Each output still accumulates in row-major order. The bounds
     # keep this unrolled kernel within a practical register budget.
     return (stride == dilation == (1, 1) and 49 <= kh * kw and max(kh, kw) <= 9
             and dtype_name(x.dtype) == dtype_name(weight.dtype) == "float32"
