@@ -2468,13 +2468,14 @@ static PyObject* collect_step_readback_guards(Var* var, int64 epoch,
         }
         auto* op = value->input();
         if (!op || op->flag(OpFlags::_manual_device)) Py_RETURN_NONE;
-        // An earlier guarded read may have evaluated an owned constant or
-        // view while keeping its producer. The producer is still evidence
-        // for the value as long as the storage has never been exposed or
-        // changed in place.
+        // A lazy in-place spelling can rebind an unallocated temporary to a
+        // fresh producer and advance the version before it has any storage.
+        // Once allocated, retain the version check because a write can
+        // change the bytes without changing the producer.
         auto version = value->peek_storage_version();
         if (version && (version->externally_visible.load(std::memory_order_relaxed)
-                        || version->value.load(std::memory_order_relaxed))) Py_RETURN_NONE;
+                        || ((value->is_finished() || value->mem_ptr)
+                            && version->value.load(std::memory_order_relaxed)))) Py_RETURN_NONE;
         if (!op->is_storage_view() && !pure_ops.count(op->name()))
             Py_RETURN_NONE;
         for (auto* input : op->inputs()) stack.push_back(input);

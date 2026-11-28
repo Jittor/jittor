@@ -125,6 +125,35 @@ def test_linspace_guarded_float_endpoint_tracks_source_changes(device):
         assert "scalar dependency" in compiled.last_invalidated
 
 
+@pytest.mark.parametrize("device", ["cpu", pytest.param("cuda", marks=pytest.mark.cuda)])
+def test_trace_local_slice_offset_tracks_lazy_inplace_addition(device):
+    if device == "cuda":
+        require_accelerator("cuda")
+
+    def forward(source):
+        shapes = torch.as_tensor([(2, 3), (3, 2), (1, 4)], device=source.device)
+        offset = 0
+        sections = []
+        for height, width in shapes:
+            section = source[:, offset:offset + height * width].view(1, height, width)
+            sections.append(section.sum())
+            offset += height * width
+        return torch.stack(sections)
+
+    with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+        compiled = torch.compile(forward, mode="reduce-overhead")
+        for index in range(8):
+            source = (torch.arange(16, device=device) + index).reshape(1, 16)
+            output = compiled(source)
+            assert output.device.type == device
+            np.testing.assert_array_equal(output.cpu().numpy(),
+                                          np.array([15, 51, 54]) + index * np.array([6, 6, 4]))
+        if device == "cuda":
+            assert compiled.refused is None
+            assert compiled.stats["replayed"]
+            assert compiled.stats["graph"], compiled.graph_refused
+
+
 @pytest.mark.cuda
 def test_trace_predicate_guards_a_closed_over_tensor():
     require_accelerator("cuda")
