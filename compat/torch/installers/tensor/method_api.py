@@ -1313,9 +1313,10 @@ def _var_numpy(self, *args, **kwargs):
 def _var_item(self):
     """Read one scalar while keeping the tensor and its aliases on their device."""
     if _owner.jt.flags.keep_graph == 2 and self.numel() == 1:
-        from jittor._runtime.step_capture import guarded_scalar
+        from jittor._runtime.step_capture import guarded_predicate, guarded_scalar
 
-        scalar = guarded_scalar(self)
+        scalar = (guarded_predicate(self) if _jittor_dtype_name(self.dtype) == "bool"
+                  else guarded_scalar(self))
         if scalar is not None:
             return scalar
     return self._item_without_migration()

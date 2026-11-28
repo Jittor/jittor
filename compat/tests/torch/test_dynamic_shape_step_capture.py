@@ -76,6 +76,45 @@ def test_read_of_private_argument_remains_dynamic():
 
 
 @pytest.mark.cuda
+def test_trace_local_shape_tensor_drives_cuda_arange():
+    require_accelerator("cuda")
+
+    def forward(source):
+        shape = torch.tensor([source.shape[-2:]], device=source.device)
+        h = torch.arange(shape[0, 0], device=source.device)
+        w = torch.arange(shape[0, 1], device=source.device)
+        return source + h[:, None] + w[None, :]
+
+    with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+        compiled = torch.compile(forward, mode="reduce-overhead")
+        for height, width in ((3, 5),) * 6 + ((4, 2),) * 6:
+            source = torch.full((height, width), 2.0, device="cuda")
+            expected = 2 + np.arange(height)[:, None] + np.arange(width)
+            np.testing.assert_array_equal(compiled(source).cpu().numpy(), expected)
+        assert compiled.refused is None
+        assert compiled.stats["graph"], compiled.graph_refused
+
+
+@pytest.mark.cuda
+def test_trace_predicate_guards_a_closed_over_tensor():
+    require_accelerator("cuda")
+    mask = torch.tensor([True, True], device="cuda")
+
+    def forward(source):
+        return source * 2 if mask.all().item() else source + 1
+
+    with torch.no_grad(), jt.flag_scope(backend_fallback="error"):
+        compiled = torch.compile(forward, mode="reduce-overhead")
+        source = torch.full((3,), 4.0, device="cuda")
+        for _ in range(5):
+            np.testing.assert_array_equal(compiled(source).cpu().numpy(), [8] * 3)
+        assert compiled.stats["graph"], compiled.graph_refused
+        mask[0] = False
+        np.testing.assert_array_equal(compiled(source).cpu().numpy(), [5] * 3)
+        assert "scalar dependency" in compiled.last_invalidated
+
+
+@pytest.mark.cuda
 def test_integer_shape_reads_from_migrated_module_buffers():
     require_accelerator("cuda")
 
