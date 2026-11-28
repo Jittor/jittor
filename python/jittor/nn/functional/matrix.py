@@ -170,11 +170,16 @@ def _cublas_matmul(a, b, trans_a=False, trans_b=False):
 
 
 def _cublas_batched_matmul(a, b, trans_a=False, trans_b=False, alpha=1.0):
-    if (jt.flags.keep_graph == 2 and jt.flags.no_grad and not trans_a and not trans_b
+    if (jt.flags.keep_graph == 2 and jt.flags.no_grad and not trans_a
             and alpha == 1.0 and _jittor_dtype_name(a.dtype) == "float32"):
-        from jittor.backends.cuda.kernels.nn.batched_matmul_cuda import narrow_batched_matmul
+        from jittor.backends.cuda.kernels.nn.batched_matmul_cuda import (
+            narrow_batched_matmul,
+            short_batched_matmul,
+        )
 
-        specialized = narrow_batched_matmul(a, b)
+        specialized = short_batched_matmul(a, b, trans_b)
+        if specialized is None and not trans_b:
+            specialized = narrow_batched_matmul(a, b)
         if specialized is not None:
             return specialized
     if type(alpha) is float:
@@ -747,6 +752,9 @@ _BASE_SELECT_KERNEL = select_kernel
 
 
 def _frontend_batched_matmul(a, b, tensor_type):
+    # Let the normal dispatcher choose the capture-time CUDA schedule.
+    if jt.flags.keep_graph == 2:
+        return None
     if (select_kernel is _BASE_SELECT_KERNEL
             and _matrix_dispatch.select_kernel is _BASE_SELECT_KERNEL
             and _matrix_dispatch.dispatch_context is _matrix_dispatch._NATIVE_DISPATCH_CONTEXT
