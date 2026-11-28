@@ -65,7 +65,7 @@ import numpy as np
 import jittor as jt
 import jittor_core as _core
 
-from .graph_replay import (_capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
+from .graph_replay import (_auto_inputs, _capture_barriers, _RERECORD_LIMIT, _Unreplayable, _WorkingSet, _dense, _empty_like,
                            _host_state, _module_vars, _native_dtype, _object_ids, _training,
                            _graph_has_nondeterministic_op,
                            _input_vars, _map_inputs, _no_auto, _output_template,
@@ -548,7 +548,7 @@ class _Capture:
                  "frozen_random", "exact", "graph_bytes", "published_gradients",
                  "gradient_leaves", "differentiable_leaves", "dynamic_prefix",
                  "shape_dependencies", "pending_roots", "folded_leaves", "scalar_epoch", "scalar_guards",
-                 "used_guarded_scalar", "short_attention", "mask_terms")
+                 "used_guarded_scalar", "short_attention", "mask_terms", "object_arguments")
 
     def __init__(self):
         self.prologue = []
@@ -568,6 +568,7 @@ class _Capture:
         self.used_guarded_scalar = False
         self.short_attention = {}
         self.mask_terms = {}
+        self.object_arguments = None
 
 
 def _finish_normally(roots):
@@ -765,6 +766,10 @@ class StepCapture:
         grouping = PackedLinears(self._linear_groups, self._max_retained_bytes) if self._linear_groups else None
         self._linear_groups = ()
         scalar_epoch = _core._step_scalar_epoch() if jt.flags.no_grad else None
+        objects = []
+        if jt.flags.no_grad:
+            _auto_inputs((args, kwargs), None, objects)
+        host_state = _host_state(objects) if objects else None
 
         def private_copy(value):
             copy = _empty_like(value)
@@ -821,6 +826,9 @@ class StepCapture:
             cap.refused = cap.refused or (
                 "the step read a value back to the host, so its path depends on "
                 "tensor values and cannot be replayed")
+        object_tensors = []
+        if objects and (host_state is None or _host_state(objects, object_tensors) != host_state):
+            cap.refused = cap.refused or "the step changed or could not inspect Python argument state"
 
         # Dense inside the graph, since every replay copies these as raw bytes
         # (see `_dense`).
@@ -933,6 +941,11 @@ class StepCapture:
             state = _write_back_in_graph(state, roots)
 
         recorded_holders = {id(holder) for holder, _, _ in records}
+        if objects:
+            # Keep the objects alive for their identity guard. _adopt checks
+            # tensor holders whose writes belong to the capture.
+            reads = [(v, v.var_ptr) for v in object_tensors if id(v) not in recorded_holders]
+            cap.object_arguments = objects, host_state, reads
         with jt.no_grad():
             for holder, source in gradient_sources:
                 if id(holder) not in recorded_holders:
@@ -1011,6 +1024,10 @@ class StepCapture:
             return "the captured graph was finished, most likely by a read"
         if self._call_signature(args, kwargs) != cap.signature:
             return "the inputs changed shape or dtype, or the gradient mode changed"
+        if cap.object_arguments is not None:
+            objects, host_state, reads = cap.object_arguments
+            if _host_state(objects) != host_state or any(v.var_ptr != ptr for v, ptr in reads):
+                return "Python argument state changed"
         if cap.gradient_leaves and _core._first_changed_step_leaf(*cap.gradient_leaves) >= 0:
             return "a captured leaf was rebound or changed its gradient policy"
         if cap.folded_leaves:
@@ -1369,53 +1386,36 @@ class _PolicyStep(StepCapture):
     """A module call the automatic replay policy captures, state included.
 
     See the policy in `graph_replay`. Nobody asked for this capture, so it
-    guards what an explicit one leaves to its caller, and re-captures when
-    any of it changes:
-
-      - the host-side state of the objects the call was given (`_host_state`),
-        which the capture run must also have left as it found it;
-      - which Var every parameter and registered buffer of the module, and
-        every Var those objects hold, is: a load or an assignment outside the
-        call rebinds one, and
-        the graph would go on reading the old one. State the step updates is
-        put back first (`_adopt`), so a cache reset between two `generate`
-        calls is taken over rather than re-captured;
-      - the module's training mode.
+    guards the module's parameters, buffers and training mode in addition
+    to the inference step's argument-state guards.
 
     And it refuses a call that draws random numbers (`exact_random`).
     """
 
-    def __init__(self, module, objects, signature, max_retained_bytes):
+    def __init__(self, module, signature, max_retained_bytes):
         ref = weakref.ref(module)
 
         def call(*args, **kwargs):
             return ref()(*args, **kwargs)
         super().__init__(call, exact_random=True, max_retained_bytes=max_retained_bytes)
         self._module_ref = ref
-        self._objects = objects
         # The policy has run this signature as written already, which is what
         # the first call of a signature is for.
         self._seen = signature
 
     def _capture_now(self, args, kwargs):
-        objects = self._objects
-        before = _host_state(objects)
         cap, result = super()._capture_now(args, kwargs)
         if cap is None:
             return cap, result
-        leaves = []
-        after = _host_state(objects, leaves)
         module = self._module_ref()
-        if after is None or after != before or module is None:
-            # What the capture baked in is out of date already.
-            self._refused = "the call changes the host-side state of what it was given"
+        if module is None:
+            self._refused = "the captured module is no longer alive"
             for root in cap.roots:
                 if not root.is_finished:
                     root._release_kept()
             return None, result
-        leaves.extend(v for v in _module_vars(module) if isinstance(v, jt.Var))
+        leaves = [v for v in _module_vars(module) if isinstance(v, jt.Var)]
         ref = self._module_ref
-        cap.guards.append((lambda: _host_state(objects), after))
         cap.guards.append((lambda: [v.var_ptr for v in leaves], [v.var_ptr for v in leaves]))
         cap.guards.append((lambda: _training(ref()), _training(module)))
         return cap, result

@@ -1243,9 +1243,7 @@ class _StatefulCall:
         self.auto.unstable = 0
         if before == self.last:
             from .step_capture import _PolicyStep
-            # The step holds them strongly: its guards read them, and the id
-            # in the signature must not pass to another object.
-            self.step = _PolicyStep(module, objects, self.signature,
+            self.step = _PolicyStep(module, self.signature,
                                     jt.flags.auto_graph_replay_retain_bytes)
         self.last = after
         return result
@@ -1383,9 +1381,11 @@ _AUTO_SCALARS = (int, float, bool, str)
 def _auto_inputs(value, found, objects):
     """Bytes of the Vars in `value`'s plain containers.
 
-    `found` counts them; any other object is appended to `objects`.
+    `found` counts them when requested. Other objects go into `objects`.
     """
     if isinstance(value, jt.Var):
+        if found is None:
+            return 0
         found[0] += 1
         return value.numel() * _element_size(value.dtype)
     kind = type(value)
