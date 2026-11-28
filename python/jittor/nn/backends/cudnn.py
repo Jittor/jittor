@@ -57,11 +57,9 @@ def _inference_filter(x, weight, groups):
     same at the price of the convolution weights twice over, 1.1 GB for the
     UNet.
 
-    Only a materialized weight moves -- a parameter, not a filter computed in
-    the call -- and never while a step is being traced, where rebinding a
-    parameter reads as a state change. A 1x1 filter is the same bytes in
-    either layout and is only relabelled. With a backward nothing moves; a
-    weight moved earlier still reads right, through its strides.
+    Only a materialized weight moves. During step capture, express the reorder
+    explicitly so constant folding can hoist it and guard its source. Computed
+    filters stay on the cuDNN path when their reorder cannot be hoisted.
     """
     if (groups != 1 or _jittor_dtype_name(weight.dtype) not in ("float16", "bfloat16")
             or _output_requires_grad(x, weight)):
@@ -75,8 +73,18 @@ def _inference_filter(x, weight, groups):
     moved = state.get(_FILTER_OHWI)
     if moved is not None and moved[0] == weight.var_ptr:
         return moved[1], "ohwi"
+    if _is_ohwi_storage(weight):
+        return weight._storage_permute((0, 2, 3, 1)), "ohwi"
     from jittor.autograd.checkpoint import _rematerializing
     from jittor._runtime import step_capture
+    if channels_last_filters and step_capture.tracing() and not _rematerializing.get():
+        # Conv1d supplies a view of its filter. Follow views only, so filters
+        # computed as part of the captured step keep their usual layout.
+        source = weight
+        while not source.is_finished and source._producer_is_view():
+            source = source._input(0)
+        if source.is_finished:
+            return jt.contiguous(weight._storage_permute((0, 2, 3, 1))), "ohwi"
     # The checkpoint forward also runs under no_grad, but it must leave the
     # captured weight and its version intact until backward.
     if (not channels_last_filters or not weight.is_finished

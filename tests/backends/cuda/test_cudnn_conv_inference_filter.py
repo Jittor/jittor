@@ -17,6 +17,7 @@ nor minds that it was moved, and that the move can be turned off.
 from _helpers import capability as _test_capability
 
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -115,6 +116,48 @@ class TestCudnnConvInferenceFilter(unittest.TestCase):
         for _ in range(2):
             self._run(conv, x)
         self.assertTrue(conv.weight._storage_is_contiguous())
+
+    def test_captured_conv1d_reorders_filter_view_and_tracks_writes(self):
+        from jittor._runtime.step_capture import tracing
+
+        rng = np.random.default_rng(23)
+        x = rng.normal(size=(2, 8, 33)).astype("float16")
+        w = (rng.normal(size=(16, 8, 3)) / 8).astype("float16")
+        actual_layouts = []
+        original = _cudnn._inference_filter
+
+        def observe(*args):
+            result = original(*args)
+            if tracing():
+                actual_layouts.append(result[1])
+            return result
+
+        with jt.no_grad(), jt.flag_scope(auto_graph_replay=0, backend_fallback="error"):
+            signal, weight = jt.array(x), jt.array(w)
+            jt.sync([signal, weight], device_sync=True)
+            strides = tuple(weight._storage_strides())
+            with patch.object(_cudnn, "_inference_filter", observe):
+                step = jt.capture_step(lambda t: jt.nn.conv1d(t, weight, padding=1))
+                for _ in range(8):
+                    output = step(signal)
+                    jt.sync([output], device_sync=True)
+                self.assertGreater(step.stats["graph"], 0)
+                self.assertEqual(output.location(), "device")
+                self.assertEqual(actual_layouts[-1], "ohwi")
+                self.assertEqual(tuple(weight._storage_strides()), strides)
+
+                windows = np.lib.stride_tricks.sliding_window_view(
+                    np.pad(x.astype("float32"), ((0, 0), (0, 0), (1, 1))), 3, axis=-1)
+                expected = np.einsum("nclk,ock->nol", windows, w.astype("float32"))
+                np.testing.assert_allclose(output.float32().numpy(), expected, rtol=1e-3, atol=1e-3)
+
+                weight.assign(jt.array(w * 2))
+                weight.sync()
+                for _ in range(8):
+                    output = step(signal)
+                    jt.sync([output], device_sync=True)
+                np.testing.assert_allclose(output.float32().numpy(), expected * 2,
+                                           rtol=1e-3, atol=2e-3)
 
 
 if __name__ == "__main__":

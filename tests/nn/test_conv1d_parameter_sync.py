@@ -99,6 +99,20 @@ class TestConv1dParameterSync(unittest.TestCase):
                                    np.zeros(8, dtype="float32"), 3)
         self.assertLess(np.abs(got - expected).max(), 1e-4)
 
+    def test_channels_last_storage_with_one_spatial_axis(self):
+        from jittor.nn.functional._layout import channels_last_source, channels_last_view
+
+        with jt.flag_scope(use_cuda=0), jt.no_grad():
+            for shape in ((2, 1, 7, 8), (2, 7, 1, 8)):
+                data = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+                tensor = jt.array(data)
+                logical = channels_last_view(tensor)
+                self.assertFalse(logical._storage_is_contiguous())
+                source = channels_last_source(logical)
+                self.assertIsNotNone(source)
+                self.assertTrue(source._storage_is_contiguous())
+                np.testing.assert_array_equal(source.numpy(), data)
+
     @unittest.skipUnless(jt.has_cuda and jt.compiler.is_cuda, "requires CUDA")
     def test_dilated_convolution_uses_same_width_eager_and_captured(self):
         from jittor._runtime.step_capture import tracing
