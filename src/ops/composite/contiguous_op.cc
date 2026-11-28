@@ -136,6 +136,23 @@ __global__ void packed_contiguous(const Tx* __restrict__ input,
         }
     }
 }
+#if DIM == 4
+// With the first and last axes unchanged, each block can use head and batch
+// coordinates directly. The fastest threads copy consecutive vectors of a row.
+__global__ void packed_swap_middle(const CopyVector* __restrict__ input,
+                                  CopyVector* __restrict__ output,
+                                  index_t middle, index_t inner, index_t columns) {
+    const index_t row = (index_t)blockIdx.x * blockDim.y + threadIdx.y;
+    const index_t column = threadIdx.x;
+    if (row >= inner || column >= columns) return;
+    const index_t batch = blockIdx.z;
+    const index_t group = blockIdx.y;
+    const index_t src_row = (batch * inner + row) * middle + group;
+    const index_t dst_row = (batch * middle + group) * inner + row;
+    output[dst_row * columns + column] = input[src_row * columns + column];
+}
+#endif
+
 void launch_packed_contiguous(Var* x, Var* y) {
     auto* __restrict__ xp = x->ptr<Tx>();
     auto* __restrict__ yp = y->ptr<Tx>();
@@ -157,7 +174,26 @@ void launch_packed_contiguous(Var* x, Var* y) {
     constexpr int threads = 256;
     const int blocks = std::min<index_t>((copy.vectors - 1) / threads + 1, 4096);
     // Foreign storage may publish a base pointer that is already offset.
-    if ((((size_t)xp | (size_t)yp) & (copy_bytes - 1)) == 0)
+    const bool aligned = ((((size_t)xp | (size_t)yp) & (copy_bytes - 1)) == 0);
+#if DIM == 4
+    const index_t batches = copy.shape[0], middle = copy.shape[1], inner = copy.shape[2];
+    const index_t columns = copy.shape[3];
+    const index_t row_length = columns * COPY_WIDTH;
+    if (aligned && columns >= 4 && columns <= 32 && !(columns & (columns - 1))
+            && batches <= 65535 && middle <= 65535
+            && copy.stride[1] == row_length
+            && copy.stride[2] == middle * row_length
+            && (batches == 1 || copy.stride[0] == inner * copy.stride[2])) {
+        const int row_threads = threads / columns;
+        const dim3 block(columns, row_threads);
+        const dim3 grid((inner - 1) / row_threads + 1, middle, batches);
+        packed_swap_middle<<<grid, block>>>(reinterpret_cast<const CopyVector*>(xp),
+                                            reinterpret_cast<CopyVector*>(yp),
+                                            middle, inner, columns);
+        return;
+    }
+#endif
+    if (aligned)
         packed_contiguous<true><<<blocks, threads>>>(xp, yp, copy);
     else
         packed_contiguous<false><<<blocks, threads>>>(xp, yp, copy);
