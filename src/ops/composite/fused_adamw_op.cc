@@ -114,7 +114,8 @@ __device__ __forceinline__ void adamw_element(const AdamwStep& s, float grad, fl
 }
 
 __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float lr,
-                                   bool lr_in_step, bool skip_in_step, bool hyper_in_step, float beta1,
+                                   bool lr_in_step, bool skip_in_step, bool hyper_in_step,
+                                   bool correction_in_step, float beta1,
                                    float beta2, float weight_decay, float eps) {
     // The step's scalars, once per block. Every thread used to compute them,
     // and in double: two `pow`s per thread, 1.5e8 of them for a 0.6B-parameter
@@ -141,9 +142,22 @@ __global__ void fused_adamw_kernel(AdamwLaunch launch, const float* step, float 
         shared_skip = skip_in_step && step[2] != 0.f;
         // In double, as the per-parameter path computes them on the host:
         // 1 - 0.999^t in float keeps about three digits for small t.
-        const double n = *step;
-        shared_step_size = (float)(rate / (1.0 - ::pow((double)shared_beta1, n)));
-        shared_correction = (float)sqrt(1.0 - ::pow((double)shared_beta2, n));
+        if (correction_in_step) {
+            shared_step_size = step[7];
+            shared_correction = step[8];
+        } else {
+#ifdef IS_ROCM
+            // Some ROCm devices do not implement FP64 arithmetic. The normal
+            // ROCm provider supplies host-computed corrections; direct dynamic
+            // calls use expm1 to avoid subtracting nearly equal FP32 numbers.
+            shared_step_size = rate / -expm1f(*step * logf(shared_beta1));
+            shared_correction = sqrtf(-expm1f(*step * logf(shared_beta2)));
+#else
+            const double n = *step;
+            shared_step_size = (float)(rate / (1.0 - ::pow((double)shared_beta1, n)));
+            shared_correction = (float)sqrt(1.0 - ::pow((double)shared_beta2, n));
+#endif
+        }
         shared_decay = 1.f - rate * decay;
     }
     __syncthreads();
@@ -203,7 +217,8 @@ void FusedAdamwOp::jit_run() {
     const float* step_ptr = step->ptr<float>();
     const bool lr_in_step = step->num >= 2;
     const bool skip_in_step = step->num >= 3;
-    const bool hyper_in_step = step->num == 7;
+    const bool correction_in_step = step->num == 9;
+    const bool hyper_in_step = step->num == 7 || correction_in_step;
     AdamwLaunch launch;
     launch.count = 0;
     int blocks = 0;
@@ -211,7 +226,7 @@ void FusedAdamwOp::jit_run() {
         if (!launch.count) return;
         launch.first_block[launch.count] = blocks;
         fused_adamw_kernel<<<blocks, kThreads>>>(launch, step_ptr, (float)lr, lr_in_step,
-                                                 skip_in_step, hyper_in_step, (float)beta1, (float)beta2,
+                                                 skip_in_step, hyper_in_step, correction_in_step, (float)beta1, (float)beta2,
                                                  (float)weight_decay, (float)eps);
         launch.count = 0;
         blocks = 0;

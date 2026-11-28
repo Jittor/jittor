@@ -17,9 +17,13 @@
 
 // Half reduction identities also need infinity outside parallel_pass kernels.
 #include "type/cuda_limits.h"
+#ifdef IS_ROCM
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
+#include "type/rocm_bfloat16.h"
+#else
 #include <driver_types.h>
 #include <cuda_fp16.h>
-#ifndef IS_ROCM
 #include <cuda_bf16.h>
 #endif
 
@@ -91,7 +95,6 @@ inline __device__ float32 _signed_powf(float32 x, float32 y) {
 inline __device__ float16 pow(float16 a, float16 b) { return float16(_signed_powf(float32(a), float32(b))); }
 
 
-#ifndef IS_ROCM
 // See the float16 pair above: same dead `CUDA_ARCH` ladder, same NaN bug,
 // same fix.
 inline __device__ bfloat16 max(bfloat16 a, bfloat16 b) {
@@ -102,7 +105,6 @@ inline __device__ bfloat16 min(bfloat16 a, bfloat16 b) {
 }
 
 inline __device__ bfloat16 pow(bfloat16 a, bfloat16 b) { return bfloat16(_signed_powf(float32(a), float32(b))); }
-#endif
 template<int nbyte, class T>
 __device__ inline
 typename std::enable_if<nbyte<=0,void>::type

@@ -5,24 +5,58 @@
 // file 'LICENSE.txt', which is part of this source code package.
 // ***************************************************************
 #pragma once
+#ifdef IS_ROCM
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
+#include "type/rocm_bfloat16.h"
+#else
 #include <cuda_fp16.h>
-#ifndef IS_ROCM
 #include <cuda_bf16.h>
 #endif
 #include "core/common.h"
 
-// CUDA has no atomicAdd(long long*, long long) (only int / unsigned int /
+// CUDA and HIP have no atomicAdd(long long*, long long) (only int / unsigned int /
 // unsigned long long int). int64 reduce.add / scatter-add over an int64 Var
 // (e.g. attention_mask.sum(-1) on int64, common in HF/verl) emits a raw
 // atomicAdd(int64*, int64) and fails to COMPILE. Provide a GLOBAL overload
 // (NOT inside namespace jittor -- that would hide CUDA's builtin atomicAdd
 // overloads for float/int) that adds via the unsigned-64 reinterpretation;
 // two's-complement add gives the same low-64 bit pattern signed/unsigned.
-#if defined(__CUDACC__) && !defined(IS_ROCM)
+#if defined(__CUDACC__) || defined(__HIPCC__)
 __device__ inline long long atomicAdd(long long* a, long long b) {
     return (long long)atomicAdd((unsigned long long int*)a, (unsigned long long int)b);
 }
+#endif
 
+#ifdef IS_ROCM
+// jittor::bfloat16 has no native atomicAdd overload on all supported HIP SDKs.
+// Update its packed halfword with a 32-bit CAS, preserving the adjacent value.
+template<int op>
+__device__ inline jittor::bfloat16 rocm_bf16_atomic_update(jittor::bfloat16* address, jittor::bfloat16 value) {
+    auto* base = reinterpret_cast<unsigned int*>(reinterpret_cast<size_t>(address) & ~size_t(3));
+    unsigned int shift = (reinterpret_cast<size_t>(address) & 3) * 8;
+    unsigned int mask = 0xffffu << shift;
+    unsigned int old = atomicCAS(base, 0u, 0u), assumed;
+    jittor::bfloat16 current;
+    do {
+        assumed = old;
+        current.data = (assumed & mask) >> shift;
+        float a = float(current), b = float(value);
+        float next = op == 0 ? a + b : op == 1 ? a * b :
+            (a != a ? a : (b != b ? b : (op == 2 ? (a > b ? a : b) : (a < b ? a : b))));
+        jittor::bfloat16 converted(next);
+        unsigned int merged = (assumed & ~mask) | (unsigned(converted.data) << shift);
+        old = atomicCAS(base, assumed, merged);
+    } while (old != assumed);
+    return current;
+}
+
+__device__ inline jittor::bfloat16 atomicAdd(jittor::bfloat16* a, jittor::bfloat16 b) {
+    return rocm_bf16_atomic_update<0>(a, b);
+}
+#endif
+
+#if defined(__CUDACC__) && !defined(IS_ROCM)
 // CUDA only exposes integer atomics for 32/64-bit words. Update one packed
 // byte/halfword with a 32-bit CAS so native narrow reductions can keep their
 // input dtype instead of relying on a caller-side promotion.
@@ -166,6 +200,24 @@ __device__ inline unsigned long atomicXor(unsigned long* a, unsigned long b) {
 #endif
 
 namespace jittor {
+
+#ifdef IS_ROCM
+__device__ inline bfloat16 cuda_atomic_mul(bfloat16* a, bfloat16 b) {
+    return rocm_bf16_atomic_update<1>(a, b);
+}
+__device__ inline bfloat16 cuda_atomic_max(bfloat16* a, bfloat16 b) {
+    return rocm_bf16_atomic_update<2>(a, b);
+}
+__device__ inline bfloat16 cuda_atomic_min(bfloat16* a, bfloat16 b) {
+    return rocm_bf16_atomic_update<3>(a, b);
+}
+__device__ inline bfloat16 cuda_atomic_max_rmw(bfloat16* a, bfloat16 b) {
+    return rocm_bf16_atomic_update<2>(a, b);
+}
+__device__ inline bfloat16 cuda_atomic_min_rmw(bfloat16* a, bfloat16 b) {
+    return rocm_bf16_atomic_update<3>(a, b);
+}
+#endif
 
 __device__ inline static int floatToOrderedInt(float floatVal) {
     int intVal = __float_as_int( floatVal );

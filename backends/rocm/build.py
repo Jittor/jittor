@@ -12,10 +12,12 @@ class LibraryBuild:
     include_dirs: tuple
     library_dirs: tuple
     libraries: tuple
+    defines: tuple = ()
 
     @property
     def extra_flags(self):
-        args = ["-I" + path for path in self.include_dirs]
+        args = ["-D" + name for name in self.defines]
+        args += ["-I" + path for path in self.include_dirs]
         args += ["-L" + path for path in self.library_dirs]
         args += ["-Wl,-rpath," + path for path in self.library_dirs]
         args += ["-l" + name for name in self.libraries]
@@ -23,16 +25,25 @@ class LibraryBuild:
 
 
 _LIBRARIES = {
+    "hiprand": (
+        "hiprand/hiprand_kernel.h", (),
+        ("hiprand/hiprand_random_op.h", "hiprand/hiprand_random_op.cc",
+         "hiprand/random.h", "hiprand/random.cu"),
+    ),
     "hipblas": (
         "hipblas/hipblas.h", ("hipblas",),
         ("hipblas/hipblas_matmul_op.h", "hipblas/hipblas_matmul_op.cc", "hipblas/gemm_layout.h",
          "hipblas/hipblas_wrapper.h", "hipblas/hipblas_wrapper.cc",
+         "hipblas/hipblas_batched_matmul_op.h", "hipblas/hipblas_batched_matmul_op.cc",
+         "hipblas/hipblas_conv_inference_op.h", "hipblas/hipblas_conv_inference_op.cc",
+         "hipblas/convolution.h", "hipblas/convolution.cu",
          "hipblas/hipblas_capabilities.cc"),
     ),
     "rocprim": (
         "rocprim/device/device_scan.hpp", (),
         ("rocprim/rocprim_cumsum_op.h", "rocprim/rocprim_cumsum_op.cc",
-         "rocprim/scan.h", "rocprim/scan.cu"),
+         "rocprim/scan.h", "rocprim/scan.cu", "rocprim/arg_reduce.h", "rocprim/arg_reduce.cu",
+         "rocprim/rocm_arg_reduce_op.h", "rocprim/rocm_arg_reduce_op.cc"),
     ),
 }
 
@@ -63,10 +74,41 @@ def library_build(rocm_home, backend_root, name):
                                % (library, sdk))
         if str(directory) not in library_dirs:
             library_dirs.append(str(directory))
+    # MIOpen is optional for the existing ROCm inference convolution path.
+    # A complete SDK enables it; otherwise hipBLAS remains self-contained.
+    defines = ()
+    if name == "hipblas":
+        lt_include = next((path for path in (sdk / "include", sdk / "hipblaslt/include")
+                           if (path / "hipblaslt/hipblaslt.h").is_file()), None)
+        lt_lib = next((path for path in (sdk / "lib", sdk / "lib64",
+                                         sdk / "hipblaslt/lib", sdk / "hipblaslt/lib64")
+                       if (path / "libhipblaslt.so").is_file()), None)
+        if lt_include is not None and lt_lib is not None:
+            includes += (str(lt_include),)
+            if str(lt_lib) not in library_dirs:
+                library_dirs.append(str(lt_lib))
+            libraries += ("hipblaslt",)
+            relative_sources += ("hipblas/hipblas_linear_bias_op.h", "hipblas/hipblas_linear_bias_op.cc",
+                                 "hipblas/linear_bias.h", "hipblas/linear_bias.cu")
+        miopen_include = next((path for path in (sdk / "include", sdk / "miopen/include")
+                               if (path / "miopen/miopen.h").is_file()), None)
+        miopen_lib = next((path for path in (sdk / "lib", sdk / "lib64",
+                                             sdk / "miopen/lib", sdk / "miopen/lib64")
+                           if (path / "libMIOpen.so").is_file()), None)
+        if miopen_include is not None and miopen_lib is not None:
+            includes += (str(miopen_include),)
+            if str(miopen_lib) not in library_dirs:
+                library_dirs.append(str(miopen_lib))
+            libraries += ("MIOpen",)
+            relative_sources += ("hipblas/miopen_conv.h", "hipblas/miopen_conv.cc",
+                                 "hipblas/miopen_conv2d_op.h", "hipblas/miopen_conv2d_op.cc",
+                                 "hipblas/miopen_bn_forward_op.h", "hipblas/miopen_bn_forward_op.cc",
+                                 "hipblas/miopen_bn_backward_op.h", "hipblas/miopen_bn_backward_op.cc")
+            defines = ("HAS_ROCM_MIOPEN",)
     sources = tuple(str(root / source) for source in relative_sources)
     for source in sources:
         if not Path(source).is_file():
             raise RuntimeError("ROCm provider source is missing: " + source)
     # HIP headers are shared by all providers, including the header-only rocPRIM.
     includes = tuple(dict.fromkeys((str(sdk / "include"),) + includes + (str(root),)))
-    return LibraryBuild(name, sources, includes, tuple(library_dirs), libraries)
+    return LibraryBuild(name, sources, includes, tuple(library_dirs), libraries, defines)

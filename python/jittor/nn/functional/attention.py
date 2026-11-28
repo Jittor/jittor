@@ -610,8 +610,9 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
     fast_softmax = select_kernel("nn.softmax", scores, **softmax_options)
     zero_fully_masked = fast_softmax is not None and attn_mask is not None
     skip_row_valid = fast_softmax is not None and (is_causal or attn_mask is not None)
-    negative = jt.array(float("-inf") if zero_fully_masked else -1e30).cast(scores.dtype)
     valid_positions = None
+    if is_causal or attn_mask is not None:
+        negative = jt.array(float("-inf") if zero_fully_masked else -1e30).cast(scores.dtype)
 
     if is_causal:
         causal = jt.triu(

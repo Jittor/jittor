@@ -846,7 +846,7 @@ _MM_FIDELITY_DETAIL = (
 
 from .linalg import _mm_impl
 
-from .linalg import mm
+from .linalg import mm, _int_mm
 
 register_fidelity(
     "torch.mm",
@@ -1383,6 +1383,7 @@ def install(ctx):
 
     # ---- torch.* ops used by mmdetection (additive aliases) ----
     _bind_missing(g, "mm", mm)
+    _bind_missing(g, "_int_mm", _int_mm)
     _bind_missing(g, "mv", mv)
     _bind_missing(g, "masked_select", masked_select)
     # Force-override, not `_bind_missing`: `jt.masked_fill` already exists, so the
@@ -1390,6 +1391,7 @@ def install(ctx):
     # how `torch.masked_fill` raised AttributeError while `jt.masked_fill` worked.
     g.masked_fill = masked_fill
     _bind_missing(g, "split_with_sizes", split_with_sizes)
+    Var.split_with_sizes = split_with_sizes
     _bind_missing(g, "_shape_as_tensor", _shape_as_tensor)
     _bind_missing(g, "nan_to_num_", nan_to_num_)
     # torch.randint_like(input, low, high=None, *, dtype=...): jittor's native lacks

@@ -1530,6 +1530,57 @@ def _module_extra_repr(self):
     return ""
 
 
+def _rocm_linear_dispatch_bindings(dispatch):
+    """Live owners for the no-grad ROCm dense Linear shortcut."""
+    import importlib
+    from jittor.backends.rocm.libraries import install as rocm_libraries
+
+    linear = importlib.import_module("jittor.nn.functional.linear")
+    modules = importlib.import_module("jittor.nn.modules.linear")
+    checks = []
+    for op, implementation, supports in (
+        ("linear_bias_accumulator", rocm_libraries._hipblas_linear_bias,
+         rocm_libraries._supports_linear_bias),
+        ("matmul", rocm_libraries._hipblas_matmul, rocm_libraries._supports_matmul),
+    ):
+        key = (op, "rocm")
+        entries = dispatch._kernels.get(key, ())
+        if (len(entries) != 1 or entries[0].implementation is not implementation
+                or entries[0].supports is not supports):
+            return None
+        wildcard = (op, "*")
+        wildcard_entries = dispatch._kernels.get(wildcard)
+        if wildcard_entries:
+            return None
+        checks.extend(((dispatch._kernels, key, entries),
+                       (dispatch._kernels, wildcard, wildcard_entries)))
+    return linear._NATIVE_LINEAR_BINDINGS + (
+        (vars(modules), "linear", linear._NATIVE_LINEAR_FUNCTION),
+        (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
+        (vars(dispatch), "_kernels", dispatch._kernels),
+    ) + tuple(checks)
+
+
+def _rocm_int8_dispatch_bindings(dispatch):
+    import importlib
+    from jittor.backends.rocm.libraries import install as rocm_libraries
+
+    linear = importlib.import_module("jittor.nn.functional.linear")
+    key, wildcard = ("int8_matmul", "rocm"), ("int8_matmul", "*")
+    entries = dispatch._kernels.get(key, ())
+    wildcard_entries = dispatch._kernels.get(wildcard)
+    if (len(entries) != 1 or entries[0].implementation is not rocm_libraries._hipblas_int8_matmul
+            or entries[0].supports is not rocm_libraries._supports_matmul or wildcard_entries):
+        return None
+    owners = tuple(entry for entry in linear._NATIVE_LINEAR_BINDINGS if entry[0] is vars(dispatch))
+    return owners + (
+        (vars(dispatch), "_NATIVE_SELECT", jt.core._kernel_select),
+        (vars(dispatch), "_kernels", dispatch._kernels),
+        (dispatch._kernels, key, entries),
+        (dispatch._kernels, wildcard, wildcard_entries),
+    )
+
+
 def _linear_training_dispatch_state(nn, dispatch):
     """Live owners for the native small CUDA training product, or None."""
     import importlib
@@ -1622,6 +1673,7 @@ def _install_module_methods(nn, registry=None):
     from jittor.nn.functional import activation as _activation
     from jittor._core import arg_policy as _arg_policy
     from jittor.nn.modules.normalization import GroupNorm as _NativeGroupNorm
+    from jittor.nn.functional import convolution as _convolution
     from jittor.backends.cuda.kernels.nn import group_norm_cuda as _group_norm_cuda
     from jittor._runtime import dispatch as _kernel_dispatch
     if _kernel_dispatch._NATIVE_SELECT is None:
@@ -1660,6 +1712,8 @@ def _install_module_methods(nn, registry=None):
         "residual_offers": _activation._RESIDUAL_OFFERS,
         "arg_policy_warned": _arg_policy._warned,
         "conv_execute": _NativeConv.execute,
+        "conv_function": _convolution.conv2d,
+        "conv_forward": _NativeConv._conv_forward,
         "conv_cudnn_kernel": getattr(_cudnn_backend._try_cudnn_conv2d, "__wrapped__", None),
         "cudnn_backend": _cudnn_backend,
         "conv_filter_key": _cudnn_backend._FILTER_OHWI,
@@ -1668,10 +1722,28 @@ def _install_module_methods(nn, registry=None):
         "lt_linear_header": _lt_linear._HEADER,
         "lt_linear_source": _lt_linear._source,
         "layer_norm_execute": _NativeLayerNorm.execute,
+        "layer_norm_function": _normalization.layer_norm,
         "layer_norm_inference": _layer_norm_cuda._layer_norm_no_grad_cuda.__wrapped__,
         "layer_norm_source": _layer_norm_cuda._affine_source,
         "acl_possible": bool(getattr(jt.compiler, "has_acl", 0)),
     }
+    if getattr(jt.compiler, "has_rocm", False):
+        from jittor.backends.rocm import kernels as _rocm_kernels
+        from jittor.backends.rocm.kernels import normalization as _rocm_norm
+        from jittor.backends.rocm.libraries import install as _rocm_libraries
+        _dispatch_parts.update(
+            rocm_linear_kernel=_rocm_libraries._hipblas_linear_bias,
+            rocm_matmul_kernel=_rocm_libraries._hipblas_matmul,
+            rocm_int8_kernel=_rocm_libraries._hipblas_int8_matmul,
+            rocm_int8_bindings=_rocm_int8_dispatch_bindings(_kernel_dispatch),
+            rocm_linear_bindings=_rocm_linear_dispatch_bindings(_kernel_dispatch),
+            rocm_conv_kernel=_rocm_kernels._conv2d,
+            rocm_group_kernel=_rocm_kernels._group_norm,
+            rocm_layer_kernel=_rocm_kernels._layer_norm,
+            rocm_norm_source=_rocm_norm._source,
+            rocm_norm_header=_rocm_norm._HEADER,
+            rocm_group_build=jt.core._group_norm_rocm_build,
+        )
     jt.core._module_call_bind(M, _call, _dispatch_module_call, _published_ids,
                               _pipeline_state, _active_device_context,
                               _nn_frontend.python_module_call, _dispatch_parts)

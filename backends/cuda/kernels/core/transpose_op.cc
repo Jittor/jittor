@@ -1,8 +1,7 @@
 #include "ops/composite/transpose_op.h"
 #include "core/var.h"
 #include "core/executor.h"
-#include <cuda_runtime.h>
-#include "helper_cuda.h"
+#include "indexing_runtime.h"
 
 namespace jittor {
 #ifdef JIT_cuda

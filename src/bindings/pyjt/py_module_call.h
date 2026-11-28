@@ -42,6 +42,14 @@ void module_call_bind(PyObject* module_cls, PyObject* dispatch_call,
                       PyObject* pipeline, PyObject* device_context, PyObject* slow,
                       PyObject* dispatch_parts);
 
+// ROCm Linear through the same registry and guards as native module calls.
+// @pyjt(_rocm_linear_inference)
+PyObject* rocm_linear_inference_forward(PyObject* x, PyObject* weight, PyObject* bias);
+
+// Dense signed INT8 GEMM with the registered ROCm provider.
+// @pyjt(_rocm_int_mm)
+PyObject* rocm_int8_matmul_forward(PyObject* x, PyObject* weight);
+
 // @pyjt(_module_call)
 PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs);
 
@@ -53,5 +61,10 @@ PyObject* module_call_native(PyObject* module, PyObject* args, PyObject* kwargs)
 // @pyjt(_group_norm_nhwc_build)
 PyObject* group_norm_nhwc_build(PyObject* source, PyObject* weight, PyObject* bias,
                                 int64 groups, double eps, const string& act);
+
+// The ROCm provider's inference source, with its optional SiLU, using the
+// same source builder and dense-input adaptation as its Python CodeOp.
+// @pyjt(_group_norm_rocm_build)
+PyObject* group_norm_rocm_build(PyObject* source, PyObject* weight, PyObject* bias, int64 groups, double eps, const string& act);
 
 } // namespace jittor

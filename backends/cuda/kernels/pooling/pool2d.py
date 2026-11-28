@@ -5,6 +5,9 @@ def pool2d_cuda_options(forward_body, backward_body):
     return {
         "cuda_header": """
                     #include <type/cuda_limits.h>
+                    #ifdef IS_ROCM
+                    #include <hip/hip_runtime.h>
+                    #endif
                 """,
         "cuda_src": f'''
                     __global__ static __launch_bounds__(256) void kernel1(@ARGS_DEF) {{
@@ -27,8 +30,13 @@ def pool2d_cuda_options(forward_body, backward_body):
                     dim3 s1(bx, by, bz);
                     dim3 s2(tx, ty);
                     kernel1<<<s1, s2>>>(@ARGS);
+                    #ifdef IS_ROCM
+                    auto error = hipGetLastError();
+                    CHECK(error == hipSuccess) << hipGetErrorString(error);
+                    #else
                     auto error = cudaGetLastError();
                     CHECK(error == cudaSuccess) << cudaGetErrorString(error);
+                    #endif
                 ''',
         "cuda_grad_src": [f'''
                     __global__ static __launch_bounds__(256) void kernel3(@ARGS_DEF) {{
@@ -43,7 +51,11 @@ def pool2d_cuda_options(forward_body, backward_body):
                             for (int i2 = p2; i2 < pout_shape2; i2 += s2)
                                 {{ {backward_body} }}
                     }}
+                    #ifdef IS_ROCM
+                    CHECK(hipMemsetAsync(out_p, 0, out->size) == hipSuccess);
+                    #else
                     cudaMemsetAsync(out_p, 0, out->size);
+                    #endif
                     int tx = std::min(256, pout_shape3);
                     int ty = std::min(256 / tx, pout_shape2);
                     int bx = (pout_shape2 - 1) / ty + 1;
@@ -52,7 +64,12 @@ def pool2d_cuda_options(forward_body, backward_body):
                     dim3 s1_(bx, by, bz);
                     dim3 s2_(tx, ty);
                     kernel3<<<s1_, s2_>>>(@ARGS);
+                    #ifdef IS_ROCM
+                    auto error = hipGetLastError();
+                    CHECK(error == hipSuccess) << hipGetErrorString(error);
+                    #else
                     auto error = cudaGetLastError();
                     CHECK(error == cudaSuccess) << cudaGetErrorString(error);
+                    #endif
                 '''],
     }

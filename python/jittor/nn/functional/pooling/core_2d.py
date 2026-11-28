@@ -119,6 +119,22 @@ def _pool2d(x, *, ceil_mode, count_include_pad, kernel_size, op, padding, return
         raise jt.JittorShapeError(
             "%s expected a 4-D input (N, C, H, W), but got a %d-D input of shape %s."
             % ("max_pool2d" if op == "maximum" else "min_pool2d", len(x.shape), list(x.shape)))
+    from jittor._core.dtypes import dtype_name
+    dtype = dtype_name(x.dtype)
+    if dtype in ("float16", "bfloat16"):
+        from jittor._runtime.dispatch import dispatch_context
+        if dispatch_context(x).backend == "rocm":
+            # Max/min selects one of the original half values exactly in
+            # FP32. The FP32 pooling backward also avoids unsupported
+            # narrow atomics in HIP CodeOp kernels.
+            with jt.flag_scope(amp_reg=jt.amp_flags.disabled):
+                result = _pool2d(x.float32(), ceil_mode=ceil_mode,
+                    count_include_pad=count_include_pad, kernel_size=kernel_size,
+                    op=op, padding=padding, return_indices=return_indices, stride=stride)
+                if return_indices:
+                    values, indices = result
+                    return values.cast(dtype), indices
+                return result.cast(dtype)
     N,C,H,W = x.shape
     # torch only requires the *padded* input to be at least the kernel size
     # (so the output has size >= 1). The original guard ignored padding, which

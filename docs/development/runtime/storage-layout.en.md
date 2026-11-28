@@ -20,6 +20,14 @@ Allocation identity and lifetime remain `(allocator, allocation)` plus the share
 ring. `share_with()` records a pending alias; allocation establishes the ring and holds a
 reference to the other allocation.
 
+The allocator's `allocation_nbytes(token)` reports the complete originally requested
+storage extent, excluding pool alignment and backend padding, independently of the current
+view's span. `VarHolder._storage_bytes()` exports that entire allocation as an independently
+owned byte Tensor with no graph inputs; rebinding or releasing the source holder leaves
+this reference holding the original allocation. Torch storage addresses and capacities
+come from this owner. Typed storage `size()` counts elements; untyped storage `size()` counts
+bytes. View spans still govern the computation, copy and release paths below.
+
 **Physical allocation, migration, swapping out and freeing all use `storage_span_bytes()`**;
 never copy the logical byte count of an expanded tensor onto its smaller physical storage.
 Migration may compact the live storage span and update the offset, **provided the relative

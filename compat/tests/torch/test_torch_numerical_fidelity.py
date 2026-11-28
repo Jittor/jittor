@@ -1648,6 +1648,21 @@ class TestTorchNumericalFidelity(unittest.TestCase):
             np.testing.assert_allclose(got.numpy(), want, rtol=1e-6)
             np.testing.assert_allclose(got_method.numpy(), want, rtol=1e-6)
 
+    @unittest.skipUnless(torch.cuda.is_available(), "requires accelerator")
+    def test_tensor_split_with_sizes_accelerator(self):
+        values = np.arange(12, dtype="float32").reshape(3, 4)
+        with _native_jittor.flag_scope(use_cuda=1, backend_fallback="error"):
+            before = _native_jittor.core.backend_fallback_count()
+            tensor = torch.tensor(values, device="cuda")
+            parts = tensor.split_with_sizes([1, 3], dim=1)
+            self.assertEqual(len(parts), 2)
+            for part, expected in zip(parts, (values[:, :1], values[:, 1:])):
+                part.sync()
+                self.assertEqual(part.device.type, "cuda")
+                self.assertEqual(part.location(), "device")
+                np.testing.assert_array_equal(part.detach().cpu().numpy(), expected)
+            self.assertEqual(_native_jittor.core.backend_fallback_count(), before)
+
     def test_cosine_similarity_is_a_stable_module_level_object(self):
         numerical = importlib.import_module(
             "jittor.compat.torch.installers.numerical")
