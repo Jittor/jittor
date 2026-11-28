@@ -51,6 +51,15 @@ CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
     configure_grad();
 }
 
+CodeOp::CodeOp(NanoVector shape, NanoString dtype, vector<Var*>&& inputs,
+               const string* cuda_token, DataMap&& data, string&& backend)
+    : CodeOp(move(shape), dtype, move(inputs), "", {}, "", "", {}, "", move(data), move(backend)) {
+    USER_CHECK(cuda_token && is_code_source_token(*cuda_token))
+        << "prepared device code requires an interned source token";
+    prepared_cuda_source = cuda_token;
+    set_flag(OpFlags::_cuda);
+}
+
 
 CodeOp::CodeOp(
     vector<NanoVector>&& shapes, vector<NanoString>&& dtypes, vector<Var*>&& inputs, 
@@ -423,6 +432,10 @@ void CodeOp::jit_prepare(JK& jk) {
             << JK::dec(_outputs[i]->shape.size());
         jk << "«out" << JK::dec3(i) << "_type:"
             << _outputs[i]->dtype();
+    }
+    if (prepared_cuda_source && executes_on_accelerator()) {
+        jk << "«HEADER:" << *prepared_cuda_source;
+        return;
     }
     const string& header = executes_on_accelerator() ?
         cuda_header : cpu_header;

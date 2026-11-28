@@ -6,6 +6,7 @@
 #include "bindings/pyjt/py_compat_fast.h"
 #include "ops/op_register.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -175,12 +176,14 @@ PyObject* partial_type = nullptr;
 PyObject* group_norm_name = nullptr;
 PyObject* lt_linear_header = nullptr;
 PyObject* lt_linear_source_fn = nullptr;
-std::map<std::tuple<int64, int64, int64, bool>, string> lt_linear_sources;
+std::map<std::tuple<int64, int64, int64, bool>, const string*> lt_linear_sources;
 string lt_linear_header_text;
 auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+auto make_prepared_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&,
+    const string*, DataMap&&, string&&>("code");
 // Source per hidden size, as `_rms_norm_source` formats it (eps passed via DataMap).
-std::map<int64, string> rms_sources;
+std::map<int64, const string*> rms_sources;
 // `jittor.nn.LayerNorm.execute`, the implementation registered for
 // "nn.layer_norm.inference" and `layer_norm_cuda._affine_source`; see
 // `layer_norm_inference`.
@@ -189,7 +192,7 @@ PyObject* layer_norm_impl = nullptr;
 PyObject* layer_norm_source_fn = nullptr;
 PyObject* layer_norm_weight_only_source_fn = nullptr;
 PyObject* layer_norm_name = nullptr;
-std::map<std::tuple<int64, bool, bool>, string> layer_norm_sources;
+std::map<std::tuple<int64, bool, bool>, const string*> layer_norm_sources;
 
 // Keep fixed dictionary keys, never the values: hooks and module attributes
 // may change between calls and must be read from the live dictionary.
@@ -973,14 +976,15 @@ PyObject* linear_with_bias_inference(PyObject* dict, PyObject* x) {
         Py_ssize_t size;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
         if (!text) return nullptr;
-        found = lt_linear_sources.emplace(key, string(text, size)).first;
+        const auto& source = code_source_token(lt_linear_header_text, string(text, size));
+        found = lt_linear_sources.emplace(key, &source).first;
     }
     NanoVector shape;
     for (int i = 0; i < rank - 1; i++) shape.push_back(a->shape[i]);
     shape.push_back(cout);
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_code(shape, dtype, {a, w, b},
-        "", {}, "", string(found->second), {}, string(lt_linear_header_text), {}, "")));
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(shape, dtype, {a, w, b},
+        found->second, {}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
@@ -1123,11 +1127,12 @@ PyObject* rms_norm_inference(PyObject* module, PyObject* dict, PyObject* x) {
         Py_ssize_t size;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &size);
         if (!text) return nullptr;
-        found = rms_sources.emplace(hidden, string(text, size)).first;
+        const auto& source = code_source_token("", string(text, size));
+        found = rms_sources.emplace(hidden, &source).first;
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
-    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), {a, gamma},
-        "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(a->shape, a->dtype(), {a, gamma},
+        found->second, DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
@@ -1193,12 +1198,13 @@ PyObject* layer_norm_inference(PyObject* dict, PyObject* x) {
         Py_ssize_t length;
         const char* text = PyUnicode_AsUTF8AndSize(src.obj, &length);
         if (!text) return nullptr;
-        found = layer_norm_sources.emplace(key, string(text, length)).first;
+        const auto& source = code_source_token("", string(text, length));
+        found = layer_norm_sources.emplace(key, &source).first;
     }
     PyTensorFrontendScope scope(x, nullptr, 0, false);
     auto inputs = beta ? vector<Var*>{a, gamma, beta} : vector<Var*>{a, gamma};
-    unique_ptr<VarHolder> out(new VarHolder(make_code(a->shape, a->dtype(), move(inputs),
-        "", {}, "", string(found->second), {}, "", DataMap{{"eps", epsilon}}, "")));
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(a->shape, a->dtype(), move(inputs),
+        found->second, DataMap{{"eps", epsilon}}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }

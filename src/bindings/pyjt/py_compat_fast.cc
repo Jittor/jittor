@@ -9,6 +9,7 @@
 #include "ops/op_register.h"
 #include "core/op.h"
 #include "ops/composite/code_op.h"
+#include "ops/composite/code_source.h"
 #include "ops/composite/transpose_op.h"
 #include "ops/composite/fuse_transpose_op.h"
 #include "mem/allocator.h"
@@ -731,6 +732,8 @@ auto make_getitem = op_constructor<VarPtr, Var*, VarSlices&&>("getitem");
 auto make_cat_cast = op_constructor<VarPtr, Var*, NanoString>("unary");
 auto make_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&, string&&,
     vector<string>&&, string&&, string&&, vector<string>&&, string&&, DataMap&&, string&&>("code");
+auto make_prepared_code = op_constructor<VarPtr, NanoVector, NanoString, vector<Var*>&&,
+    const string*, DataMap&&, string&&>("code");
 
 // Copy both portions of a dense row in one launch. The widths travel with
 // the op so a growing sequence can reuse the same compiled CUDA kernel.
@@ -1360,14 +1363,14 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
     // The registered provider formats source from this specialization only.
     // A different callable still supplies its own text on every invocation.
     static PyObject* source_owner = nullptr;
-    static std::map<SourceKey, string> sources;
+    static std::map<SourceKey, const string*> sources;
     if (!source_owner) {
         Py_INCREF(source_fn);
         source_owner = source_fn;
     }
     const bool cacheable = source_fn == source_owner;
     auto found = cacheable ? sources.find(key) : sources.end();
-    string code;
+    const string* code;
     if (found != sources.end()) {
         code = found->second;
     } else {
@@ -1380,23 +1383,55 @@ PyObject* neox_rope(PyObject* x, PyObject* cos, PyObject* sin, PyObject* source_
         Py_ssize_t size;
         const char* bytes = PyUnicode_AsUTF8AndSize(text.obj, &size);
         if (!bytes) return nullptr;
-        code.assign(bytes, size);
+        code = &code_source_token("", string(bytes, size));
         if (cacheable) {
             if (sources.size() >= 256) sources.clear();
             sources.emplace(key, code);
         }
     }
-    unique_ptr<VarHolder> out(new VarHolder(make_code(shape, dtype, {source.ptr, c, s},
-        "", {}, "", move(code), {}, "", {}, "")));
+    unique_ptr<VarHolder> out(new VarHolder(make_prepared_code(shape, dtype,
+        {source.ptr, c, s}, code, {}, "")));
     out->stop_grad();
     return to_py_object<VarHolder*>(out.release());
 }
 
-VarHolder* cuda_inference_unary_code(VarHolder* input, string&& source, string&& header) {
+VarHolder* cuda_inference_unary_code(VarHolder* input, PyObject* source, PyObject* header) {
     USER_CHECK(no_grad) << "unary inference code requires no_grad";
+    USER_CHECK(PyUnicode_CheckExact(source) && PyUnicode_CheckExact(header))
+        << "inference code sources and headers must be strings";
+    struct Entry {
+        PyObject* source = nullptr;
+        PyObject* header = nullptr;
+        const string* token = nullptr;
+    };
+    // The Python source owners are immutable strings. The actual token
+    // remains valid while a queued operator owns it after this entry is reused.
+    static Entry recent[16]{};
+    static unsigned next = 0;
+    const string* token = nullptr;
+    for (const auto& entry : recent)
+        if (entry.source == source && entry.header == header) {
+            token = entry.token;
+            break;
+        }
+    if (!token) {
+        Py_ssize_t source_size, header_size;
+        const char* source_text = PyUnicode_AsUTF8AndSize(source, &source_size);
+        if (!source_text) throw std::invalid_argument("invalid CUDA source text");
+        USER_CHECK(source_size) << "inference code requires a CUDA source";
+        const char* header_text = PyUnicode_AsUTF8AndSize(header, &header_size);
+        if (!header_text) throw std::invalid_argument("invalid CUDA header text");
+        token = &code_source_token(string(header_text, header_size), string(source_text, source_size));
+        auto& entry = recent[next];
+        Py_XDECREF(entry.source);
+        Py_XDECREF(entry.header);
+        Py_INCREF(source);
+        Py_INCREF(header);
+        entry = {source, header, token};
+        next = (next + 1) % 16;
+    }
     auto* value = input->grad_input();
-    return new VarHolder(make_code(value->shape, value->dtype(), {value}, "", {}, "",
-                                   move(source), {}, move(header), {}, ""));
+    return new VarHolder(make_prepared_code(value->shape, value->dtype(), {value}, token, {}, ""));
 }
 
 namespace {

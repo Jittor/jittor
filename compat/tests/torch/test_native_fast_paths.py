@@ -1026,6 +1026,24 @@ class TestRegisteredRmsInference(unittest.TestCase):
 
 
 class TestNativeModuleDispatch(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "the prepared inference source needs CUDA")
+    def test_layer_norm_reuses_source_with_live_parameters(self):
+        values = np.linspace(-3, 5, 4 * 64, dtype=np.float32).reshape(4, 64)
+        centered = values - values.mean(axis=-1, keepdims=True)
+        layer = torch.nn.LayerNorm(64).cuda().eval()
+        function = torch.nn.Sequential(layer).eval()
+        x = torch.tensor(values, device="cuda")
+        with torch.no_grad(), jt.flag_scope(backend_fallback="error", auto_graph_replay=0):
+            function(x).sync()
+            for epsilon, bias in ((0.25, 3.0), (0.03125, -2.0)):
+                layer.eps = epsilon
+                layer.bias.fill_(bias)
+                out = function(x)
+                out.sync()
+                self.assertEqual(out.location(), "device")
+                expected = centered / np.sqrt((centered ** 2).mean(axis=-1, keepdims=True) + epsilon)
+                np.testing.assert_allclose(out.cpu().numpy(), expected + bias, rtol=2e-5, atol=2e-6)
+
     """What `_dispatch_module_call` does, taken natively inside a module."""
 
     def test_a_bias_free_linear(self):

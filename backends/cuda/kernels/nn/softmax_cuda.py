@@ -66,6 +66,15 @@ CHECK(0 == cudaGetLastError());
 ''')
 
 
+@lru_cache(maxsize=8)
+def _softmax_header(cub_home):
+    return f'''
+#include <{cub_home}cub/cub.cuh>
+#include <type/fp16_compute.h>
+#include <type_traits>
+'''
+
+
 @lru_cache(maxsize=256)
 def _softmax_v1_cls(length, log=False, zero_all_neg_inf=False):
     # The generated Function class and CUDA source depend only on the reduced
@@ -262,11 +271,7 @@ CHECK(0 == cudaGetLastError());
 """
 
     def forward(x, inference):
-        header = f'''
-#include <{library_resource('cub', 'home')}cub/cub.cuh>
-#include <type/fp16_compute.h>
-#include <type_traits>
-'''
+        header = _softmax_header(library_resource("cub", "home"))
         if inference:
             return jt.core._cuda_inference_unary_code(x, execute_source, header)
         return jt.code(x.shape, x.dtype, [x], cuda_header=header, cuda_src=execute_source)
