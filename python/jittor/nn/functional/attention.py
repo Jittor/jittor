@@ -8,7 +8,6 @@ import math
 import jittor as jt
 from jittor._core.flags import _output_requires_grad
 from jittor._runtime.dispatch import dispatch_context, select_kernel, try_dispatch
-from .matrix import _cublas_batched_matmul
 
 
 def _attention_bias(scores, attn_mask, is_causal):
@@ -378,7 +377,7 @@ LAST_FUSED_KERNEL = [None]
 def _capture_prefers_batched_fp32(query, key):
     from jittor._runtime import step_capture
 
-    if (not step_capture.active() or query.ndim != 4 or key.ndim != 4
+    if (not step_capture.active() or len(query.shape) != 4 or len(key.shape) != 4
             or tuple(query.shape[:2]) != tuple(key.shape[:2])):
         return False
     batch, heads, queries, width = (int(size) for size in query.shape)
@@ -667,15 +666,17 @@ def _composite(query, key, value, attn_mask, probability, is_causal, scale_facto
     query_length = int(query.shape[-2])
     source_length = int(key.shape[-2])
     scores = None
-    if (compute_dtype == "float32" and query.ndim == key.ndim == 4
-            and query.shape[:2] == key.shape[:2]):
+    if (compute_dtype == "float32" and len(query.shape) == len(key.shape) == 4
+            and query.shape[:2] == key.shape[:2]
+            and dispatch_context(query, key).backend == "cuda"):
         kernel = select_kernel("batched_matmul", query, key, False, True)
-        if kernel is _cublas_batched_matmul and dispatch_context(query, key).backend == "cuda":
+        from jittor.nn.functional.matrix import _cublas_batched_matmul
+        if kernel is _cublas_batched_matmul:
             # The op's storage adapter keeps the logical inputs in the gradient
             # graph, including inputs backed by strided transpose views.
             scores = kernel(query, key, trans_b=True, alpha=float(scale_factor))
     if scores is None:
-        scores = jt.matmul(query, key.transpose(-2, -1))
+        scores = jt.nn.matmul(query, key.transpose(-2, -1))
         if scale_factor != 1.0:
             scores = scores * scale_factor
     softmax_options = dict(log=False, zero_all_neg_inf=attn_mask is not None, dim=-1)

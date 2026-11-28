@@ -80,8 +80,8 @@ static void setitem_inplace(SetitemOp* op) {
             // this SetitemOp when no other consumer or backward edge reads it.
             if (input_op->outputs().size() != 1
                     || input_op->is_storage_view()
-                    || std::strcmp(input_op->name(), "clone") == 0
-                    || std::strcmp(input_op->name(), "tape") == 0
+                    || input_op->is_op(get_op_id("clone"))
+                    || input_op->is_op(get_op_id("tape"))
                     || input->is_sharing()
                     || input->storage_offset_bytes != 0
                     || !input->is_contiguous()

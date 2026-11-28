@@ -4,7 +4,7 @@ from jittor._core.dtypes import dtype_name as _jittor_dtype_name
 import os
 
 import jittor as jt
-from jittor._runtime.dispatch import native_rule, optional_kernel, register_kernel
+from jittor._runtime.dispatch import dispatch_context, native_rule, optional_kernel, register_kernel
 from jittor._runtime.backend_libraries import get_library_ops
 from jittor._runtime.core_api import _output_requires_grad
 from jittor.nn.functional._amp import bias_for_compute_dtype
@@ -168,7 +168,7 @@ def _try_cudnn_conv2d(x, weight, bias, stride, padding, dilation, groups,
     y = cudnn.cudnn_conv(x, filter_, sh, sw, ph, pw, dh, dw, groups, "abcd", layout)
     if bias is not None:
         y = y + bias_for_compute_dtype(y, bias).broadcast(y.shape, [0, 2, 3])
-    if training and (dtype in _HALF or not jt.compiler.is_cuda
+    if training and (dtype in _HALF or dispatch_context(x, weight).backend != "cuda"
                      or jt.core.float32_precision_state()[1] != "highest"):
         offer_channels_last(y, lambda: channels_last(None))
     return y

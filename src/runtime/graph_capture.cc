@@ -147,7 +147,7 @@ bool collect_cpu_prefix(Var* root, HostPrefix& prefix,
 // extent and can run outside the recording under the same shape guard.
 Var* dynamic_where_condition(Op* op) {
     if (auto* where = dynamic_cast<WhereOp*>(op)) return where->cond;
-    if (std::strcmp(op->name(), "cub_where") == 0) return *op->inputs().begin();
+    if (op->is_op(get_op_id("cub_where"))) return *op->inputs().begin();
     return nullptr;
 }
 
@@ -643,7 +643,7 @@ bool constant_fold_pure_op(Op* op) {
     if (auto* copy = dynamic_cast<DeviceCopyOp*>(op))
         return copy->device >= 0;
     if (op->flag(OpFlags::_manual_device)) return false;
-    if (std::strcmp(op->name(), "setitem") == 0) {
+    if (op->is_op(op_ids::setitem())) {
         // Pure functional slice-write into a freshly traced pending tensor
         // (e.g. shifted-window attention masks built from zeros + slice assigns).
         return op->inputs().size() > 0 && !op->inputs().front()->is_finished();
@@ -772,13 +772,13 @@ int64 fold_graph_constants(const vector<VarHolder*>& outputs,
 
         Var* target = v;
         while (target && !target->is_finished() && target->input()
-                && std::strcmp(target->input()->name(), "broadcast_to") == 0) {
+                && target->input()->is_op(op_ids::broadcast_to())) {
             if (target->input()->inputs().size() == 0) break;
             target = target->input()->inputs().front();
         }
         if (!target || target->is_finished() || !target->input()) continue;
         if (output_set.count(target) || !is_const[target] || !has_work[target]) continue;
-        if (std::strcmp(target->input()->name(), "array") == 0) continue;
+        if (target->input()->is_op(op_ids::array())) continue;
         if (target->num <= 0 || target->size <= 0 || target->size > max_var_bytes) continue;
         if (total_bytes > max_total_bytes - target->size) continue;
         if (frontier_seen.insert(target).second) {
