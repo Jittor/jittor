@@ -19,6 +19,7 @@ struct MappedConcatOp : Op {
 
     MappedConcatOp(vector<Var*>&& tensors, int dim=0);
 
+    static bool accepts_strided_input(const Var* value);
     const char* name() const override { return "mapped_concat"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;
     void infer_shape() override;

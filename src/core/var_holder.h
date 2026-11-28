@@ -649,6 +649,21 @@ public:
         return {uint64(var->id), token->identity, token->value.load(std::memory_order_relaxed)};
     }
 
+    // Safe immutable-snapshot key for small finished tensors whose memory has
+    // not escaped to external raw pointers or kept-graph replays.
+    // @pyjt(_tolist_cache_key)
+    inline vector<uint64> tolist_cache_key() {
+        if (!var || !var->is_finished() || !var->mem_ptr || var->num <= 0 || var->num > 64
+                || var->flag(VarFlags::_kept) || var->capture_owners > 0)
+            return {};
+        auto token = var->peek_storage_version();
+        if (!token) token = var->storage_version_token();
+        if (token->externally_visible.load(std::memory_order_relaxed))
+            return {};
+        return {uint64(var->id), uint64(var->mem_ptr), token->identity,
+                token->value.load(std::memory_order_relaxed)};
+    }
+
     // @pyjt(__get__raw_ptr)
     uint64 raw_ptr();
 

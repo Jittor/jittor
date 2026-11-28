@@ -93,32 +93,32 @@ namespace jittor
     void Conv2dBackwardOpRunner::setupOutputDesc()
     {
         auto output_num = out_.size();
-
-        for (int output_idx = 0; output_idx < output_num; output_idx++)
+        outputShapes.resize(output_num);
+        for (size_t output_idx = 0; output_idx < output_num; output_idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < out_[output_idx]->shape.size(); j++)
-            {
-                shape.push_back(out_[output_idx]->shape[j]);
-            }
-            outputShapes.push_back(shape);
+            auto &shape = outputShapes[output_idx];
+            const auto &vs = out_[output_idx]->shape;
+            shape.resize(vs.size());
+            for (size_t j = 0; j < vs.size(); j++)
+                shape[j] = vs[j];
         }
 
+        outputTensors.resize(3, nullptr);
         for (int idx = 0; idx < 2; idx++)
         {
-            outputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
+            outputTensors[idx] = nullptr;
+            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": convolution gradient tensor creation failed. ERROR:" << ret;
         }
         // biasgrad nd format; no-bias joint gradients only request dx and dw.
         if (output_num == 2)
         {
-            outputTensors.push_back(nullptr);
+            outputTensors[2] = nullptr;
             return;
         }
         {
-            outputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(outputShapes[2], out_[2]->mem_ptr, out_[2]->size, get_dtype(out_[2]->dtype()), &outputTensors[2], false);
+            outputTensors[2] = nullptr;
+            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[2], out_[2]->mem_ptr, out_[2]->size, get_dtype(out_[2]->dtype()), &outputTensors[2], false);
             if (ret != ACL_SUCCESS) LOGf << name << ": bias gradient tensor creation failed. ERROR:" << ret;
         }
     }

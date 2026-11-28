@@ -140,10 +140,12 @@ namespace jittor
             // input per launch.
             auto &shape = inputShapes[input_idx];
             Var *v = in_[input_idx];
-            if (collapse && is_scalar_expansion(v))
+            if ((collapse && is_scalar_expansion(v))
+                || (collapsesScalarInputs() && v->num == 1 && v->shape.size() == 0
+                    && !out_.empty() && out_[0]->shape.size() > 0))
             {
-                // One element behind a stride-0 expansion: hand CANN the real
-                // shape and let it broadcast (see collapsesScalarInputs).
+                // One element behind a stride-0 expansion (or an elided 0-D
+                // scalar broadcast): hand CANN shape [1] and let it broadcast.
                 shape.assign(1, 1);
                 continue;
             }
@@ -170,7 +172,7 @@ namespace jittor
             // tensor, so it must not carry the expanded var as its storage --
             // apply_storage_strides would put the stride-0 view back.
             const bool collapsed = inputShapes[idx].size() == 1 && inputShapes[idx][0] == 1
-                                   && in_[idx]->num > 1;
+                                   && (in_[idx]->num > 1 || in_[idx]->shape.size() == 0);
             auto ret = AcquireAclTensor(scratch->descriptors, inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, (collapsed || flattened) ? nullptr : in_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
@@ -178,17 +180,15 @@ namespace jittor
 
     void BaseOpRunner::cleanupDesc()
     {
-        auto input_num = in_.size();
-        auto output_num = out_.size();
         // Clearing the slot as it goes keeps the failure path in
         // AclExecutionRunner::run from destroying a descriptor that is already
         // back in the pool.
-        for (int idx = 0; idx < input_num; idx++)
+        for (size_t idx = 0; idx < inputTensors.size(); idx++)
         {
             RecycleAclTensor(scratch->descriptors, inputTensors[idx]);
             inputTensors[idx] = nullptr;
         }
-        for (int idx = 0; idx < output_num; idx++)
+        for (size_t idx = 0; idx < outputTensors.size(); idx++)
         {
             RecycleAclTensor(scratch->descriptors, outputTensors[idx]);
             outputTensors[idx] = nullptr;
@@ -248,6 +248,25 @@ namespace jittor
              << ": aclnn workspace-size query failed, return code" << ret
              << acl_error_to_string(ret) << "recent error:"
              << (recent_error == nullptr ? "unavailable" : recent_error);
+    }
+
+    void BaseOpRunner::launch(aclnnStatus workspace_ret,
+                              AclExecuteFn launcher,
+                              bool synchronize)
+    {
+        checkRet(workspace_ret);
+        if (!launcher)
+            LOGf << "ACL operator has an empty execute launcher:" << name;
+        if (workspaceSize > 0)
+            mallocWorkSpace(workspaceSize);
+        auto launch_ret = launcher(
+            workspaceAddr, workspaceSize, executor, aclstream);
+        if (launch_ret != ACL_SUCCESS)
+            LOGf << "ACL operator" << name
+                 << ": execute launcher failed, return code" << launch_ret
+                 << acl_error_to_string(launch_ret);
+        if (synchronize)
+            syncRun();
     }
 
     void BaseOpRunner::launch(aclnnStatus workspace_ret,

@@ -239,6 +239,10 @@ def histc(input, bins, min=0., max=0.):
 
     '''
     import jittor as jt
+    from jittor._runtime.dispatch import try_dispatch
+    fast = try_dispatch("tensor.histc", input, bins=bins, min=min, max=max)
+    if fast is not None:
+        return fast
     if min == 0 and max == 0:
         min, max = input.min(), input.max()
     if min >= max:

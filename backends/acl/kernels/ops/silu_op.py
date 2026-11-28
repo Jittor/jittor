@@ -88,3 +88,31 @@ class SwiGluACL:
         output_shape[axis] //= 2
         program = _program("SwiGlu", ("swiglu", axis), attributes={"dim": axis})
         return acl_emit(program, [x], [x.dtype], [output_shape])[0]
+
+
+class SoftplusACL(jt.Function):
+    def execute(self, x, beta=1.0, threshold=20.0):
+        self.saved = (x, float(beta), float(threshold))
+        program = _program(
+            "Softplus",
+            ("softplus", float(beta), float(threshold)),
+            attributes={"beta": float(beta), "threshold": float(threshold)},
+        )
+        return acl_emit(program, [x], [x.dtype], [x.shape])[0]
+
+    def grad(self, grad_output):
+        x, beta, threshold = self.saved
+        scaled = x * beta
+        return grad_output * jt.where(scaled > threshold, 1.0, jt.sigmoid(scaled))
+
+
+class RsqrtACL(jt.Function):
+    def execute(self, x):
+        program = _program("Rsqrt", "rsqrt", attr_code='op.jt_name = "rsqrt";')
+        out = acl_emit(program, [x], [x.dtype], [x.shape])[0]
+        self.saved_out = out
+        return out
+
+    def grad(self, grad_output):
+        y = self.saved_out
+        return -0.5 * grad_output * y * y * y

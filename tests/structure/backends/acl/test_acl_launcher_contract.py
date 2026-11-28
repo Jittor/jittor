@@ -931,16 +931,21 @@ int acl_result = ACL_SUCCESS;
 aclTensor descriptor;
 std::ostringstream diagnostic;
 #define LOGf diagnostic
-int CreateAclTensor(const vector<int64_t>& shape, void* data, int64_t size,
-                    int dtype, aclTensor** tensor, bool nchw) {
+int AcquireAclTensor(vector<aclTensor*>& pool, const vector<int64_t>& shape, void* data, int64_t size,
+                     int dtype, aclTensor** tensor, bool nchw) {
     assert(shape == vector<int64_t>({2, 3}));
     assert(data != nullptr && size == 24 && dtype == 7);
     layouts.push_back(nchw);
     *tensor = &descriptor;
     return acl_result;
 }
+struct AclRunnerScratch {
+    vector<aclTensor*> descriptors;
+};
 struct BatchNormOpRunner {
     string name = "BatchNorm";
+    AclRunnerScratch scratch_storage;
+    AclRunnerScratch* scratch = &scratch_storage;
     vector<Var*> in_, out_;
     vector<vector<int64_t>> inputShapes, outputShapes;
     vector<aclTensor*> inputTensors, outputTensors;

@@ -9,6 +9,8 @@ KERNELS = (
     ("linalg.vector_norm", normalization.vector_norm_acl),
     ("clamp.scalar", tensor._clamp_acl),
     ("tensor.triu", tensor.triu_acl),
+    ("tensor.tril", tensor.tril_acl),
+    ("tensor.rsqrt", tensor.rsqrt_acl),
     ("tensor.flip", tensor.flip_acl),
     ("tensor.concat", tensor.concat),
     ("tensor.gather", tensor.gather_acl),
@@ -38,6 +40,7 @@ KERNELS = (
     ("nn.relu", neural.relu),
     ("nn.leaky_relu", neural.leaky_relu),
     ("nn.silu", neural._silu_acl),
+    ("nn.softplus", neural.softplus_acl),
     ("nn.gelu", neural.gelu_acl),
     ("nn.cross_entropy_loss", neural.cross_entropy_loss_acl),
     ("nn.softmax", neural.softmax_acl),
@@ -45,6 +48,8 @@ KERNELS = (
     ("nn.layer_norm.training", normalization.layer_norm_acl),
     ("nn.layer_norm.inference", normalization.layer_norm_acl),
     ("nn.batch_norm.eval", normalization._batch_norm_eval_cuda_acl),
+    ("nn.batch_norm.training_statistics", normalization._batch_norm_train_statistics_acl),
+    ("nn.batch_norm.training_running_stats", normalization._batch_norm_train_running_acl),
     ("nn.group_norm", normalization._group_norm_cuda_acl),
     ("nn.rms_norm.inference", normalization._rms_norm_cuda_acl),
     ("nn.grouped_add_rms_norm", normalization._grouped_add_rms_norm_acl),
@@ -56,6 +61,13 @@ KERNELS = (
     ("nn.embedding", tensor.embedding_acl),
     ("nn.silu_and_mul", neural._silu_and_mul_acl),
     ("nn.scaled_dot_product_attention", scaled_dot_product_attention_acl),
+    ("linear_bias_accumulator", neural.linear_bias_acl),
+    ("nn.grouped_mm", neural.grouped_mm_acl),
+    ("tensor.histc", tensor.histc_acl),
+    ("nn.dynamic_block_quant", neural.dynamic_block_quant_acl),
+    ("nn.dynamic_mx_quant", neural.dynamic_mx_quant_acl),
+    ("nn.quant_matmul", neural.quant_matmul_acl),
+    ("nn.fp8_linear", neural.fp8_linear_acl),
     ("random.multinomial", tensor.multinomial_single_draw_acl),
 )
 
@@ -70,8 +82,16 @@ def install():
                       if implementation is neural.conv_transpose2d_acl else
                       neural.grid_sample_supported
                       if implementation is neural.grid_sample_acl else
+                      neural.dynamic_block_quant_supported
+                      if implementation is neural.dynamic_block_quant_acl else
+                      neural.dynamic_mx_quant_supported
+                      if implementation is neural.dynamic_mx_quant_acl else
+                      neural.quant_matmul_supported
+                      if implementation is neural.quant_matmul_acl else
                       normalization.vector_norm_supported
                       if implementation is normalization.vector_norm_acl else
+                      neural.linear_bias_supported
+                      if implementation is neural.linear_bias_acl else
                       tensor.topk_supported
                       if implementation is tensor.topk_acl else None),
         )

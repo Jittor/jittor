@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from _helpers import capability
+from jittor._runtime.dispatch import override_kernel, registered_kernel
 from jittor._runtime.fallback import forbid_backend_fallbacks
 from jittor.backends.acl.kernels.ops import gelu_op
 
@@ -46,16 +47,17 @@ def test_public_forward_and_gradient_match_independent_formula(approximate, dtyp
         x = jt.array(source)
     x.start_grad()
     calls = []
-    original = gelu_op.GeluACL.__call__
+    acl_gelu = registered_kernel("nn.gelu", "acl")
+    assert acl_gelu is not None
 
-    def record(self, value, approximate="none"):
+    def record(value, approximate="none"):
         calls.append(approximate)
-        return original(self, value, approximate)
+        return acl_gelu(value, approximate=approximate)
 
-    monkeypatch.setattr(gelu_op.GeluACL, "__call__", record)
-    output = jt.nn.gelu(x, approximate=approximate)
-    gradient = jt.grad((output * jt.array(seed)).sum(), x)
-    jt.sync([output, gradient], True)
+    with override_kernel("nn.gelu", "acl", record):
+        output = jt.nn.gelu(x, approximate=approximate)
+        gradient = jt.grad((output * jt.array(seed)).sum(), x)
+        jt.sync([output, gradient], True)
     assert calls == [approximate]
     for value in (output, gradient):
         assert str(value.dtype) == dtype

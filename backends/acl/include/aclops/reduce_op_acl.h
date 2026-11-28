@@ -7,6 +7,10 @@ namespace jittor
     struct ReduceOpRunner : public BaseOpRunner
     {
         int op_idx; // Specific to reduce operations
+        bool use_inline_attr = false;
+        int64_t inline_axes[16] = {};
+        int inline_axes_len = 0;
+        bool inline_keepdims = false;
 
         ReduceOpRunner();
         ~ReduceOpRunner() override;
@@ -27,5 +31,16 @@ namespace jittor
         void setupInputDesc() override;
         void setupOutputDesc() override;
         void executeOp(AclOpRegistry::const_iterator &it) override;
+    };
+
+    class HistcOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        int64_t bins = 100;
+        double min_val = 0.0;
+        double max_val = 0.0;
+        HistcOpRunner();
     };
 }

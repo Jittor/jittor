@@ -140,4 +140,169 @@ namespace jittor
 
         return;
     }
+
+    BinaryScalarOpRunner::BinaryScalarOpRunner() : BaseOpRunner("Add")
+    {
+        use_nchw = false;
+        is_group_op = true;
+    }
+
+    namespace
+    {
+        // Small per-thread cache of host aclScalar handles keyed by (aclDataType,
+        // raw 64-bit value). Constants like 1.0, 0.0, -1.0, 1e-6, 0.5 repeat
+        // hundreds of times per token; caching avoids aclCreateScalar /
+        // aclDestroyScalar on every scalar binary launch.
+        struct HostScalarCache
+        {
+            static constexpr size_t kCap = 64;
+            struct Entry
+            {
+                aclDataType dtype = ACL_DT_UNDEFINED;
+                uint64_t bits = 0;
+                aclScalar *scalar = nullptr;
+            };
+            Entry entries[kCap];
+            size_t count = 0;
+
+            ~HostScalarCache()
+            {
+                for (size_t i = 0; i < count; ++i)
+                    if (entries[i].scalar)
+                        aclDestroyScalar(entries[i].scalar);
+            }
+
+            aclScalar *get_or_create(aclDataType dt, const void *data, size_t nbytes, bool &cached)
+            {
+                uint64_t bits = 0;
+                std::memcpy(&bits, data, nbytes);
+                for (size_t i = 0; i < count; ++i)
+                {
+                    if (entries[i].dtype == dt && entries[i].bits == bits)
+                    {
+                        cached = true;
+                        return entries[i].scalar;
+                    }
+                }
+                aclScalar *s = aclCreateScalar(const_cast<void *>(data), dt);
+                if (s && count < kCap)
+                {
+                    entries[count++] = {dt, bits, s};
+                    cached = true;
+                }
+                else
+                {
+                    cached = false;
+                }
+                return s;
+            }
+        };
+
+        thread_local HostScalarCache tl_host_scalar_cache;
+    }
+
+    void BinaryScalarOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        struct ScopedAclScalar
+        {
+            aclScalar *ptr = nullptr;
+            bool owned = false;
+            ~ScopedAclScalar()
+            {
+                if (owned && ptr) aclDestroyScalar(ptr);
+            }
+        };
+
+        float bf16_as_fp32 = 0.0f;
+        aclDataType scalar_acl_dt = ACL_DT_UNDEFINED;
+        const void *val_ptr = scalar_data;
+        size_t val_bytes = 0;
+        if (scalar_dtype == ns_float32)
+        {
+            scalar_acl_dt = ACL_FLOAT;
+            val_bytes = 4;
+        }
+        else if (scalar_dtype == ns_float16)
+        {
+            scalar_acl_dt = ACL_FLOAT16;
+            val_bytes = 2;
+        }
+        else if (scalar_dtype == ns_bfloat16)
+        {
+            uint16_t raw_bits = 0;
+            std::memcpy(&raw_bits, scalar_data, sizeof(raw_bits));
+            uint32_t f32_bits = static_cast<uint32_t>(raw_bits) << 16;
+            std::memcpy(&bf16_as_fp32, &f32_bits, sizeof(bf16_as_fp32));
+            scalar_acl_dt = ACL_FLOAT;
+            val_ptr = &bf16_as_fp32;
+            val_bytes = 4;
+        }
+        else if (scalar_dtype == ns_int32)
+        {
+            scalar_acl_dt = ACL_INT32;
+            val_bytes = 4;
+        }
+        else if (scalar_dtype == ns_int64)
+        {
+            scalar_acl_dt = ACL_INT64;
+            val_bytes = 8;
+        }
+        else
+        {
+            LOGf << name << ": unsupported scalar dtype " << scalar_dtype;
+        }
+        bool is_cached = false;
+        aclScalar *raw_scalar = tl_host_scalar_cache.get_or_create(
+            scalar_acl_dt, val_ptr, val_bytes, is_cached);
+        ScopedAclScalar other{raw_scalar, !is_cached};
+        if (!other.ptr) LOGf << name << ": failed to create host aclScalar";
+
+        if (name == "Add" || name == "Sub")
+        {
+            aclScalar *alpha = nullptr;
+            const auto dt = get_dtype(in_[0]->dtype());
+            if (dt == ACL_FLOAT || dt == ACL_BF16)
+                alpha = getUnitScalar<float, ACL_FLOAT>();
+            else if (dt == ACL_FLOAT16)
+                alpha = getUnitScalar<Float16Unit, ACL_FLOAT16>();
+            else if (dt == ACL_INT32)
+                alpha = getUnitScalar<int, ACL_INT32>();
+            else if (dt == ACL_INT64)
+                alpha = getUnitScalar<int64_t, ACL_INT64>();
+            else
+                LOGf << "Not supported dtype: " << in_[0]->dtype();
+            if (name == "Add")
+            {
+                ret = aclnnAddsGetWorkspaceSize(
+                    inputTensors[0], other.ptr, alpha, outputTensors[0],
+                    &workspaceSize, &executor);
+                launch(ret, aclnnAdds, true);
+            }
+            else
+            {
+                ret = aclnnSubsGetWorkspaceSize(
+                    inputTensors[0], other.ptr, alpha, outputTensors[0],
+                    &workspaceSize, &executor);
+                launch(ret, aclnnSubs, true);
+            }
+            return;
+        }
+        if (name == "Mul")
+        {
+            ret = aclnnMulsGetWorkspaceSize(
+                inputTensors[0], other.ptr, outputTensors[0],
+                &workspaceSize, &executor);
+            launch(ret, aclnnMuls, true);
+            return;
+        }
+        if (name == "RealDiv")
+        {
+            ret = aclnnDivsGetWorkspaceSize(
+                inputTensors[0], other.ptr, outputTensors[0],
+                &workspaceSize, &executor);
+            launch(ret, aclnnDivs, true);
+            return;
+        }
+        LOGf << "BinaryScalarOpRunner: unsupported op " << name;
+    }
 }

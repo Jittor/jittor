@@ -92,6 +92,13 @@ from .normalization import (
 )
 from .padding import pad
 from .pooling import adaptive_avg_pool2d, avg_pool2d, avg_pool3d
+from .quant import (
+    dynamic_block_quant,
+    dynamic_mx_quant,
+    encode_group_size,
+    fp8_linear,
+    quant_matmul,
+)
 from .shape import flatten, identity
 from .softmax import _get_softmax_dim, log_sigmoid, log_softmax, logsumexp, softmax
 from .tensor import kron, one_hot, tensordot
@@ -138,13 +145,17 @@ __all__ = [
     "dropout",
     "dropout2d",
     "droppath",
+    "dynamic_block_quant",
+    "dynamic_mx_quant",
     "elu",
     "embedding",
     "embedding_bag",
+    "encode_group_size",
     "finalize_dual_grid_mesh_cuda",
     "flatten",
     "fold",
     "fp32_guard",
+    "fp8_linear",
     "gaussian_nll_loss",
     "gelu",
     "get_init_var_rand",
@@ -197,6 +208,7 @@ __all__ = [
     "pool2d",
     "pool3d",
     "prelu",
+    "quant_matmul",
     "reflect_coordinates",
     "relu",
     "relu6",

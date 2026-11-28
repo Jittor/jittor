@@ -117,9 +117,12 @@ struct LinearOwnerEpochs {
 } linear_owner_epochs;
 #endif
 PyObject* matmul_kernel = nullptr;
+PyObject* acl_matmul_kernel = nullptr;
 PyObject* empty_kwargs = nullptr;
 PyObject* matmul_name = nullptr;
 auto make_cublas_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("cublas_matmul");
+auto make_acl_mapped_matmul = op_constructor<VarPtr, Var*, Var*, bool, bool, bool>("mapped_matmul");
+auto make_acl_reshape = op_constructor<VarPtr, Var*, NanoVector>("reshape");
 auto make_linear_bias_add = op_constructor<VarPtr, Var*, Var*, NanoString>("binary");
 // The fused RMS norm `_standard_rms_norm` reaches on an inference call.
 PyObject* rms_inference_impl = nullptr;
@@ -391,7 +394,7 @@ PyObject* name_execute() { return interned(execute_key, "execute"); }
 // `matmul_transpose` straight into the cuBLAS relay -- when the dispatcher
 // would pick that relay. nullptr when anything else would happen.
 PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
-    if (!matmul_kernel || !dict || !is_var(x)) return nullptr;
+    if ((!matmul_kernel && !acl_matmul_kernel) || !dict || !is_var(x)) return nullptr;
     PyObject* weight = PyDict_GetItem(dict, name_weight());
     PyObject* bias = PyDict_GetItem(dict, name_bias());
     if (!weight || !is_var(weight) || (bias && bias != Py_None)) return nullptr;
@@ -414,12 +417,31 @@ PyObject* linear_without_bias(PyObject* module, PyObject* dict, PyObject* x) {
     // `matmul_transpose` hands a batched input over flattened in place only
     // when its buffer is dense.
     if (rank > 2 && !a->is_contiguous()) return nullptr;
-    PyObjHolder zero(PyLong_FromLong(0)), one(PyLong_FromLong(1));
-    PyObjHolder call_args(PyTuple_Pack(4, x, weight, zero.obj, one.obj));
+    static PyObject* zero = PyLong_FromLong(0);
+    static PyObject* one = PyLong_FromLong(1);
+    PyObjHolder call_args(PyTuple_Pack(4, x, weight, zero, one));
     PyObjHolder kernel(kernel_select(matmul_name, call_args.obj, nullptr));
-    if (kernel.obj != matmul_kernel) return nullptr;
-    PyTensorFrontendScope scope(x, nullptr, 0, false);
-    return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
+    if (matmul_kernel && kernel.obj == matmul_kernel) {
+        PyTensorFrontendScope scope(x, nullptr, 0, false);
+        return to_py_object<VarHolder*>(new VarHolder(make_cublas_matmul(a, w, false, true, false)));
+    }
+    if (acl_matmul_kernel && kernel.obj == acl_matmul_kernel
+            && (a->dtype() == ns_bfloat16 || a->dtype() == ns_float16)) {
+        PyTensorFrontendScope scope(x, nullptr, 0, false);
+        if (rank == 2) {
+            return to_py_object<VarHolder*>(new VarHolder(make_acl_mapped_matmul(a, w, false, true, false)));
+        }
+        NanoVector flat_shape;
+        flat_shape.push_back(a->num / w->shape[1]);
+        flat_shape.push_back(w->shape[1]);
+        VarPtr flat = make_acl_reshape(a, flat_shape);
+        VarPtr prod = make_acl_mapped_matmul(flat.ptr, w, false, true, false);
+        NanoVector out_shape;
+        for (int i = 0; i < rank - 1; ++i) out_shape.push_back(a->shape[i]);
+        out_shape.push_back(w->shape[0]);
+        return to_py_object<VarHolder*>(new VarHolder(make_acl_reshape(prod.ptr, out_shape)));
+    }
+    return nullptr;
 }
 
 // The ordinary FP32 training path is the same cuBLAS product and bias add
@@ -805,7 +827,17 @@ PyObject* activation_module(PyTypeObject* type, PyObject* dict, PyObject* x) {
             Py_DECREF(fused);
         }
     }
-    if (kernel_op_registered(relu ? "nn.relu" : "nn.silu")) return nullptr;
+    if (kernel_op_registered(relu ? "nn.relu" : "nn.silu")) {
+        if (!relu && acl_matmul_kernel && accelerator_backend_id() == BackendId::Acl
+                && runtime_flag_use_cuda()
+                && (!v->placement.explicit_backend || v->placement.device.backend == BackendId::Acl)
+                && (v->dtype() == ns_bfloat16 || v->dtype() == ns_float16 || v->dtype() == ns_float32)) {
+            static auto make_mapped_unary_mc =
+                op_constructor<VarPtr, Var*, int, double, double>("mapped_unary");
+            return wrap_like_input(x, make_mapped_unary_mc(v, 1, 0.0, 0.0));
+        }
+        return nullptr;
+    }
     static auto make_unary_mc = op_constructor<VarPtr, Var*, NanoString>("unary");
     if (relu) return wrap_like_input(x, make_unary_mc(v, ns_relu));
     // Preserve the functional owner's FP32 intermediates on warmed calls.
@@ -1314,6 +1346,7 @@ void module_call_bind(PyObject* module_cls_, PyObject* dispatch_call_,
         }
     }
     part(matmul_kernel, "matmul_kernel");
+    part(acl_matmul_kernel, "acl_matmul_kernel");
     part(rms_inference_impl, "rms_norm_inference");
     part(rms_source_fn, "rms_norm_source");
     part(dropout_execute, "dropout_execute");

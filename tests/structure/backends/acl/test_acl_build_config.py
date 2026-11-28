@@ -116,9 +116,9 @@ def test_configure_returns_complete_value_without_global_writes(acl, setup):
         (SOURCE.parent / "kernels/native").glob("*.cc")))
     registration_sources = [str(SOURCE.parent / "src" / name) for name in (
         "acl_error_code.cc", "acl_jittor.cc", "aclnn.cc")]
-    # Includes the measured last-axis vector-norm native unit.
-    assert len(expected_extra) == 52
-    assert {"grid_sample_op_acl.cc", "topk_op_acl.cc", "vector_norm_op_acl.cc"} <= {
+    # Includes the measured last-axis vector-norm, Ascend950 FP8/MXFP8, and Wave 6 direct mapped native units.
+    assert len(expected_extra) == 54
+    assert {"grid_sample_op_acl.cc", "quant_op_acl.cc", "topk_op_acl.cc", "vector_norm_op_acl.cc"} <= {
         os.path.basename(path) for path in expected_extra}
     assert len(registration_sources) == 3
     assert len(config.extra_core_files) == len(expected_extra) + len(registration_sources) + 1
@@ -249,7 +249,7 @@ def test_backend_has_no_mutable_configuration_or_compiler_imports(acl):
 
 def test_provider_source_inventory_is_explicit_and_complete(acl):
     sources = acl.REGISTRATION_SOURCES + acl.CORE_SOURCES
-    assert len(sources) == len(set(sources)) == 55
+    assert len(sources) == len(set(sources)) == 57
     assert all((SOURCE.parent / name).is_file() for name in sources)
     actual = {str(path.relative_to(SOURCE.parent))
               for path in SOURCE.parent.rglob("*.cc")}

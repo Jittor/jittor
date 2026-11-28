@@ -71,7 +71,7 @@ namespace jittor
         const aclTensorList *x, const aclTensor *scalar,
         const aclTensorList *out, bool synchronize)
     {
-        ret = aclnnForeachMulScalarGetWorkspaceSize(x, scalar, out,
+        ret = aclnnForeachMulScalarGetWorkspaceSize(x, scalar, const_cast<aclTensorList *>(out),
                                                     &workspaceSize, &executor);
         launch(ret, aclnnForeachMulScalar, synchronize);
     }
@@ -80,7 +80,7 @@ namespace jittor
         const aclTensorList *x1, const aclTensorList *x2, const aclTensor *alpha,
         const aclTensorList *out, bool synchronize)
     {
-        ret = aclnnForeachAddListGetWorkspaceSize(x1, x2, alpha, out,
+        ret = aclnnForeachAddListGetWorkspaceSize(x1, x2, alpha, const_cast<aclTensorList *>(out),
                                                   &workspaceSize, &executor);
         launch(ret, aclnnForeachAddList, synchronize);
     }
@@ -89,7 +89,7 @@ namespace jittor
         const aclTensorList *x, const aclTensor *scalar,
         const aclTensorList *out, bool synchronize)
     {
-        ret = aclnnForeachAddScalarGetWorkspaceSize(x, scalar, out,
+        ret = aclnnForeachAddScalarGetWorkspaceSize(x, scalar, const_cast<aclTensorList *>(out),
                                                     &workspaceSize, &executor);
         launch(ret, aclnnForeachAddScalar, synchronize);
     }
@@ -97,7 +97,7 @@ namespace jittor
     void ForeachOpRunner::foreachSqrt(
         const aclTensorList *x, const aclTensorList *out, bool synchronize)
     {
-        ret = aclnnForeachSqrtGetWorkspaceSize(x, out, &workspaceSize, &executor);
+        ret = aclnnForeachSqrtGetWorkspaceSize(x, const_cast<aclTensorList *>(out), &workspaceSize, &executor);
         launch(ret, aclnnForeachSqrt, synchronize);
     }
 
@@ -105,7 +105,7 @@ namespace jittor
         const aclTensorList *x1, const aclTensorList *x2, const aclTensorList *x3,
         const aclTensor *scalar, const aclTensorList *out, bool synchronize)
     {
-        ret = aclnnForeachAddcmulScalarGetWorkspaceSize(x1, x2, x3, scalar, out,
+        ret = aclnnForeachAddcmulScalarGetWorkspaceSize(x1, x2, x3, scalar, const_cast<aclTensorList *>(out),
                                                         &workspaceSize, &executor);
         launch(ret, aclnnForeachAddcmulScalar, synchronize);
     }
@@ -114,7 +114,7 @@ namespace jittor
         const aclTensorList *x1, const aclTensorList *x2, const aclTensorList *x3,
         const aclTensor *scalar, const aclTensorList *out, bool synchronize)
     {
-        ret = aclnnForeachAddcdivScalarGetWorkspaceSize(x1, x2, x3, scalar, out,
+        ret = aclnnForeachAddcdivScalarGetWorkspaceSize(x1, x2, x3, scalar, const_cast<aclTensorList *>(out),
                                                         &workspaceSize, &executor);
         launch(ret, aclnnForeachAddcdivScalar, synchronize);
     }

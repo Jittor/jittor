@@ -45,4 +45,15 @@ namespace jittor
         return;
     }
 
+    TrilOpRunner::TrilOpRunner() : BaseOpRunner("Tril")
+    {
+    }
+
+    void TrilOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        auto attr = dynamic_cast<TriuAttr *>(op_attr.get());
+        ret = aclnnTrilGetWorkspaceSize(inputTensors[0], attr->diagonal, outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnTril, true);
+    }
+
 }

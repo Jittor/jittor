@@ -42,8 +42,35 @@ def __index__(x):
     return int(x.item())
 
 
+_TOLIST_CACHE = {}
+
+
+def _copy_nested_list(value):
+    if isinstance(value, list):
+        if not value or not isinstance(value[0], list):
+            return list(value)
+        return [_copy_nested_list(item) for item in value]
+    return value
+
+
 def tolist(x):
-    return x.numpy().tolist()
+    key_fn = getattr(x, "_tolist_cache_key", None)
+    if key_fn is not None:
+        key = key_fn()
+        if key:
+            key_t = tuple(key)
+            cached = _TOLIST_CACHE.get(key_t[0])
+            if cached is not None and cached[0] == key_t:
+                return _copy_nested_list(cached[1])
+    result = x.numpy().tolist()
+    if key_fn is not None:
+        key = key_fn()
+        if key:
+            key_t = tuple(key)
+            if len(_TOLIST_CACHE) >= 256:
+                _TOLIST_CACHE.clear()
+            _TOLIST_CACHE[key_t[0]] = (key_t, _copy_nested_list(result))
+    return result
 
 
 def contiguous(x): return _native_ops.contiguous(x)

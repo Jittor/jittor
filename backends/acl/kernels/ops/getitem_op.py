@@ -381,9 +381,20 @@ class GetItemACL(jt.Function):
             # rejects a zero-length index.
             self.empty_index_shape = tuple(output_shape)
             return ()
+        # Leading-axis gather `x[idx]` (or `x[idx, :, ...]`) maps directly to
+        # aclnnIndex with a single 1-D index tensor -- no coordinate grid or
+        # arange expansion over trailing dimensions needed.
+        if tensor_dim == 0:
+            return (tensor_index,)
+        dev = int(jt.core.dispatch_context([x])[1])
+        idx_dtype = _jittor_dtype_name(tensor_index.dtype)
         indices = []
         for dim, size in enumerate(output_shape):
-            index = tensor_index if dim == tensor_dim else jt.arange(int(x.shape[dim]))
+            index = (
+                tensor_index
+                if dim == tensor_dim
+                else jt.arange(int(x.shape[dim]), dtype=idx_dtype).to_device(dev)
+            )
             view_shape = [1] * x.ndim
             view_shape[dim] = int(size)
             indices.append(index.reshape(view_shape).broadcast(output_shape))
@@ -406,10 +417,7 @@ class GetItemACL(jt.Function):
             if x.shape != slices.shape:
                 raise ValueError("getitem mask shape must match input shape")
             output_len = slices.sum().item()
-            # output = jt.empty((output_len,),dtype=x.dtype)
             x_len = x.numel()
-            output = jt.empty((x_len), dtype=x.dtype)
-            outputs = [output]
             inputs = [x, slices]
             self.mask = slices
             self.type_ = "mask"
@@ -417,12 +425,17 @@ class GetItemACL(jt.Function):
             op.jt_name = "maskedselect";
             """
             result = getitem_cmd(
-                "MaskedSelect", inputs=inputs, outputs=outputs, attr_code=attr_code
+                "MaskedSelect",
+                inputs=inputs,
+                output_dtypes=[x.dtype],
+                output_shapes=[(x_len,)],
+                attr_code=attr_code,
             )[0]
             result = result[:output_len]
             result.sync()
             return result
         self.x_shape = x.shape
+        dev = int(jt.core.dispatch_context([x])[1])
         if not isinstance(slices, tuple):
             slices = (slices,)
         slices = list(slices)
@@ -435,12 +448,12 @@ class GetItemACL(jt.Function):
                 # path as a tensor index, rather than treating it as a slice.
                 if not all(isinstance(v, (int, np.integer)) for v in s):
                     raise TypeError("ACL getitem list indices must contain integers")
-                slices[i] = jt.array(s, dtype="int32")
+                slices[i] = jt.array(s, dtype="int32").to_device(dev)
         slices = tuple(slices)
         expanded_indices = self.expand_single_tensor_index(x, slices)
         if self.empty_index_shape is not None:
             self.type_ = "empty_index"
-            return jt.empty(self.empty_index_shape, dtype=x.dtype)
+            return jt.empty(self.empty_index_shape, dtype=x.dtype).to_device(dev)
         if expanded_indices is not None:
             slices = expanded_indices
         slices_list = list(slices)
@@ -466,10 +479,17 @@ class GetItemACL(jt.Function):
             output_shape += x.shape[slices_len:]
             if output_shape == []:
                 output_shape = [1]
-            for dim, ii in enumerate(slices):
-                index = ii if isinstance(ii, jt.Var) else jt.Var(ii)
-                index = jt.ternary(index < 0, index + x.shape[dim], index)
-                indices.append(index.int32())
+            native_neg_ok = bool(jt.flags.no_grad) or kernel_available("IndexPutImplAccumulate")
+            raw_indices = [ii if isinstance(ii, jt.Var) else jt.Var(ii) for ii in slices]
+            raw_dtypes = [_jittor_dtype_name(idx.dtype) for idx in raw_indices]
+            if native_neg_ok and all(dt in ("int32", "int64") for dt in raw_dtypes):
+                target_dt = "int64" if "int64" in raw_dtypes else "int32"
+                for idx, dt in zip(raw_indices, raw_dtypes):
+                    indices.append(idx if dt == target_dt else idx.cast(target_dt))
+            else:
+                for dim, index in enumerate(raw_indices):
+                    index = jt.ternary(index < 0, index + x.shape[dim], index)
+                    indices.append(index.int32())
             if (
                 isinstance(slices[0], jt.Var)
                 or isinstance(slices[0], int)
@@ -579,9 +599,12 @@ class GetItemACL(jt.Function):
             attr_code = f"""
             op.jt_name = "indexputimplaccumulate";
             """
-            outputs = [jt.empty(self.x_shape, dtype=grad_output.dtype)]
             result = getitem_cmd(
-                "IndexPutImplAccumulate", inputs=inputs, outputs=outputs, attr_code=attr_code
+                "IndexPutImplAccumulate",
+                inputs=inputs,
+                output_dtypes=[grad_output.dtype],
+                output_shapes=[self.x_shape],
+                attr_code=attr_code,
             )[0]
             return result, None
         elif self.type_ == "slicev2":
@@ -590,15 +613,17 @@ class GetItemACL(jt.Function):
             steps = self.steps
             dims = self.dims
             slices = self.slices
+            if not kernel_available("StridedSliceAssignV2"):
+                # Ascend310P/950 lack StridedSliceAssignV2: scatter through
+                # SetItemACL with the public (un-unsqueezed) grad_output shape.
+                from .setitem_op import SetItemACL
+
+                dev = int(jt.core.dispatch_context([grad_output])[1])
+                base = jt.zeros(self.x_shape, dtype=grad_output.dtype).to_device(dev)
+                return SetItemACL()(base, slices, grad_output), None
             # 注意前向的维数可能会被压缩，所以这里要还原
             for dim in self.squeeze_dims:
                 grad_output = jt.unsqueeze(grad_output, dim)
-            if not kernel_available("StridedSliceAssignV2"):
-                # 310P 缺 StridedSliceAssignV2：零基座 + IndexPutImpl 组合散射
-                from .setitem_op import SetItemACL
-
-                base = jt.zeros(self.x_shape, dtype=grad_output.dtype)
-                return SetItemACL()(base, slices, grad_output), None
             # 适配华为奇怪的要求，最后一个维度的step必须是1
             expand_dim = False
             if isinstance(slices[-1], slice):
@@ -686,7 +711,8 @@ class GetItemACL(jt.Function):
         stride = row_span
         for dim, idx in enumerate(self.indices):
             stride //= x_shape[dim]
-            term = idx.reshape(-1) * stride
+            norm_idx = jt.ternary(idx < 0, idx + x_shape[dim], idx).int32()
+            term = norm_idx.reshape(-1) * stride
             flat = term if flat is None else flat + term
         col_idx = flat.reshape(-1, 1).broadcast(rows.shape).contiguous()
         base = jt.zeros((row_span, tail), dtype=grad_output.dtype)

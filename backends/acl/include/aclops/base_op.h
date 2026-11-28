@@ -5,6 +5,8 @@
 
 namespace jittor
 {
+    using AclExecuteFn = aclnnStatus (*)(
+        void *, uint64_t, aclOpExecutor *, aclrtStream);
     using AclExecuteLauncher = std::function<aclnnStatus(
         void *, uint64_t, aclOpExecutor *, aclrtStream)>;
 
@@ -89,6 +91,9 @@ namespace jittor
         // Shared tail for registry-backed runners. The caller still owns the
         // typed workspace query; this method owns allocation, launch errors,
         // and the optional diagnostic synchronization policy.
+        void launch(aclnnStatus workspace_ret,
+                    AclExecuteFn launcher,
+                    bool synchronize = true);
         void launch(aclnnStatus workspace_ret,
                     const AclExecuteLauncher &launcher,
                     bool synchronize = true);

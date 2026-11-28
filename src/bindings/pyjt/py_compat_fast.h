@@ -127,11 +127,39 @@ PyObject* fast_binary(PyObject* self, PyObject* other, int code);
 // @pyjt(_fast_gelu)
 PyObject* fast_gelu(PyObject* x);
 
+// Single-node ACL MappedUnaryOp (0=rsqrt, 1=silu, 2=softplus, 3=triu, 4=tril,
+// 5=cumsum, 6=softmax) built directly in C++ under the operand's frontend
+// scope. Returns None whenever ACL is inactive or the operand does not match
+// the op's contract.
+// @pyjt(_fast_mapped_unary)
+PyObject* fast_mapped_unary(PyObject* x, int kind, double p0 = 0.0, double p1 = 0.0);
+
+// Single-node ACL MappedFp8LinearOp (mode 0=block128, 1=mxfp8) built directly
+// in C++ under `x`'s frontend scope. Returns None for any non-fast case.
+// @pyjt(_fast_fp8_linear)
+PyObject* fast_fp8_linear(PyObject* x, PyObject* weight_fp8, PyObject* weight_scale,
+                          int mode_id, int block_size, PyObject* out_dtype = nullptr);
+
+// Single-node ACL MappedMatmulOp for 2-D, equal-batch N-D, and contiguous
+// N-D x 2-D float products (with last-two-axis transpose view unwrapping).
+// Returns None for any unsupported shape, dtype, placement, or grad case.
+// @pyjt(_fast_acl_matmul)
+PyObject* fast_acl_matmul(PyObject* a, PyObject* b, bool allow_hf32 = false,
+                          bool require_batched = false);
+
 // `tensor.view(*shape)` / `reshape(*shape)` of a dense tensor, shape given as
-// ints or one tuple or list of them: the reshape op, recorded as a storage
-// view of `self`, as `jittor.view` does. None for anything else.
+// ints or one tuple/Size/list of them: the reshape op, recorded as a storage
+// view of `self`, as `jittor.view` does. With `allow_copy=true`, a strided
+// tensor materializes a contiguous copy before reshaping. None otherwise.
 // @pyjt(_fast_view)
-PyObject* fast_view(PyObject* self, PyObject* shape);
+PyObject* fast_view(PyObject* self, PyObject* shape, bool allow_copy = false);
+
+// Single-crossing fast path for `tensor.to(dtype)` and
+// `tensor.to(dtype, memory_format=contiguous_format)` on explicitly placed
+// non-complex tensors. Returns `self` on no-op, a new cast VarHolder, or
+// None for any fallback case.
+// @pyjt(_fast_to_dtype)
+PyObject* fast_to_dtype(PyObject* self, PyObject* target_name, bool require_contiguous = false);
 
 // Materialize a CPU/CUDA storage view under its frontend owner's type and
 // its own explicit placement. None for legacy placement or other backends.

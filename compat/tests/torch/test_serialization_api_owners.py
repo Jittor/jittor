@@ -316,8 +316,17 @@ def test_safetensors_dtype_bytes_reader_and_numpy_delegate(tmp_path):
     with pytest.raises(NotImplementedError, match="dtype"):
         st.save_file({"bad": np.array([1j], dtype=np.complex64)}, path)
     assert path.read_bytes() == before
+    fp8_values = {
+        "e4m3": torch.tensor([0.0, 1.0, -2.5, 448.0], dtype=torch.float8_e4m3fn),
+        "e5m2": torch.tensor([0.0, 1.0, -2.5, 512.0], dtype=torch.float8_e5m2),
+    }
+    fp8_loaded = st.load(st.save(fp8_values))
+    assert fp8_loaded["e4m3"].dtype is torch.float8_e4m3fn
+    assert fp8_loaded["e5m2"].dtype is torch.float8_e5m2
+    np.testing.assert_array_equal(fp8_loaded["e4m3"].numpy(), fp8_values["e4m3"].numpy())
+    np.testing.assert_array_equal(fp8_loaded["e5m2"].numpy(), fp8_values["e5m2"].numpy())
     with pytest.raises(NotImplementedError, match="F8"):
-        safe_owner._bytes_to_np(b"\x00", "F8_E4M3", [1])
+        safe_owner._bytes_to_np(b"\x00", "F8_E4M3FNUZ", [1])
 
 
 def test_optional_patch_failure_restores_all_owners(monkeypatch):

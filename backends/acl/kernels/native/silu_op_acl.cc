@@ -104,4 +104,44 @@ namespace jittor
         return;
     }
 
+    SoftplusOpRunner::SoftplusOpRunner() : BaseOpRunner("Softplus")
+    {
+    }
+
+    void SoftplusOpRunner::executeOp(
+        AclOpRegistry::const_iterator &it)
+    {
+        struct ScopedAclScalar
+        {
+            aclScalar *ptr = nullptr;
+            ~ScopedAclScalar()
+            {
+                if (ptr)
+                    aclDestroyScalar(ptr);
+            }
+        };
+        auto *attr = dynamic_cast<SoftplusAttr *>(op_attr.get());
+        float beta_val = attr ? static_cast<float>(attr->beta) : 1.0f;
+        float threshold_val = attr ? static_cast<float>(attr->threshold) : 20.0f;
+        ScopedAclScalar beta_scalar{aclCreateScalar(&beta_val, aclDataType::ACL_FLOAT)};
+        ScopedAclScalar threshold_scalar{aclCreateScalar(&threshold_val, aclDataType::ACL_FLOAT)};
+        ret = aclnnSoftplusGetWorkspaceSize(
+            inputTensors[0], beta_scalar.ptr, threshold_scalar.ptr,
+            outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnSoftplus, true);
+        return;
+    }
+
+    RsqrtOpRunner::RsqrtOpRunner() : BaseOpRunner("Rsqrt")
+    {
+    }
+
+    void RsqrtOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        ret = aclnnRsqrtGetWorkspaceSize(
+            inputTensors[0], outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnRsqrt, true);
+        return;
+    }
+
 }

@@ -169,6 +169,12 @@ typedef enum {
   kDLComplex = 5U,
   /*! \brief boolean */
   kDLBool = 6U,
+  /*! \brief FP8 E4M3FN */
+  kDLFloat8_e4m3fn = 10U,
+  /*! \brief FP8 E5M2 */
+  kDLFloat8_e5m2 = 12U,
+  /*! \brief FP8 E8M0FNU */
+  kDLFloat8_e8m0fnu = 15U,
 } DLDataTypeCode;
 
 /*!

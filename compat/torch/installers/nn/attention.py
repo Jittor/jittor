@@ -494,6 +494,31 @@ class ScalingType(_IntEnum):
     BlockWise2D = 5
     DYNAMIC = 6
 
+def _grouped_mm(mat_a, mat_b, offs=None, bias=None, out_dtype=None):
+    from jittor._runtime.dispatch import try_dispatch
+    fast = try_dispatch("nn.grouped_mm", mat_a, mat_b, offs)
+    if fast is not None:
+        out = fast
+        if bias is not None:
+            out = out + bias
+        if out_dtype is not None and out.dtype != out_dtype:
+            out = out.to(out_dtype)
+        return out
+    # Portable fallback for CPU/other backends
+    if offs is None:
+        raise NotImplementedError("grouped_mm without offs is not supported on fallback path")
+    out = jt.zeros((int(mat_a.shape[0]), int(mat_b.shape[-1])), dtype=out_dtype or mat_a.dtype)
+    start = 0
+    for i, end in enumerate(offs.tolist()):
+        end = int(end)
+        if end > start:
+            out[start:end] = jt.matmul(mat_a[start:end], mat_b[i])
+        start = end
+    if bias is not None:
+        out = out + bias
+    return out
+
+
 def _scaled_grouped_mm(*args, **kwargs):
     raise NotImplementedError(
         "torch.nn.functional.scaled_grouped_mm: grouped scaled matmul "
@@ -506,6 +531,8 @@ def install_attention(ctx):
 
     nn.functional.scaled_dot_product_attention = scaled_dot_product_attention
     g.scaled_dot_product_attention = scaled_dot_product_attention
+    nn.functional.grouped_mm = _grouped_mm
+    ctx.target_namespace._grouped_mm = _grouped_mm
     if not hasattr(nn.functional, "ScalingType"):
         nn.functional.ScalingType = ScalingType
     if not hasattr(nn.functional, "scaled_grouped_mm"):

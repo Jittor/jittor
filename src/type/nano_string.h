@@ -38,6 +38,9 @@ constexpr int ns_max_len = 16;
     m(bfloat16) \
     m(complex64) \
     m(complex128) \
+    m(float8_e4m3fn) \
+    m(float8_e5m2) \
+    m(float8_e8m0fnu) \
 \
     m(pow) \
     m(maximum) \
@@ -281,6 +284,10 @@ constexpr int amp_keep_white = 8;
 constexpr int amp_array_prefer = 16;
 constexpr int amp_prefer_bfloat16 = 64;
 
+inline bool ns_is_fp8(NanoString ns) {
+    return ns == ns_float8_e4m3fn || ns == ns_float8_e5m2 || ns == ns_float8_e8m0fnu;
+}
+
 inline NanoString float_dtype(int dsize_, bool has_scalar=false, bool has_bf16=false) {
     if (!has_scalar) {
         if (amp_reg & amp_prefer32)
@@ -420,6 +427,7 @@ inline NanoString complex_promote(NanoString x, NanoString y) {
 inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, bool yscalar=false) {
     if (x.is_complex() || y.is_complex()) return complex_promote(x, y);  // complex propagates
     if (x.is_bool() && y.is_bool()) return ns_bool;
+    if (x == y && ns_is_fp8(x)) return x;
     int dsize_ = std::max(x.dsize_(), y.dsize_());
     // A lone scalar adopts the tensor width. Two scalars must retain the
     // widest width, rather than letting operand order choose the result.
@@ -430,6 +438,11 @@ inline  NanoString dtype_infer(NanoString x, NanoString y, bool xscalar=false, b
     if (is_float) {
         if (ns_scalar_lifts_int_to_default_float(x, y, xscalar, yscalar))
             return ns_float32;
+        if (ns_is_fp8(x) || ns_is_fp8(y)) {
+            if (xscalar && !yscalar && ns_is_fp8(y)) return y;
+            if (yscalar && !xscalar && ns_is_fp8(x)) return x;
+            if (dsize_ == 0) return ns_float32;
+        }
         return float_dtype(dsize_, xscalar||yscalar, has_bf16);
     }
     return int_binary_dtype(ns_add, x, y, xscalar, yscalar);
@@ -452,6 +465,12 @@ inline NanoString binary_dtype_infer(NanoString op, NanoString x, NanoString y, 
             return (dsize_ == 3) ? ns_float64 : ns_float32;
         if (ns_scalar_lifts_int_to_default_float(x, y, xscalar, yscalar))
             return ns_float32;
+        if (ns_is_fp8(x) || ns_is_fp8(y)) {
+            if (x == y) return x;
+            if (xscalar && !yscalar && ns_is_fp8(y)) return y;
+            if (yscalar && !xscalar && ns_is_fp8(x)) return x;
+            if (dsize_ == 0) return ns_float32;
+        }
         return float_dtype(dsize_, xscalar||yscalar, has_bf16);
     } else {
         if (x.is_bool() && y.is_bool()) return ns_bool;
@@ -466,6 +485,11 @@ inline NanoString unary_dtype_infer(NanoString op, NanoString x) {
         if (op == ns_abs || op == ns_imag)  // |z|, Im z -> float
             return x.dsize() == 16 ? ns_float64 : ns_float32;
         return x;  // stays at its own complex width
+    }
+    if (ns_is_fp8(x)) {
+        if (op.is_float()) return ns_float32;
+        if (op.is_int()) return ns_int32;
+        return x;
     }
     int dsize_ = x.dsize_();
     if (op.is_float()) {
@@ -498,6 +522,8 @@ inline NanoString reduce_dtype_infer(NanoString op, NanoString x, bool preserve_
     // accumulator into a double and fails to compile. (sum works already because 'add' is
     // not a float_op.)
     if (x.is_complex()) return x;  // stays at its own complex width
+    if (ns_is_fp8(x))
+        return (preserve_type || (amp_reg & amp_keep_reduce)) ? x : ns_float32;
     bool is_float = x.is_float() || op.is_float();
     int dsize_ = x.dsize_();
     if (is_float) {

@@ -16,8 +16,20 @@
 #include <aclnnop/aclnn_grid_sampler2d.h>
 #include <aclnnop/aclnn_topk.h>
 #include <aclnnop/aclnn_linalg_vector_norm.h>
+#include <aclnnop/aclnn_remainder.h>
+#include <aclnnop/aclnn_fmod_tensor.h>
+#include <aclnnop/aclnn_histc.h>
+#include <aclnnop/aclnn_grouped_matmul_v5.h>
+#include <aclnnop/aclnn_addmm.h>
 
 namespace jittor {
+#if !JT_ACL_HAS_FP8_OPS
+static aclnnStatus jt_acl_fp8_unavailable(
+    void *, uint64_t, aclOpExecutor *, aclrtStream) {
+    return -1;
+}
+#endif
+
 const AclOpRegistry& acl_op_registry() {
     static const AclOpRegistry entries = {
         {"Abs", AclOpFunctions::unary(aclnnAbsGetWorkspaceSize, aclnnAbs)},
@@ -53,6 +65,8 @@ const AclOpRegistry& acl_op_registry() {
         {"Mul", AclOpFunctions::binary(aclnnMulGetWorkspaceSize, aclnnMul)},
         {"RealDiv", AclOpFunctions::binary(aclnnDivGetWorkspaceSize, aclnnDiv)},
         {"FloorDiv", AclOpFunctions::binary(aclnnFloorDivideGetWorkspaceSize, aclnnFloorDivide)},
+        {"Mod", AclOpFunctions::binary(aclnnRemainderTensorTensorGetWorkspaceSize, aclnnRemainderTensorTensor)},
+        {"Fmod", AclOpFunctions::binary(aclnnFmodTensorGetWorkspaceSize, aclnnFmodTensor)},
         {"LessEqual", AclOpFunctions::binary(aclnnLeTensorGetWorkspaceSize, aclnnLeTensor)},
         {"Less", AclOpFunctions::binary(aclnnLtTensorGetWorkspaceSize, aclnnLtTensor)},
         {"GreaterEqual", AclOpFunctions::binary(aclnnGeTensorGetWorkspaceSize, aclnnGeTensor)},
@@ -74,6 +88,9 @@ const AclOpRegistry& acl_op_registry() {
         {"ReduceMin", AclOpFunctions::direct(aclnnAmin)},
         {"ReduceSum", AclOpFunctions::direct(aclnnReduceSum)},
         {"Triu", AclOpFunctions::direct(aclnnTriu)},
+        {"Tril", AclOpFunctions::direct(aclnnTril)},
+        {"InplaceCopy", AclOpFunctions::direct(aclnnInplaceCopy)},
+        {"Softplus", AclOpFunctions::direct(aclnnSoftplus)},
         {"Conv2d", AclOpFunctions::direct(aclnnConvolution)},
         {"Conv2dBackward", AclOpFunctions::direct(aclnnConvolutionBackward)},
         {"ReduceMean", AclOpFunctions::direct(aclnnMean)},
@@ -83,6 +100,7 @@ const AclOpRegistry& acl_op_registry() {
         {"RandomNormal", AclOpFunctions::direct(aclnnInplaceNormal)},
         {"Transpose", AclOpFunctions::direct(aclnnPermute)},
         {"Maxpool", AclOpFunctions::direct(aclnnMaxPool2dWithIndices)},
+        {"MaxpoolInfer", AclOpFunctions::direct(aclnnMaxPool)},
         {"MaxpoolBackward", AclOpFunctions::direct(aclnnMaxPool2dWithIndicesBackward)},
         {"AdaptiveAvgPool2d", AclOpFunctions::direct(aclnnAdaptiveAvgPool2d)},
         {"AdaptiveAvgPool2dBackward", AclOpFunctions::direct(aclnnAdaptiveAvgPool2dBackward)},
@@ -163,6 +181,19 @@ const AclOpRegistry& acl_op_registry() {
         {"Topk", AclOpFunctions::direct(aclnnTopk)},
         {"LinalgVectorNorm", AclOpFunctions::direct(aclnnLinalgVectorNorm)},
         {"UpsampleNearest2dBackward", AclOpFunctions::direct(aclnnUpsampleNearest2dBackward)},
+#if JT_ACL_HAS_FP8_OPS
+        {"DynamicBlockQuant", AclOpFunctions::direct(aclnnDynamicBlockQuant)},
+        {"DynamicMxQuant", AclOpFunctions::direct(aclnnDynamicMxQuant)},
+        {"QuantMatmul", AclOpFunctions::direct(aclnnQuantMatmulV5)},
+#else
+        {"DynamicBlockQuant", AclOpFunctions::direct(jt_acl_fp8_unavailable)},
+        {"DynamicMxQuant", AclOpFunctions::direct(jt_acl_fp8_unavailable)},
+        {"QuantMatmul", AclOpFunctions::direct(jt_acl_fp8_unavailable)},
+#endif
+        {"Rsqrt", AclOpFunctions::unary(aclnnRsqrtGetWorkspaceSize, aclnnRsqrt)},
+        {"Histc", AclOpFunctions::direct(aclnnHistc)},
+        {"GroupedMatMul", AclOpFunctions::direct(aclnnGroupedMatmulV5)},
+        {"Addmm", AclOpFunctions::direct(aclnnAddmm)},
     };
     return entries;
 }

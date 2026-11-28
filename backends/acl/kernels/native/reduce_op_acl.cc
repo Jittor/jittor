@@ -27,6 +27,7 @@
 #include "utils/str_utils.h"
 #include "aclnn/aclnn.h"
 #include "aclnnop/aclnn_prod.h"
+#include <aclnnop/aclnn_histc.h>
 #include "reduce_op_acl.h"
 
 namespace jittor
@@ -44,54 +45,67 @@ namespace jittor
 
     void ReduceOpRunner::setupInputDesc()
     {
-        auto input_num = in_.size();
-        for (int input_idx = 0; input_idx < input_num; input_idx++)
+        const size_t input_num = in_.size();
+        inputShapes.resize(input_num);
+        inputTensors.assign(input_num, nullptr);
+        for (size_t idx = 0; idx < input_num; idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < in_[input_idx]->shape.size(); j++)
+            Var *v = in_[idx];
+            auto &shape = inputShapes[idx];
+            if (idx == 0 && v->shape.size() == 1)
             {
-                shape.push_back(in_[input_idx]->shape[j]);
-            }
-            // ACL reduce kernels (aclnnAmax/Amin/...) reject 1-D inputs with
-            // ERROR 161002. Pad a 1-D input to 2-D (1, N); axes are shifted by
-            // +1 in setupOutputDesc so the reduction result is unchanged.
-            if (input_idx == 0 && shape.size() == 1)
-            {
-                shape.insert(shape.begin(), 1);
+                // ACL reduce kernels (aclnnAmax/Amin/...) reject 1-D inputs with
+                // ERROR 161002. Pad a 1-D input to 2-D (1, N); axes are shifted by
+                // +1 in setupOutputDesc so the reduction result is unchanged.
+                shape.resize(2);
+                shape[0] = 1;
+                shape[1] = v->shape[0];
                 input_padded_1d = true;
             }
-            inputShapes.push_back(shape);
-        }
-
-        for (int idx = 0; idx < input_num; idx++)
-        {
-            inputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
+            else
+            {
+                shape.resize(v->shape.size());
+                for (int j = 0; j < v->shape.size(); j++)
+                    shape[j] = v->shape[j];
+            }
+            auto ret = AcquireAclTensor(scratch->descriptors, shape, v->mem_ptr, v->size, get_dtype(v->dtype()), &inputTensors[idx], use_nchw, v);
             if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
         }
     }
 
     void ReduceOpRunner::setupOutputDesc()
     {
-        auto output_num = out_.size();
-
-        for (int output_idx = 0; output_idx < output_num; output_idx++)
+        const size_t output_num = out_.size();
+        outputShapes.resize(output_num);
+        outputTensors.assign(output_num, nullptr);
+        for (size_t output_idx = 0; output_idx < output_num; output_idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < out_[output_idx]->shape.size(); j++)
-            {
-                shape.push_back(out_[output_idx]->shape[j]);
-            }
-            outputShapes.push_back(shape);
+            auto &shape = outputShapes[output_idx];
+            const auto &vshape = out_[output_idx]->shape;
+            shape.resize(vshape.size());
+            for (int j = 0; j < vshape.size(); j++)
+                shape[j] = vshape[j];
         }
 
-        attr = dynamic_cast<ReduceAttr *>(op_attr.get());
-        keepdims = attr->keepdims;
+        size_t orig_axes_size = 0;
+        if (use_inline_attr)
+        {
+            attr = nullptr;
+            keepdims = inline_keepdims;
+            shifted_axes_.assign(inline_axes, inline_axes + inline_axes_len);
+            orig_axes_size = static_cast<size_t>(inline_axes_len);
+        }
+        else
+        {
+            attr = dynamic_cast<ReduceAttr *>(op_attr.get());
+            keepdims = attr->keepdims;
+            shifted_axes_.assign(attr->axes.begin(), attr->axes.end());
+            orig_axes_size = attr->axes.size();
+        }
         // A 1-D reduce is always a full reduce producing a single element.
         // When the input was padded to (1, N) we reduce over all padded axes
         // and force a scalar output (keepdims off): ACL rejects the (1,)/keepdims
         // combination with ERROR 161002 but accepts a true scalar.
-        shifted_axes_.assign(attr->axes.begin(), attr->axes.end());
         if (input_padded_1d)
         {
             shifted_axes_.clear();
@@ -121,15 +135,14 @@ namespace jittor
             // keepdims is true. The full-product API has no keepdims argument
             // and always consumes a scalar descriptor over the same storage.
             if (input_padded_1d ||
-                (attr->axes.size() == in_[0]->shape.size() &&
+                (orig_axes_size == static_cast<size_t>(in_[0]->shape.size()) &&
                  (!keepdims || op_idx == 13)))
                 outputShapes[0] = {};
         }
 
-        for (int idx = 0; idx < output_num; idx++)
+        for (size_t idx = 0; idx < output_num; idx++)
         {
-            outputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
+            auto ret = AcquireAclTensor(scratch->descriptors, outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size, get_dtype(out_[idx]->dtype()), &outputTensors[idx], use_nchw, out_[idx]);
             if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }
@@ -164,7 +177,7 @@ namespace jittor
         }
         case 13:
         {
-            const bool reduce_all = attr->axes.size() == in_[0]->shape.size();
+            const bool reduce_all = (use_inline_attr ? static_cast<size_t>(inline_axes_len) : attr->axes.size()) == static_cast<size_t>(in_[0]->shape.size());
             if (input_padded_1d || reduce_all)
             {
                 ret = aclnnProdGetWorkspaceSize(
@@ -252,5 +265,23 @@ namespace jittor
         }
         }
         return;
+    }
+
+    HistcOpRunner::HistcOpRunner() : BaseOpRunner("Histc")
+    {
+    }
+
+    void HistcOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        float fmin = static_cast<float>(min_val);
+        float fmax = static_cast<float>(max_val);
+        aclScalar *min_scalar = aclCreateScalar(&fmin, ACL_FLOAT);
+        aclScalar *max_scalar = aclCreateScalar(&fmax, ACL_FLOAT);
+        ret = aclnnHistcGetWorkspaceSize(
+            inputTensors[0], bins, min_scalar, max_scalar,
+            outputTensors[0], &workspaceSize, &executor);
+        launch(ret, aclnnHistc, true);
+        aclDestroyScalar(min_scalar);
+        aclDestroyScalar(max_scalar);
     }
 }

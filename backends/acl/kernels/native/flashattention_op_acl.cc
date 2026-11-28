@@ -284,4 +284,42 @@ namespace jittor
         }
     }
 
+    DirectFlashAttentionOpRunner::DirectFlashAttentionOpRunner() : BaseOpRunner("FlashAttention")
+    {
+    }
+
+    void DirectFlashAttentionOpRunner::executeOp(AclOpRegistry::const_iterator &it)
+    {
+        const size_t batch = static_cast<size_t>(inputShapes[0][0]);
+        int64_t stack_zeros[64] = {};
+        std::vector<int64_t> heap_zeros;
+        int64_t *zptr = stack_zeros;
+        if (batch > 64)
+        {
+            heap_zeros.assign(batch, 0);
+            zptr = heap_zeros.data();
+        }
+        std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> prefix(
+            aclCreateIntArray(zptr, batch), aclDestroyIntArray);
+        std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> qstart(
+            aclCreateIntArray(zptr, batch), aclDestroyIntArray);
+        std::unique_ptr<aclIntArray, decltype(&aclDestroyIntArray)> kvstart(
+            aclCreateIntArray(zptr, batch), aclDestroyIntArray);
+        char layout[] = "BNSD";
+        aclTensor *real_shift = (has_mask && mask_is_realshift) ? inputTensors[3] : nullptr;
+        aclTensor *atten_mask = (has_mask && !mask_is_realshift) ? inputTensors[3] : nullptr;
+        const int64_t pse_type = real_shift ? 0 : 1;
+        ret = aclnnFlashAttentionScoreV2GetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2],
+            real_shift, nullptr, nullptr, atten_mask,
+            prefix.get(), qstart.get(), kvstart.get(),
+            scale, /*keepProb=*/1.0,
+            /*preTokens=*/2147483647LL, /*nextTokens=*/2147483647LL,
+            head_num, layout, /*innerPrecise=*/0LL,
+            sparse_mode, pse_type,
+            outputTensors[0], outputTensors[1], nullptr, outputTensors[2],
+            &workspaceSize, &executor);
+        launch(ret, aclnnFlashAttentionScoreV2, true);
+    }
+
 }

@@ -44,57 +44,84 @@ namespace jittor
         if (shape.size() <= 3) return;
         int64_t batch = 1;
         for (size_t i = 0; i + 2 < shape.size(); i++) batch *= shape[i];
-        std::vector<int64_t> folded{batch, shape[shape.size() - 2], shape[shape.size() - 1]};
-        shape.swap(folded);
+        shape[0] = batch;
+        shape[1] = shape[shape.size() - 2];
+        shape[2] = shape[shape.size() - 1];
+        shape.resize(3);
     }
 
     void BatchMatMulOpRunner::setupInputDesc()
     {
-        auto input_num = in_.size();
-        for (int input_idx = 0; input_idx < input_num; input_idx++)
+        const size_t input_num = in_.size();
+        inputShapes.resize(input_num);
+        inputTensors.assign(input_num, nullptr);
+        for (size_t idx = 0; idx < input_num; idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < in_[input_idx]->shape.size(); j++)
-            {
-                shape.push_back(in_[input_idx]->shape[j]);
-            }
+            Var *v = in_[idx];
+            auto &shape = inputShapes[idx];
+            shape.resize(v->shape.size());
+            for (int j = 0; j < v->shape.size(); j++)
+                shape[j] = v->shape[j];
             collapse_batch_dims(shape);
-            inputShapes.push_back(shape);
-        }
-        for (int idx = 0; idx < input_num; idx++)
-        {
-            inputTensors.push_back(nullptr);
-            if ((jt_name == "bmm_trans_1" && idx == 1) || (jt_name == "bmm_trans_0" && idx == 0))
+
+            const bool trans = (jt_name == "bmm_trans_1" && idx == 1) || (jt_name == "bmm_trans_0" && idx == 0);
+            if (!v->is_contiguous())
             {
-                auto ret = CreateFakeTransAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
+                const int r = v->shape.size();
+                int64_t batch = 1, batch_stride = 0;
+                for (int i = r - 3; i >= 0; --i)
+                {
+                    const int64_t d = v->shape[i];
+                    if (d > 1)
+                    {
+                        if (batch == 1) batch_stride = v->storage_stride(i);
+                        batch *= d;
+                    }
+                }
+                int64_t dims[3] = {batch, v->shape[r - 2], v->shape[r - 1]};
+                if (batch == 1)
+                    batch_stride = std::max<int64_t>(1, dims[1] * dims[2]);
+                int64_t strides[3] = {batch_stride, v->storage_stride(r - 2), v->storage_stride(r - 1)};
+                if (trans)
+                {
+                    std::swap(dims[1], dims[2]);
+                    std::swap(strides[1], strides[2]);
+                }
+                const int64_t packed = v->storage_span_bytes() / v->dsize();
+                auto st = AcquireRawAclTensor(
+                    scratch->descriptors, dims, 3, get_dtype(v->dtype()), strides,
+                    &packed, 1, v->mem_ptr, &inputTensors[idx]);
+                if (st != ACL_SUCCESS || !inputTensors[idx])
+                    LOGf << name << ": strided input tensor creation failed";
+            }
+            else if (trans)
+            {
+                auto ret = AcquireFakeTransAclTensor(scratch->descriptors, shape, v->mem_ptr, v->size, get_dtype(v->dtype()), &inputTensors[idx], use_nchw, v);
                 if (ret != ACL_SUCCESS) LOGf << name << ": transposed input tensor creation failed. ERROR:" << ret;
             }
             else
             {
-                auto ret = CreateAclTensor(inputShapes[idx], in_[idx]->mem_ptr, in_[idx]->size, get_dtype(in_[idx]->dtype()), &inputTensors[idx], use_nchw, in_[idx]);
+                auto ret = AcquireAclTensor(scratch->descriptors, shape, v->mem_ptr, v->size, get_dtype(v->dtype()), &inputTensors[idx], use_nchw, v);
                 if (ret != ACL_SUCCESS) LOGf << name << ": input tensor creation failed. ERROR:" << ret;
             }
         }
     }
     void BatchMatMulOpRunner::setupOutputDesc()
     {
-        auto output_num = out_.size();
-        for (int output_idx = 0; output_idx < output_num; output_idx++)
+        const size_t output_num = out_.size();
+        outputShapes.resize(output_num);
+        outputTensors.assign(output_num, nullptr);
+        for (size_t idx = 0; idx < output_num; idx++)
         {
-            std::vector<int64_t> shape;
-            for (int j = 0; j < out_[output_idx]->shape.size(); j++)
-            {
-                shape.push_back(out_[output_idx]->shape[j]);
-            }
+            Var *v = out_[idx];
+            auto &shape = outputShapes[idx];
+            shape.resize(v->shape.size());
+            for (int j = 0; j < v->shape.size(); j++)
+                shape[j] = v->shape[j];
             collapse_batch_dims(shape);
-            outputShapes.push_back(shape);
-        }
-        for (int idx = 0; idx < output_num; idx++)
-        {
-            outputTensors.push_back(nullptr);
-            auto ret = CreateAclTensor(outputShapes[idx], out_[idx]->mem_ptr, out_[idx]->size,
-                                       get_dtype(out_[idx]->dtype()), &outputTensors[idx],
-                                       use_nchw, out_[idx]);
+            auto ret = AcquireAclTensor(scratch->descriptors, shape, v->mem_ptr, v->size,
+                                        get_dtype(v->dtype()), &outputTensors[idx],
+                                        use_nchw, v);
             if (ret != ACL_SUCCESS) LOGf << name << ": output tensor creation failed. ERROR:" << ret;
         }
     }

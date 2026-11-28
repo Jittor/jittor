@@ -13,4 +13,12 @@ namespace jittor
         TriuOpRunner();
     };
 
+    class TrilOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+    public:
+        TrilOpRunner();
+    };
+
 }

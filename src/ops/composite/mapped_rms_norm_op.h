@@ -19,8 +19,9 @@ struct MappedRmsNormOp : Op {
     Var* x, * weight, * y;
     VarPtr rstd_scratch;
     double eps;
+    bool allow_bfloat16;
 
-    MappedRmsNormOp(Var* x, Var* weight, double eps);
+    MappedRmsNormOp(Var* x, Var* weight, double eps, bool allow_bfloat16=false);
 
     const char* name() const override { return "mapped_rms_norm"; }
     VarPtr grad(Var* out, Var* dout, Var* v, int v_index) override;

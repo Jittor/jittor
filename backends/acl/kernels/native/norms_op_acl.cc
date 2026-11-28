@@ -35,25 +35,30 @@ namespace jittor
 {
     static void setupNormTensorDescs(
         const string &name,
+        vector<aclTensor *> &pool,
         const vector<Var *> &vars,
         vector<vector<int64_t>> &shapes,
         vector<aclTensor *> &tensors,
         int nchwPrefix)
     {
-        for (auto *var : vars)
+        const size_t n = vars.size();
+        shapes.resize(n);
+        for (size_t idx = 0; idx < n; idx++)
         {
-            vector<int64_t> shape;
-            for (int j = 0; j < var->shape.size(); j++)
-                shape.push_back(var->shape[j]);
-            shapes.push_back(shape);
+            auto &shape = shapes[idx];
+            const auto &vs = vars[idx]->shape;
+            shape.resize(vs.size());
+            for (size_t j = 0; j < vs.size(); j++)
+                shape[j] = vs[j];
         }
-        for (int idx = 0; idx < vars.size(); idx++)
+        tensors.resize(n, nullptr);
+        for (size_t idx = 0; idx < n; idx++)
         {
-            tensors.push_back(nullptr);
-            auto ret = CreateAclTensor(
-                shapes[idx], vars[idx]->mem_ptr, vars[idx]->size,
+            tensors[idx] = nullptr;
+            auto ret = AcquireAclTensor(
+                pool, shapes[idx], vars[idx]->mem_ptr, vars[idx]->size,
                 get_dtype(vars[idx]->dtype()), &tensors[idx],
-                idx < nchwPrefix);
+                static_cast<int>(idx) < nchwPrefix);
             if (ret != ACL_SUCCESS) LOGf << name << ": normalization input tensor creation failed. ERROR:" << ret;
         }
     }
@@ -64,18 +69,46 @@ namespace jittor
 
     void BatchNormOpRunner::setupInputDesc()
     {
-        setupNormTensorDescs(name, in_, inputShapes, inputTensors, 1);
+        setupNormTensorDescs(name, scratch->descriptors, in_, inputShapes, inputTensors, 1);
     }
 
     void BatchNormOpRunner::setupOutputDesc()
     {
-        setupNormTensorDescs(name, out_, outputShapes, outputTensors, 1);
+        setupNormTensorDescs(name, scratch->descriptors, out_, outputShapes, outputTensors, 1);
     }
 
     void BatchNormOpRunner::executeOp(AclOpRegistry::const_iterator &it)
     {
         auto attr = dynamic_cast<BatchNormAttr *>(op_attr.get());
-        ret = aclnnBatchNormGetWorkspaceSize(inputTensors[0], inputTensors[1], inputTensors[2], inputTensors[3], inputTensors[4], attr->is_train, attr->momentum, attr->eps, outputTensors[0], outputTensors[1], outputTensors[2], &workspaceSize, &executor);
+        aclTensor *running_mean_tensor = inputTensors[3];
+        aclTensor *running_var_tensor = inputTensors[4];
+        if (outputTensors.size() >= 5)
+        {
+            if (out_[3]->mem_ptr != in_[3]->mem_ptr && out_[3]->size > 0)
+            {
+                auto st = aclrtMemcpyAsync(
+                    out_[3]->mem_ptr, out_[3]->size, in_[3]->mem_ptr, out_[3]->size,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                if (st != ACL_SUCCESS)
+                    LOGf << name << ": running_mean D2D copy failed. ERROR:" << st;
+            }
+            if (out_[4]->mem_ptr != in_[4]->mem_ptr && out_[4]->size > 0)
+            {
+                auto st = aclrtMemcpyAsync(
+                    out_[4]->mem_ptr, out_[4]->size, in_[4]->mem_ptr, out_[4]->size,
+                    ACL_MEMCPY_DEVICE_TO_DEVICE, aclstream);
+                if (st != ACL_SUCCESS)
+                    LOGf << name << ": running_var D2D copy failed. ERROR:" << st;
+            }
+            running_mean_tensor = outputTensors[3];
+            running_var_tensor = outputTensors[4];
+        }
+        ret = aclnnBatchNormGetWorkspaceSize(
+            inputTensors[0], inputTensors[1], inputTensors[2],
+            running_mean_tensor, running_var_tensor,
+            attr->is_train, attr->momentum, attr->eps,
+            outputTensors[0], outputTensors[1], outputTensors[2],
+            &workspaceSize, &executor);
 
         launch(ret, aclnnBatchNorm, true);
 
@@ -88,12 +121,12 @@ namespace jittor
 
     void BatchNormBackwardOpRunner::setupInputDesc()
     {
-        setupNormTensorDescs(name, in_, inputShapes, inputTensors, 2);
+        setupNormTensorDescs(name, scratch->descriptors, in_, inputShapes, inputTensors, 2);
     }
 
     void BatchNormBackwardOpRunner::setupOutputDesc()
     {
-        setupNormTensorDescs(name, out_, outputShapes, outputTensors, 1);
+        setupNormTensorDescs(name, scratch->descriptors, out_, outputShapes, outputTensors, 1);
     }
 
     void BatchNormBackwardOpRunner::executeOp(AclOpRegistry::const_iterator &it)

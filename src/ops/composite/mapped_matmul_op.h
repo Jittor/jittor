@@ -30,6 +30,7 @@ namespace jittor {
  */
 struct MappedMatmulOp : Op {
     static constexpr uint32 backend_mask = OpBackendAccelerator;
+    static bool accepts_strided_input(const Var* value);
     Var* a, * b, * c;
     // c = op(a) @ op(b), where op transposes the last two axes of an operand.
     // At most one of the two: the descriptors these backends build present a

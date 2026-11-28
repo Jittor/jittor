@@ -1010,6 +1010,8 @@ BackendOps make_acl_backend() {
     // was relying on: measured over the four training workloads, the peak
     // moved between -4.6% and +3.7% while the step got 8-18% faster.
     ops.execution.async_admits_grad = true;
+    // ACL's `fast_compute_stream[device]` is shared process-wide across threads.
+    ops.execution.shared_compute_stream = true;
     ops.execution.preserve_reduction_dtype = true;
     ops.execution.native_low_precision_reduction = true;
     ops.execution.supports_generated_device_kernels = false;

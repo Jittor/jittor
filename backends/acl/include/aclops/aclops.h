@@ -45,3 +45,5 @@
 #include <aclops/upsample_op_acl.h>
 #include <aclops/adamw_op_acl.h>
 #include <aclops/fused_sgd_op_acl.h>
+#include <aclops/quant_op_acl.h>
+#include <aclops/direct_mapped_op_acl.h>

@@ -247,6 +247,15 @@ static void init_ns() {
     dsize_map["complex128"] = 4;    // 16 bytes = 2^4 (float64 real + float64 imag)
     is_float_map["complex128"] = 0;
     is_unsigned["complex128"] = 0;
+    dsize_map["float8_e4m3fn"] = 0; // 1 byte = 2^0 (OCP E4M3FN)
+    is_float_map["float8_e4m3fn"] = 1;
+    is_unsigned["float8_e4m3fn"] = 0;
+    dsize_map["float8_e5m2"] = 0;   // 1 byte = 2^0 (IEEE/OCP E5M2)
+    is_float_map["float8_e5m2"] = 1;
+    is_unsigned["float8_e5m2"] = 0;
+    dsize_map["float8_e8m0fnu"] = 0; // 1 byte = 2^0 (OCP MX scale UE8M0)
+    is_float_map["float8_e8m0fnu"] = 1;
+    is_unsigned["float8_e8m0fnu"] = 0;
     NanoString::ns_t i=0;
     auto func = [&](const char* name, NanoString& ns) {
         // Before anything is written: both tables below are indexed without a

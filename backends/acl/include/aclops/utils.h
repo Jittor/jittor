@@ -18,6 +18,7 @@ namespace jittor
     // cube unit that cannot run FP32 with KEEP_DTYPE.
     const char* acl_soc_name();
     bool acl_soc_supports_bfloat16();
+    bool acl_soc_supports_fp8();
     bool acl_soc_supports_fp32_cube();
     // Fails unless FP32 cube math can run on this SoC or the caller opted
     // into down-conversion, so matmul/bmm/conv report the opt-in identically.
@@ -44,5 +45,15 @@ namespace jittor
                               const std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
                               aclDataType dataType, aclTensor **tensor, bool use_nchw = false,
                               const Var* storage = nullptr);
+    aclError AcquireFakeTransAclTensor(std::vector<aclTensor *> &pool,
+                                       std::vector<int64_t> &shape, void *deviceAddr, int64_t size,
+                                       aclDataType dataType, aclTensor **tensor, bool use_nchw = false,
+                                       const Var* storage = nullptr);
+    aclError AcquireRawAclTensor(std::vector<aclTensor *> &pool,
+                                 const int64_t *view_dims, size_t rank,
+                                 aclDataType dataType, const int64_t *strides,
+                                 const int64_t *storage_dims, size_t storage_rank,
+                                 void *deviceAddr, aclTensor **tensor,
+                                 aclFormat format = aclFormat::ACL_FORMAT_ND);
     void RecycleAclTensor(std::vector<aclTensor *> &pool, aclTensor *tensor);
 }

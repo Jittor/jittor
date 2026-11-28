@@ -26,6 +26,9 @@ class BatchNormACL:
         self.is_train = bool(is_train)
 
     def __call__(self, x, weight, bias, running_mean, running_var):
+        return self.call_with_stats(x, weight, bias, running_mean, running_var)[0]
+
+    def call_with_stats(self, x, weight, bias, running_mean, running_var):
         channels = int(x.shape[1])
         program = _batchnorm_program(self.is_train, self.momentum, self.eps)
         return acl_emit(
@@ -33,7 +36,48 @@ class BatchNormACL:
             [x, weight, bias, running_mean, running_var],
             [x.dtype] * 3,
             [x.shape, (channels,), (channels,)],
-        )[0]
+        )
+
+    def call_with_running_stats(self, x, weight, bias, running_mean, running_var):
+        return _BatchNormTrainRunningFn(
+            running_mean, running_var, self.momentum, self.eps
+        )(x, weight, bias)
+
+
+class _BatchNormTrainRunningFn(jt.Function):
+    def __init__(self, running_mean, running_var, momentum, eps):
+        self._running_mean = running_mean
+        self._running_var = running_var
+        self._momentum = float(momentum)
+        self._eps = float(eps)
+
+    def execute(self, x, weight, bias):
+        channels = int(x.shape[1])
+        rm = self._running_mean
+        rv = self._running_var
+        program = _batchnorm_running_fwd_program(self._momentum, self._eps)
+        res = acl_emit(
+            program,
+            [x, weight, bias, rm, rv],
+            [x.dtype, x.dtype, x.dtype, rm.dtype, rv.dtype],
+            [x.shape, (channels,), (channels,), (channels,), (channels,)],
+        )
+        self.x = x
+        self.weight = weight
+        self.save_mean = res[1]
+        self.save_invstd = res[2]
+        return res[0], res[3].stop_grad(), res[4].stop_grad()
+
+    def grad(self, grad_y, grad_rm=None, grad_rv=None):
+        channels = int(self.x.shape[1])
+        program = _batchnorm_running_bwd_program(self._eps)
+        res = acl_emit(
+            program,
+            [grad_y, self.x, self.weight, self.save_mean, self.save_invstd],
+            [self.x.dtype, self.weight.dtype, self.weight.dtype],
+            [self.x.shape, (channels,), (channels,)],
+        )
+        return res[0], res[1], res[2]
 
 
 class LayerNormACL:
@@ -244,6 +288,42 @@ def _batchnorm_program(is_train, momentum, eps):
             multi_grad_input_count=3,
             multi_grad_src=_BATCHNORM_GRAD_SRC,
             multi_grad_attributes=attributes,
+        )
+        _NORM_PROGRAMS[key] = program
+    return program
+
+
+_BATCHNORM_RUNNING_BWD_SRC = "\n            // aclop\n            BatchNormBackwardOpRunner op;\n            op.add(in0, true);\n            op.add(in1, true);\n            op.add(in2, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(in3, true);\n            op.add(in4, true);\n            op.add(out0, false);\n            op.add(out1, false);\n            op.add(out2, false);\n            "
+
+
+def _batchnorm_running_fwd_program(momentum, eps):
+    key = ("BatchNormRunningFwd", scalar_key(momentum), scalar_key(eps))
+    program = _NORM_PROGRAMS.get(key)
+    if program is None:
+        attributes = {"is_train": True, "momentum": momentum, "eps": eps}
+        program = acl_program(
+            "BatchNorm",
+            5,
+            5,
+            attributes=attributes,
+        )
+        _NORM_PROGRAMS[key] = program
+    return program
+
+
+def _batchnorm_running_bwd_program(eps):
+    key = ("BatchNormRunningBwd", scalar_key(eps))
+    program = _NORM_PROGRAMS.get(key)
+    if program is None:
+        attributes = {"is_train": True, "momentum": 0.1, "eps": eps}
+        program = structured_program(
+            _GROUPED_NORM_HEADER,
+            code_program([
+                _BATCHNORM_RUNNING_BWD_SRC,
+                '\napply_acl_code_attributes(op, data, "acl_payload.bn_bwd.", "BatchNormBackward");\n',
+                "\nop.run();\n",
+            ]),
+            {"bn_bwd": ("BatchNormBackward", attributes)},
         )
         _NORM_PROGRAMS[key] = program
     return program

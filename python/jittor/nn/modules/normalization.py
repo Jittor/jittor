@@ -1,15 +1,34 @@
 """Stateful normalization modules."""
 
+import weakref
+
 import jittor as jt
 from jittor import Module, init
 
+from ... import _arg_policy
 from ..functional.normalization import (
-    _check_batch_norm_input,
     _batch_norm_eval,
     _batch_norm_train,
+    _batch_norm_train_with_running_stats,
+    _check_batch_norm_input,
     _unbiased,
 )
-from ... import _arg_policy
+
+_NBT_ONE_CACHE = weakref.WeakKeyDictionary()
+
+
+def _increment_batches_tracked(module, counter):
+    if counter.location() == "device" and int(counter.device_id) >= 0:
+        key = (int(counter.device_id), str(counter.dtype))
+        entry = _NBT_ONE_CACHE.get(module)
+        if entry is None or entry[0] != key:
+            one = jt.array([1], dtype=counter.dtype).to_device(key[0]).stop_grad()
+            _NBT_ONE_CACHE[module] = (key, one)
+        else:
+            one = entry[1]
+        counter.update(counter + one)
+    else:
+        counter.update(counter + 1)
 
 
 def _constant_parameter(shape, dtype, value):
@@ -93,11 +112,28 @@ class BatchNorm(Module):
         from jittor import distributed as dist
 
         sync = self.sync and dist.is_initialized()
+        if not sync:
+            fused = _batch_norm_train_with_running_stats(
+                x,
+                self.running_mean,
+                self.running_var,
+                self.weight,
+                self.bias,
+                self.momentum,
+                self.eps,
+            )
+            if fused is not None:
+                norm_x, new_rm, new_rv = fused
+                if self.track_running_stats:
+                    _increment_batches_tracked(self, self.num_batches_tracked)
+                self.running_mean.update(new_rm)
+                self.running_var.update(new_rv)
+                return norm_x
         norm_x, xmean, xvar = _batch_norm_train(
             x, dims, self.weight, self.bias, self.eps, sync=sync
         )
         if self.track_running_stats:
-            self.num_batches_tracked.update(self.num_batches_tracked + 1)
+            _increment_batches_tracked(self, self.num_batches_tracked)
         world_size = dist.get_world_size() if sync else 1
         self.running_mean.update(
             self.running_mean + (xmean.reshape((-1,)) - self.running_mean) * self.momentum

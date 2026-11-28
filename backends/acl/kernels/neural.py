@@ -13,11 +13,12 @@ from .ops.grid_sample_op import GridSampler2DACL
 from .ops.matmul_op import MatmulACL
 from .ops.upsample_op import UpsampleNearest2dACL, UpsampleBicubic2dACL, UpsampleBilinear2dACL
 from .ops.relu_op import ReLUACL, LeakyReLUACL
-from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL
+from .ops.silu_op import SiLUACL, SwishACL, SwiGluACL, SoftplusACL
 from .ops.softmax_op import SoftmaxACL
 from .ops.pool_op import PoolACL, AdaptiveAvgPool2dACL
+from .ops.quant_op import DynamicBlockQuantACL, DynamicMxQuantACL, QuantMatmulACL
 from .ops.rope_op import RotaryPositionEmbeddingACL
-from ._soc import soc_name, allow_reduced_precision
+from ._soc import soc_name, supports_bfloat16, supports_fp8, allow_reduced_precision
 
 
 #: Dtype sets the decline guards below test membership in. A Var's dtype is a
@@ -33,6 +34,16 @@ _F16_F32_BF16 = frozenset(("float16", "float32", "bfloat16"))
 _INT32_INT64 = frozenset(("int32", "int64"))
 
 
+def _fast_dtype_name(dtype):
+    if dtype.__class__ is str:
+        return dtype if dtype in _F16_F32_BF16 else _jittor_dtype_name(dtype)
+    name = getattr(dtype, "name", None)
+    if name is not None and name in _F16_F32_BF16:
+        return name
+    s = str(dtype)
+    return s if s in _F16_F32_BF16 else _jittor_dtype_name(dtype)
+
+
 def _dtype_in(value, names):
     """Whether ``value``'s dtype is one of ``names``, a set of canonical names."""
     dtype = value.dtype
@@ -42,6 +53,41 @@ def _dtype_in(value, names):
 def conv_acl(
     x, weight, bias=None, stride=1, padding=0, dilation=1, groups=1, *, _depthwise_fast_path=True
 ):
+    mapped = getattr(getattr(jt.core, "ops", None), "mapped_conv2d", None)
+    if (
+        mapped is not None
+        and isinstance(x, jt.Var)
+        and isinstance(weight, jt.Var)
+        and x.ndim == 4
+        and weight.ndim == 4
+        and (bias is None or (isinstance(bias, jt.Var) and bias.ndim == 1))
+    ):
+        dt = _fast_dtype_name(x.dtype)
+        if (
+            dt in _F16_F32_BF16
+            and (dt != "bfloat16" or supports_bfloat16())
+            and _fast_dtype_name(weight.dtype) == dt
+            and (bias is None or _fast_dtype_name(bias.dtype) == dt)
+        ):
+            if isinstance(stride, int):
+                sh = sw = stride
+            else:
+                sh, sw = int(stride[0]), int(stride[1])
+            if isinstance(padding, int):
+                ph = pw = padding
+            else:
+                ph, pw = int(padding[0]), int(padding[1])
+            if isinstance(dilation, int):
+                dh = dw = dilation
+            else:
+                dh, dw = int(dilation[0]), int(dilation[1])
+            g = int(groups)
+            if sh > 0 and sw > 0 and dh > 0 and dw > 0 and ph >= 0 and pw >= 0 and g > 0:
+                inputs = [x, weight] if bias is None else [x, weight, bias]
+                return mapped(
+                    inputs, sh, sw, ph, pw, dh, dw, g,
+                    1 if allow_reduced_precision() else 0,
+                )
     return ConvACL()(x, weight, bias, stride, padding, dilation, groups)
 
 
@@ -99,6 +145,8 @@ def conv_transpose2d_acl(x, weight, bias, stride, padding, output_padding,
 
 
 def bmm_acl(x1, x2, trans_a=False, trans_b=False):
+    if trans_a and not trans_b:
+        return BmmACL(False, True)(x1, x2)
     if trans_a:
         x1 = _transpose_last_two(x1)
     return BmmACL(trans_b)(x1, x2)
@@ -119,6 +167,8 @@ def grid_sample_acl(input, grid, mode="bilinear", padding_mode="zeros", align_co
 
 
 def matmul_acl(x1, x2, trans_a=False, trans_b=False):
+    if trans_a and not trans_b and x1.ndim >= 2 and x2.ndim >= 2 and (x1.ndim == 2 or x2.ndim > 2):
+        return MatmulACL(False, True)(x1, x2)
     if trans_a:
         x1 = _transpose_last_two(x1)
     if trans_b:
@@ -186,6 +236,12 @@ def resize_acl(input, size, mode="nearest", align_corners=False, tf_mode=False):
 
 
 def relu(x, inplace=False):
+    if isinstance(x, jt.Var):
+        dt = _fast_dtype_name(x.dtype)
+        if dt in _F16_F32_BF16 and (dt != "bfloat16" or supports_bfloat16()):
+            mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+            if mapped is not None:
+                return mapped(x, 8, 0.0, 0.0)
     return ReLUACL()(x)
 
 
@@ -197,12 +253,15 @@ def gelu_acl(x, approximate="none"):
     """CANN V2 preserves the requested exact or tanh algorithm and its gradient."""
     if approximate not in ("none", "tanh"):
         return None
-    if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
-        # Exact BF16 retains its existing path. New tanh admission is bounded
-        # to the FP16/FP32 algorithms verified on the real ACL device.
-        if approximate == "tanh" and _dtype_in(x, ("bfloat16",)):
-            return None
-        return GeluACL()(x, approximate)
+    if isinstance(x, jt.Var):
+        dt = _fast_dtype_name(x.dtype)
+        if dt in _F16_F32_BF16:
+            if dt == "bfloat16" and not supports_bfloat16():
+                return None
+            mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+            if mapped is not None:
+                return mapped(x, 7, float(approximate == "tanh"), 0.0)
+            return GeluACL()(x, approximate)
     return None
 
 
@@ -260,6 +319,9 @@ def cross_entropy_loss_acl(output, target, weight=None, ignore_index=None,
 
 def _silu_acl(x, inplace=False):
     if isinstance(x, jt.Var) and _dtype_in(x, _F16_F32_BF16):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(x, 1, 0.0, 0.0)
         if _jittor_dtype_name(x.dtype) == "bfloat16":
             return SwishACL()(x)
         return SiLUACL()(x)
@@ -279,6 +341,21 @@ def _silu_and_mul_acl(x):
     return None
 
 
+def softplus_acl(x, beta=1.0, threshold=20.0):
+    if (
+        isinstance(x, jt.Var)
+        and _dtype_in(x, _F16_F32_BF16)
+        and isinstance(beta, (int, float))
+        and isinstance(threshold, (int, float))
+        and float(beta) > 0.0
+    ):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(x, 2, float(beta), float(threshold))
+        return SoftplusACL()(x, float(beta), float(threshold))
+    return None
+
+
 def softmax_supported(x, log=False, zero_all_neg_inf=False, dim=None):
     return not zero_all_neg_inf
 
@@ -293,6 +370,16 @@ def softmax_acl(x, log=False, zero_all_neg_inf=False, dim=None):
         m = jt.max(x, dim, keepdims=True)
         shifted = x - m
         return shifted - jt.log(jt.exp(shifted).sum(dim, keepdims=True))
+    if (
+        isinstance(x, jt.Var)
+        and isinstance(dim, Integral)
+        and not isinstance(dim, bool)
+        and x.ndim >= 1
+        and _dtype_in(x, _F16_F32_BF16)
+    ):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(x, 6, float(int(dim)), 0.0)
     return SoftmaxACL()(x, dim)
 
 
@@ -389,3 +476,223 @@ def rope_acl(xq, xk, freqs_cis=None, freq_sin=None, freq_cos=None):
 
 def adaptive_avg_pool2d_acl(x, output_size):
     return AdaptiveAvgPool2dACL()(x, output_size)
+
+
+_FP8_COMPUTE_DTYPES = frozenset(("float8_e4m3fn", "float8_e5m2"))
+_FP8_QUANT_IN_DTYPES = frozenset(("bfloat16", "float16"))
+_FP8_OUT_DTYPES = frozenset(("bfloat16", "float16", "float32"))
+
+
+def dynamic_block_quant_supported(x, row_block_size=1, col_block_size=128,
+                                  dst_dtype="float8_e4m3fn", min_scale=0.0):
+    if not supports_fp8() or x.ndim < 2:
+        return False
+    if not _dtype_in(x, _FP8_QUANT_IN_DTYPES):
+        return False
+    if _jittor_dtype_name(dst_dtype) not in _FP8_COMPUTE_DTYPES:
+        return False
+    row_blk = int(row_block_size)
+    col_blk = int(col_block_size)
+    if row_blk <= 0 or col_blk <= 0:
+        return False
+    m_dim = 1
+    for size in x.shape[:-1]:
+        m_dim *= int(size)
+    k_dim = int(x.shape[-1])
+    return m_dim > 0 and k_dim > 0 and (m_dim % row_blk == 0) and (k_dim % col_blk == 0)
+
+
+def dynamic_block_quant_acl(x, row_block_size=1, col_block_size=128,
+                            dst_dtype="float8_e4m3fn", min_scale=0.0):
+    return DynamicBlockQuantACL()(
+        x,
+        row_block_size=row_block_size,
+        col_block_size=col_block_size,
+        dst_dtype=dst_dtype,
+        min_scale=min_scale,
+    )
+
+
+def dynamic_mx_quant_supported(x, axis=-1, block_size=32,
+                               dst_dtype="float8_e4m3fn", scale_alg=0):
+    if not supports_fp8() or x.ndim < 2:
+        return False
+    if not _dtype_in(x, _FP8_QUANT_IN_DTYPES):
+        return False
+    if _jittor_dtype_name(dst_dtype) not in _FP8_COMPUTE_DTYPES:
+        return False
+    blk = int(block_size)
+    if blk != 32:
+        return False
+    norm_axis = int(axis) if int(axis) >= 0 else int(axis) + x.ndim
+    if not (0 <= norm_axis < x.ndim):
+        return False
+    dim = int(x.shape[norm_axis])
+    return dim > 0 and dim % 64 == 0
+
+
+def dynamic_mx_quant_acl(x, axis=-1, block_size=32,
+                         dst_dtype="float8_e4m3fn", scale_alg=0):
+    return DynamicMxQuantACL()(
+        x,
+        axis=axis,
+        block_size=block_size,
+        dst_dtype=dst_dtype,
+        scale_alg=scale_alg,
+    )
+
+
+def quant_matmul_supported(x1, x2, x1_scale, x2_scale, *, bias=None,
+                           out_dtype="bfloat16", trans_a=False, trans_b=False,
+                           trans_x2_scale=False, group_size=0):
+    if not supports_fp8() or x1.ndim < 2 or x2.ndim != 2:
+        return False
+    if not (_dtype_in(x1, _FP8_COMPUTE_DTYPES) and _dtype_in(x2, _FP8_COMPUTE_DTYPES)):
+        return False
+    if _jittor_dtype_name(out_dtype) not in _FP8_OUT_DTYPES:
+        return False
+    s1_dt = _jittor_dtype_name(x1_scale.dtype)
+    s2_dt = _jittor_dtype_name(x2_scale.dtype)
+    if not ((s1_dt == "float32" and s2_dt == "float32")
+            or (s1_dt == "float8_e8m0fnu" and s2_dt == "float8_e8m0fnu")):
+        return False
+    return True
+
+
+def quant_matmul_acl(x1, x2, x1_scale, x2_scale, *, bias=None,
+                     out_dtype="bfloat16", trans_a=False, trans_b=False,
+                     trans_x2_scale=False, group_size=0):
+    return QuantMatmulACL()(
+        x1,
+        x2,
+        x1_scale,
+        x2_scale,
+        bias=bias,
+        out_dtype=out_dtype,
+        trans_a=trans_a,
+        trans_b=trans_b,
+        trans_x2_scale=trans_x2_scale,
+        group_size=group_size,
+    )
+
+
+def fp8_linear_acl(
+    x,
+    weight_fp8,
+    weight_scale,
+    bias=None,
+    *,
+    mode="block128",
+    block_size=128,
+    out_dtype=None,
+):
+    if not (
+        jt.flags.no_grad
+        and supports_fp8()
+        and isinstance(x, jt.Var)
+        and isinstance(weight_fp8, jt.Var)
+        and isinstance(weight_scale, jt.Var)
+        and x.ndim >= 2
+        and weight_fp8.ndim == 2
+        and _dtype_in(x, _FP8_QUANT_IN_DTYPES)
+        and _dtype_in(weight_fp8, _FP8_COMPUTE_DTYPES)
+        and weight_fp8._storage_is_contiguous()
+        and weight_scale._storage_is_contiguous()
+    ):
+        return None
+    target_dtype = _jittor_dtype_name(x.dtype) if out_dtype is None else _jittor_dtype_name(out_dtype)
+    if target_dtype not in _FP8_OUT_DTYPES:
+        return None
+    k_dim = x.shape[-1]
+    n_dim = weight_fp8.shape[0]
+    if k_dim != weight_fp8.shape[1] or k_dim <= 0 or n_dim <= 0:
+        return None
+    scale_dtype = _jittor_dtype_name(weight_scale.dtype)
+    sshape = weight_scale.shape
+    if mode == "block128":
+        blk = int(block_size)
+        if (
+            blk <= 0
+            or (k_dim % blk != 0)
+            or (n_dim % blk != 0)
+            or scale_dtype != "float32"
+            or len(sshape) != 2
+            or sshape[0] != n_dim // blk
+            or sshape[1] != k_dim // blk
+        ):
+            return None
+        mode_id = 0
+    elif mode == "mxfp8":
+        blk = 32
+        if (
+            (k_dim % 64 != 0)
+            or scale_dtype != "float8_e8m0fnu"
+            or len(sshape) != 3
+            or sshape[0] != n_dim
+            or sshape[1] != k_dim // 64
+            or sshape[2] != 2
+        ):
+            return None
+        mode_id = 1
+    else:
+        return None
+    x_in = x if x._storage_is_contiguous() else x.contiguous()
+    out = jt.core.ops.mapped_fp8_linear(
+        x_in, weight_fp8, weight_scale, mode_id, blk, target_dtype
+    )
+    if bias is not None:
+        bias_cast = bias if _jittor_dtype_name(bias.dtype) == target_dtype else bias.cast(target_dtype)
+        out = out + bias_cast
+    return out
+
+
+def linear_bias_supported(x, weight, bias):
+    if jt.flags.amp_reg:
+        return False
+    if not (isinstance(x, jt.Var) and isinstance(weight, jt.Var) and isinstance(bias, jt.Var)):
+        return False
+    if x.ndim < 2 or weight.ndim != 2 or bias.ndim != 1:
+        return False
+    dt = _jittor_dtype_name(x.dtype)
+    if dt not in _F16_F32_BF16:
+        return False
+    if dt == "bfloat16" and not supports_bfloat16():
+        return False
+    if _jittor_dtype_name(weight.dtype) != dt or _jittor_dtype_name(bias.dtype) != dt:
+        return False
+    if int(weight.shape[0]) != int(bias.shape[0]) or int(x.shape[-1]) != int(weight.shape[1]):
+        return False
+    if any(int(s) <= 0 for s in x.shape) or int(weight.shape[0]) <= 0:
+        return False
+    return getattr(getattr(jt.core, "ops", None), "mapped_addmm", None) is not None
+
+
+def linear_bias_acl(x, weight, bias):
+    x_in = x if x._storage_is_contiguous() else x.contiguous()
+    w_in = weight if weight._storage_is_contiguous() else weight.contiguous()
+    b_in = bias if bias._storage_is_contiguous() else bias.contiguous()
+    return jt.core.ops.mapped_addmm(x_in, w_in, b_in, allow_reduced_precision())
+
+
+def grouped_mm_acl(mat_a, mat_b, offs=None):
+    if offs is None:
+        return None
+    if not (isinstance(mat_a, jt.Var) and isinstance(mat_b, jt.Var) and isinstance(offs, jt.Var)):
+        return None
+    if mat_a.ndim != 2 or mat_b.ndim != 3 or offs.ndim != 1:
+        return None
+    dt = _jittor_dtype_name(mat_a.dtype)
+    if dt not in _F16_F32_BF16 or _jittor_dtype_name(mat_b.dtype) != dt:
+        return None
+    if dt == "bfloat16" and not supports_bfloat16():
+        return None
+    if _jittor_dtype_name(offs.dtype) not in ("int32", "int64"):
+        return None
+    mapped = getattr(getattr(jt.core, "ops", None), "mapped_grouped_matmul", None)
+    if mapped is None:
+        return None
+    a_in = mat_a if mat_a._storage_is_contiguous() else mat_a.contiguous()
+    offs_in = offs if _jittor_dtype_name(offs.dtype) == "int64" else offs.cast("int64")
+    if not offs_in._storage_is_contiguous():
+        offs_in = offs_in.contiguous()
+    return mapped(a_in, mat_b, offs_in)

@@ -34,6 +34,7 @@ struct Candidate {
 PyObject* candidates_fn = nullptr;
 PyObject* dtype_name_fn = nullptr;
 PyObject* registered_ops = nullptr;                       // frozenset of str
+uint64_t select_generation = 0;
 std::unordered_map<string, vector<Candidate>> resolved;   // "op\0backend"
 std::unordered_map<string, PyObject*> dtype_names;        // raw -> canonical str
 std::unordered_map<PyObject*, NativeRule> native_rules;   // supports -> rule
@@ -326,7 +327,12 @@ void kernel_select_bind(PyObject* candidates, PyObject* dtype_name) {
     dtype_name_fn = dtype_name;
 }
 
+uint64_t kernel_select_generation() {
+    return select_generation;
+}
+
 void kernel_select_invalidate(PyObject* op_names) {
+    ++select_generation;
     for (auto& kv : resolved) release(kv.second);
     resolved.clear();
     Py_XINCREF(op_names);

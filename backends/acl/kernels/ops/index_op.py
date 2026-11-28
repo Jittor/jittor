@@ -33,13 +33,12 @@ class IndexACL(jt.Function):
         for i, d in enumerate(dim):
             max_len = inshape[d]
 
-            tmp = jt.zeros(max_len, dtype=dtype)
             range_attr_code = attribute_program("Range", {"start": 0, "end": max_len, "step": 1})
             result = range_forward(
                 "Range",
                 [],
-                output_dtypes=[tmp.dtype],
-                output_shapes=[tmp.shape],
+                output_dtypes=[dtype],
+                output_shapes=[(max_len,)],
                 attr_code=range_attr_code,
             )[0]
             broadcast_dims = list(range(len(inshape)))

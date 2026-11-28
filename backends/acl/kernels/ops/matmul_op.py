@@ -78,14 +78,15 @@ def align_operands(x1, x2):
 
 
 class MatmulACL:
-    def __init__(self, trans_x2=False):
+    def __init__(self, trans_x2=False, trans_x1=False):
         self.trans_x2 = trans_x2
+        self.trans_x1 = trans_x1
 
     def __call__(self, x1, x2):
         return self.execute(x1, x2)
 
     def execute(self, x1, x2):
-        if x1.ndim > 2 and x2.ndim == 2:
+        if x1.ndim > 2 and x2.ndim == 2 and not self.trans_x1:
             # A stack of matrices times one matrix is a single 2-D product
             # over the flattened stack: one GEMM rather than a batch of them,
             # and both reshapes are views.
@@ -93,7 +94,7 @@ class MatmulACL:
             out = mapped_matmul(flat, x2, False, self.trans_x2)
             return out.reshape(list(x1.shape[:-1]) + [out.shape[-1]])
         x1, x2 = align_operands(x1, x2)
-        return mapped_matmul(x1, x2, False, self.trans_x2)
+        return mapped_matmul(x1, x2, self.trans_x1, self.trans_x2)
 
 
 class PackedMatmulACL:

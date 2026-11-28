@@ -91,6 +91,7 @@ def _bitcast(self, dt):
         _np_view_of = {"bool": _np.bool_, "uint8": _np.uint8, "int8": _np.int8, "uint16": _np.uint16,
                        "int16": _np.int16, "int32": _np.int32, "int64": _np.int64,
                        "float16": _np.float16, "bfloat16": _np.uint16,
+                       "float8_e4m3fn": _np.uint8, "float8_e5m2": _np.uint8, "float8_e8m0fnu": _np.uint8,
                        "float32": _np.float32, "float64": _np.float64}
     ds = getattr(dt, "name", str(dt)).replace("torch.", "")
     itemsize = getattr(dt, "itemsize", None)
@@ -132,7 +133,7 @@ def _torch_view(self, *shape, **_kw):
 
 def _reshape_or_view(self, shape, _kw, *, allow_copy):
     if not _kw and _FAST_VIEW is not None:
-        out = _FAST_VIEW(self, shape)
+        out = _FAST_VIEW(self, shape, allow_copy)
         if out is not None:
             return out
     # torch's `.view(dtype)` / `.view(dtype=...)` REINTERPRETS the bytes as

@@ -8,7 +8,8 @@ import numpy as np
 import jittor as jt
 from .ops.multinomial_op import multinomial_acl
 from .ops.clamp_op import ClampACL
-from .ops.triu_op import TriuACL
+from .ops.triu_op import TriuACL, TrilACL
+from .ops.silu_op import RsqrtACL
 from .ops.flip_op import FlipACL
 from .ops.concat_op import ConcatACL, SplitWithSizeACL
 from .ops.gather_scatter_op import GatherACL, ScatterACL
@@ -58,7 +59,41 @@ def _clamp_acl(input, min_value, max_value):
 
 
 def triu_acl(x, diagonal=0):
+    if (
+        isinstance(x, jt.Var)
+        and isinstance(diagonal, Integral)
+        and not isinstance(diagonal, bool)
+        and x.ndim >= 2
+    ):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(x, 3, float(diagonal), 0.0)
     return TriuACL()(x, diagonal)
+
+
+def tril_acl(x, diagonal=0):
+    if (
+        isinstance(x, jt.Var)
+        and isinstance(diagonal, Integral)
+        and not isinstance(diagonal, bool)
+        and x.ndim >= 2
+    ):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(x, 4, float(diagonal), 0.0)
+    return TrilACL()(x, diagonal)
+
+
+def rsqrt_acl(x):
+    if (
+        isinstance(x, jt.Var)
+        and _jittor_dtype_name(x.dtype) in ("float16", "bfloat16", "float32")
+    ):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(x, 0, 0.0, 0.0)
+        return RsqrtACL()(x)
+    return None
 
 
 def flip_acl(x, dim):
@@ -167,6 +202,16 @@ def multinomial_single_draw_acl(weights, num_samples=1, replacement=False):
 
 
 def cumsum_acl(input, dim=-1):
+    if (
+        jt.flags.no_grad
+        and isinstance(input, jt.Var)
+        and isinstance(dim, Integral)
+        and not isinstance(dim, bool)
+        and input.ndim >= 1
+    ):
+        mapped = getattr(getattr(jt.core, "ops", None), "mapped_unary", None)
+        if mapped is not None:
+            return mapped(input, 5, float(int(dim)), 0.0)
     return CumsumACL()(input, dim)
 
 
@@ -327,9 +372,85 @@ def _get_insert_positions(x, slices):
     return result
 
 
+_NATIVE_SETITEM_DTYPES = frozenset((
+    "bfloat16", "float32", "float16",
+    "int64", "int32", "int16", "int8",
+    "uint8", "uint16", "uint32", "bool",
+))
+
+
+def _native_basic_setitem_selection(shape, index):
+    """Return the selected shape for basic positive-step indexing without None, or None."""
+    items = index if isinstance(index, tuple) else (index,)
+    ellipses = 0
+    for item in items:
+        if item is Ellipsis:
+            ellipses += 1
+        elif type(item) is int:
+            continue
+        elif isinstance(item, slice):
+            if any(part is not None and type(part) is not int
+                   for part in (item.start, item.stop, item.step)):
+                return None
+            if item.step is not None and item.step <= 0:
+                return None
+        else:
+            return None
+    consumed = len(items) - ellipses
+    rank = len(shape)
+    if ellipses > 1 or consumed > rank:
+        return None
+    sel_shape = []
+    axis = 0
+    for item in items:
+        if item is Ellipsis:
+            for _ in range(rank - consumed):
+                sel_shape.append(int(shape[axis]))
+                axis += 1
+        elif type(item) is int:
+            size = int(shape[axis])
+            if item < -size or item >= size:
+                return None
+            axis += 1
+        else:
+            size = int(shape[axis])
+            start, stop, step = item.indices(size)
+            count = 0 if stop <= start else (stop - start - 1) // step + 1
+            sel_shape.append(count)
+            axis += 1
+    while axis < rank:
+        sel_shape.append(int(shape[axis]))
+        axis += 1
+    return tuple(sel_shape)
+
+
 def setitem_acl(x, slices, value, reduce=None):
     if reduce not in (None, "void"):
         return None
+    if (
+        jt.flags.no_grad
+        and isinstance(x, jt.Var)
+        and x.ndim > 0
+        and hasattr(x, "_storage_is_contiguous")
+        and x._storage_is_contiguous()
+        and _jittor_dtype_name(x.dtype) in _NATIVE_SETITEM_DTYPES
+        and all(int(s) > 0 for s in x.shape)
+    ):
+        sel_shape = _native_basic_setitem_selection(x.shape, slices)
+        if sel_shape is not None:
+            val = value
+            if isinstance(val, (bool, int, float)):
+                val = jt.array(val, dtype=x.dtype).reshape(())
+            if isinstance(val, jt.Var) and getattr(val, "placement_backend", -1) != 0:
+                vshape = tuple(int(s) for s in val.shape)
+                if len(vshape) <= len(sel_shape):
+                    lead = len(sel_shape) - len(vshape)
+                    if all(vd == 1 or vd == sel_shape[lead + i] for i, vd in enumerate(vshape)):
+                        if str(val.dtype) != str(x.dtype):
+                            val = val.cast(x.dtype)
+                        if not val._storage_is_contiguous():
+                            val = val.contiguous()
+                        return jt.core.ops.setitem(x, slices, val)
     return SetItemACL()(x, slices, value)
 
 
@@ -401,4 +522,48 @@ def _split_acl(x, split_size, dim=0):
         return None
     if sum(split_sizes) != int(x.shape[axis]):
         return None
+    if len(split_sizes) == 1:
+        return (x,)
+    # Zero-copy contiguous view splits whenever every leading axis before `axis`
+    # has extent 1 (e.g., axis == 0, [1, 1, D] decode splits, or [1, C, L]
+    # conv1d output splits along channel dim). Avoids SplitWithSize CodeOp + copy.
+    if (
+        hasattr(x, "_storage_is_contiguous")
+        and x._storage_is_contiguous()
+        and getattr(getattr(jt.core, "ops", None), "getitem", None) is not None
+    ):
+        leading_unit = True
+        for d in range(axis):
+            if int(x.shape[d]) != 1:
+                leading_unit = False
+                break
+        if leading_unit:
+            prefix = (slice(None),) * axis
+            out = []
+            offset = 0
+            for sz in split_sizes:
+                idx = prefix + (slice(offset, offset + sz),)
+                out.append(jt.core.ops.getitem(x, idx))
+                offset += sz
+            return tuple(out)
     return SplitWithSizeACL()(x, split_sizes, axis)
+
+
+_HISTC_DTYPES = frozenset(("float16", "float32", "int8", "uint8", "int16", "int32", "int64"))
+
+
+def histc_acl(x, bins=100, min=0, max=0):
+    if not isinstance(x, jt.Var):
+        return None
+    if _jittor_dtype_name(x.dtype) not in _HISTC_DTYPES:
+        return None
+    bins_i = int(bins)
+    min_f = float(min)
+    max_f = float(max)
+    if bins_i <= 0 or min_f > max_f:
+        return None
+    mapped = getattr(getattr(jt.core, "ops", None), "mapped_histc", None)
+    if mapped is None:
+        return None
+    x_in = x if x._storage_is_contiguous() else x.contiguous()
+    return mapped(x_in, bins_i, min_f, max_f)

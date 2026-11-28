@@ -54,4 +54,23 @@ namespace jittor
         SwiGluOpRunner();
     };
 
+    class SoftplusOpRunner : public BaseOpRunner
+    {
+    protected:
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        SoftplusOpRunner();
+    };
+
+    class RsqrtOpRunner : public BaseOpRunner
+    {
+    protected:
+        bool allowsFlattenedElementwise() const override { return true; }
+        void executeOp(AclOpRegistry::const_iterator &it) override;
+
+    public:
+        RsqrtOpRunner();
+    };
+
 }

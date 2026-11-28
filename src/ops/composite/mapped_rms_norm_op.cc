@@ -15,11 +15,13 @@ namespace jittor {
 
 DECLARE_FLAG(bool, no_grad);
 
-MappedRmsNormOp::MappedRmsNormOp(Var* x, Var* weight, double eps)
-    : x(x), weight(weight), eps(eps) {
+MappedRmsNormOp::MappedRmsNormOp(Var* x, Var* weight, double eps, bool allow_bfloat16)
+    : x(x), weight(weight), eps(eps), allow_bfloat16(allow_bfloat16) {
     USER_CHECK(no_grad)
         << "mapped_rms_norm requires no_grad; use the differentiable RMSNorm path for training";
-    USER_CHECK(x->dtype() == ns_float16 && weight->dtype() == ns_float16)
+    const bool valid_fp16 = (x->dtype() == ns_float16 && weight->dtype() == ns_float16);
+    const bool valid_bf16 = allow_bfloat16 && (x->dtype() == ns_bfloat16 && weight->dtype() == ns_bfloat16);
+    USER_CHECK(valid_fp16 || valid_bf16)
         << "mapped_rms_norm requires float16 input and weight; use the original RMSNorm path for other dtypes, but got"
         << x->dtype() << "and" << weight->dtype();
     USER_CHECK(std::isfinite(eps) && eps > 0)

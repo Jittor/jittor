@@ -12,6 +12,45 @@ from .fidelity import Fidelity, register_fidelity
 from .amp import _preserve_autocast_arithmetic, _cuda_autocast_fp32_input
 
 _JITTOR_MOD: Any = None
+_DISPATCH_MOD: Any = None
+_FAST_MAPPED_UNARY: Any = None
+_FAST_ACL_MATMUL: Any = None
+_ACL_NATIVE_GEN = -1
+_ACL_RSQRT_DEFAULT = False
+_ACL_MM_DEFAULT = False
+
+
+def _refresh_acl_native_cache(jittor_mod):
+    global _DISPATCH_MOD, _FAST_MAPPED_UNARY, _FAST_ACL_MATMUL
+    global _ACL_NATIVE_GEN, _ACL_RSQRT_DEFAULT, _ACL_MM_DEFAULT
+    dispatch = _DISPATCH_MOD
+    if dispatch is None:
+        from jittor._runtime import dispatch as runtime_dispatch
+        dispatch = runtime_dispatch
+        _DISPATCH_MOD = dispatch
+        _FAST_MAPPED_UNARY = getattr(jittor_mod.core, "_fast_mapped_unary", None)
+        _FAST_ACL_MATMUL = getattr(jittor_mod.core, "_fast_acl_matmul", None)
+    gen = dispatch.generation
+    if gen == _ACL_NATIVE_GEN:
+        return dispatch
+    r_entries = dispatch._candidates("tensor.rsqrt", "acl")
+    _ACL_RSQRT_DEFAULT = (
+        len(r_entries) == 1
+        and getattr(r_entries[0].implementation, "__name__", None) == "rsqrt_acl"
+        and getattr(r_entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.tensor"
+    )
+    m_entries = dispatch._candidates("matmul", "acl")
+    b_entries = dispatch._candidates("batched_matmul", "acl")
+    _ACL_MM_DEFAULT = (
+        len(m_entries) == 1
+        and getattr(m_entries[0].implementation, "__name__", None) == "matmul_acl"
+        and getattr(m_entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.neural"
+        and len(b_entries) == 1
+        and getattr(b_entries[0].implementation, "__name__", None) == "bmm_acl"
+        and getattr(b_entries[0].implementation, "__module__", None) == "jittor.backends.acl.kernels.neural"
+    )
+    _ACL_NATIVE_GEN = gen
+    return dispatch
 
 
 _NATIVE_NAMES = (
@@ -54,6 +93,10 @@ class NativeOperation:
     def __init__(self, name):
         self._operation_key = name
         self._is_plain = name not in self._SPECIAL_OPS
+        self._cached_ctx: Any = None
+        self._cached_impl: Any = None
+        self._cached_var_cls: Any = None
+        self._cached_is_fn: bool = False
         self.__name__ = self.__qualname__ = name.replace(".", "_")
         self.__module__ = __name__
         self.__doc__ = "Native %s under the active Torch frontend policy." % name
@@ -72,12 +115,41 @@ class NativeOperation:
             import jittor as jittor_mod
             _JITTOR_MOD = jittor_mod
         context = get_install_context(jittor_mod)
-        implementation = context.state["native_torch_operations"][self._operation_key]
-        if self._is_plain and not kwargs:
-            with tensor_frontend(context.state["Var"]):
-                if isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function):
-                    implementation = implementation()
-                return implementation(*args)
+        if self._cached_ctx is context:
+            implementation = self._cached_impl
+            var_cls = self._cached_var_cls
+            is_fn = self._cached_is_fn
+        else:
+            implementation = context.state["native_torch_operations"][self._operation_key]
+            var_cls = context.state["Var"]
+            is_fn = isinstance(implementation, type) and issubclass(implementation, context.native_backend.Function)
+            self._cached_ctx = context
+            self._cached_impl = implementation
+            self._cached_var_cls = var_cls
+            self._cached_is_fn = is_fn
+        if not kwargs:
+            key = self._operation_key
+            if key == "rsqrt" and len(args) == 1 and isinstance(args[0], var_cls) and not jittor_mod.flags.amp_reg:
+                dispatch = _DISPATCH_MOD
+                if dispatch is None or dispatch.generation != _ACL_NATIVE_GEN:
+                    dispatch = _refresh_acl_native_cache(jittor_mod)
+                if _FAST_MAPPED_UNARY is not None and _ACL_RSQRT_DEFAULT and dispatch.dispatch_context is dispatch._NATIVE_DISPATCH_CONTEXT:
+                    fast = _FAST_MAPPED_UNARY(args[0], 0, 0.0, 0.0)
+                    if fast is not None:
+                        return fast
+            elif (key == "matmul" or key == "bmm") and len(args) == 2 and isinstance(args[0], var_cls) and isinstance(args[1], var_cls) and not jittor_mod.flags.amp_reg:
+                dispatch = _DISPATCH_MOD
+                if dispatch is None or dispatch.generation != _ACL_NATIVE_GEN:
+                    dispatch = _refresh_acl_native_cache(jittor_mod)
+                if _FAST_ACL_MATMUL is not None and _ACL_MM_DEFAULT and dispatch.dispatch_context is dispatch._NATIVE_DISPATCH_CONTEXT:
+                    fast = _FAST_ACL_MATMUL(args[0], args[1], bool(getattr(jittor_mod, "acl_allow_hf32", False)), key == "bmm")
+                    if fast is not None:
+                        return fast
+            if self._is_plain or (key in ("pow", "rsqrt", "sqrt") and not jittor_mod.flags.amp_reg):
+                with tensor_frontend(var_cls):
+                    if is_fn:
+                        implementation = implementation()
+                    return implementation(*args)
         if self._operation_key in ("pow", "rsqrt", "sqrt") and "input" in kwargs:
             if args or "x" in kwargs:
                 raise TypeError("%s received input more than once" % self._operation_key)

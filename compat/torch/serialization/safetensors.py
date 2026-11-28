@@ -19,7 +19,15 @@ _ST = {
     "BF16": (None, 2), "I64": (np.int64, 8), "I32": (np.int32, 4),
     "I16": (np.int16, 2), "I8": (np.int8, 1), "U8": (np.uint8, 1),
     "U16": (np.uint16, 2), "U32": (np.uint32, 4), "U64": (np.uint64, 8),
-    "BOOL": (np.bool_, 1), "F8_E4M3": (None, 1), "F8_E5M2": (None, 1),
+    "BOOL": (np.bool_, 1),
+    "F8_E4M3": (None, 1), "F8_E5M2": (None, 1), "F8_E8M0": (None, 1),
+}
+
+
+_ST_FP8_TO_JT = {
+    "F8_E4M3": "float8_e4m3fn",
+    "F8_E5M2": "float8_e5m2",
+    "F8_E8M0": "float8_e8m0fnu",
 }
 
 
@@ -28,15 +36,19 @@ _NP_TO_ST = {
     "int64": "I64", "int32": "I32", "int16": "I16", "int8": "I8",
     "uint8": "U8", "uint16": "U16", "uint32": "U32", "uint64": "U64",
     "bool": "BOOL", "bfloat16": "BF16",
+    "float8_e4m3fn": "F8_E4M3", "float8_e5m2": "F8_E5M2", "float8_e8m0fnu": "F8_E8M0",
 }
 
 
 def _bytes_to_np(raw, st_dtype, shape):
+    shape = tuple(shape)
+    if st_dtype in _ST_FP8_TO_JT:
+        u8 = np.frombuffer(raw, dtype=np.uint8).copy().reshape(shape)
+        return jt.array(u8, dtype="uint8").reinterpret_view(shape, _ST_FP8_TO_JT[st_dtype]).numpy()
     if st_dtype.startswith("F8_"):
         raise NotImplementedError(
             "safetensors dtype %s has no supported Jittor decoder" % _jittor_dtype_name(st_dtype))
     npd, _itemsize = _ST[st_dtype]
-    shape = tuple(shape)
     if _jittor_dtype_name(st_dtype) == "BF16":
         u16 = np.frombuffer(raw, dtype=np.uint16).astype(np.uint32)
         return (u16 << 16).view(np.float32).reshape(shape)
@@ -48,7 +60,12 @@ def _to_tensor(array, st_dtype, device):
     array = np.asarray(array)
     if not array.flags.c_contiguous:
         array = np.ascontiguousarray(array)
-    dtype = "bfloat16" if _jittor_dtype_name(st_dtype) == "BF16" else array.dtype.name
+    if st_dtype in _ST_FP8_TO_JT:
+        dtype = _ST_FP8_TO_JT[st_dtype]
+    elif _jittor_dtype_name(st_dtype) == "BF16":
+        dtype = "bfloat16"
+    else:
+        dtype = array.dtype.name
     tensor = g.tensor(array, dtype=dtype, device="cpu", requires_grad=False)
     target_device = "cpu" if device is None else device
     if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
@@ -107,16 +124,23 @@ def _contiguous_span(shape, idx):
 
 
 def _raw_to_tensor(raw, st_dtype, shape, device):
-    """Build a tensor from file bytes; BF16 keeps its 16-bit payload."""
-    if _jittor_dtype_name(st_dtype) != "BF16":
-        return _to_tensor(_bytes_to_np(raw, st_dtype, shape), st_dtype, device)
-    g = get_install_context(jt).target_namespace
-    array = np.frombuffer(raw, dtype=np.uint16).reshape(tuple(shape))
-    tensor = g.tensor(array, dtype="uint16", device="cpu", requires_grad=False)
-    tensor = tensor.reinterpret_view(tuple(shape), "bfloat16")
+    """Build a tensor from file bytes; BF16 and FP8 preserve their exact raw bit payloads."""
+    shape = tuple(shape)
     target_device = "cpu" if device is None else device
     if isinstance(target_device, (int, np.integer)) and not isinstance(target_device, bool):
         target_device = "cuda:%d" % int(target_device)
+    if st_dtype in _ST_FP8_TO_JT:
+        g = get_install_context(jt).target_namespace
+        array = np.frombuffer(raw, dtype=np.uint8).reshape(shape)
+        tensor = g.tensor(array, dtype="uint8", device="cpu", requires_grad=False)
+        tensor = tensor.reinterpret_view(shape, _ST_FP8_TO_JT[st_dtype])
+        return tensor.to(device=target_device)
+    if _jittor_dtype_name(st_dtype) != "BF16":
+        return _to_tensor(_bytes_to_np(raw, st_dtype, shape), st_dtype, device)
+    g = get_install_context(jt).target_namespace
+    array = np.frombuffer(raw, dtype=np.uint16).reshape(shape)
+    tensor = g.tensor(array, dtype="uint16", device="cpu", requires_grad=False)
+    tensor = tensor.reinterpret_view(shape, "bfloat16")
     return tensor.to(device=target_device)
 
 
@@ -248,7 +272,11 @@ class _PySafeOpen:
 
     def get_tensor(self, key):
         st_dtype, shape, raw = self._entry(key)
-        return _raw_to_tensor(raw, st_dtype, shape, self._device)
+        try:
+            return _raw_to_tensor(raw, st_dtype, shape, self._device)
+        finally:
+            if isinstance(raw, memoryview):
+                raw.release()
 
     def get_dtype(self, key):
         return self._header[key]["dtype"]
@@ -334,12 +362,19 @@ def _serialize_parts(tensors, metadata=None):
     # A state_dict's entries alias live parameters, and `numpy()` would move
     # their sharing group to the host: fetch them as `torch.save` does.
     bf16_views = {}
+    fp8_views = {}
     snapshot_input = {}
     for key, value in tensors.items():
-        if isinstance(value, jt.Var) and _jittor_dtype_name(value.dtype) == "bfloat16":
-            if value.is_contiguous():
+        if isinstance(value, jt.Var):
+            v_dtype = _jittor_dtype_name(value.dtype)
+            if v_dtype == "bfloat16" and value.is_contiguous():
                 bf16_views[key] = value.reinterpret_view(value.shape, "uint16")
                 snapshot_input[key] = bf16_views[key]
+                continue
+            if v_dtype in ("float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu"):
+                dense = value if value.is_contiguous() else value.contiguous()
+                fp8_views[key] = dense.reinterpret_view(dense.shape, "uint8")
+                snapshot_input[key] = fp8_views[key]
                 continue
         snapshot_input[key] = value
     snapshots = _snapshot_tensors(snapshot_input)
@@ -348,7 +383,7 @@ def _serialize_parts(tensors, metadata=None):
     offset = 0
     for key, value in tensors.items():
         tensor_dtype = _jittor_dtype_name(value.dtype) if isinstance(value, jt.Var) else None
-        snapshot_object = bf16_views.get(key, value)
+        snapshot_object = bf16_views.get(key, fp8_views.get(key, value))
         arr = (snapshots[id(snapshot_object)] if isinstance(value, jt.Var) else
                value.numpy() if hasattr(value, "numpy") else np.asarray(value))
         arr = np.asarray(arr)
@@ -365,6 +400,8 @@ def _serialize_parts(tensors, metadata=None):
                 # their upper 16 bits, not a float32 payload with a BF16 label.
                 bits = arr.astype(np.float32, copy=False).view(np.uint32)
                 part = np.ascontiguousarray((bits >> 16).astype(np.uint16))
+        elif st_dtype in _ST_FP8_TO_JT:
+            part = np.ascontiguousarray(arr.astype(np.uint8, copy=False))
         else:
             part = np.ascontiguousarray(arr.astype(_ST[st_dtype][0], copy=False))
         header[key] = {
@@ -433,7 +470,7 @@ def _install_safetensors_shim(registry=None):
         register_api_bindings(torch_module, "safetensors.torch",
             ("safe_open", "load", "load_file", "save", "save_file"),
             Fidelity.APPROXIMATE, "Supported dense dtype codecs preserve wide integers, "
-            "BF16 and requested device; float8 is explicitly unsupported")
+            "BF16, FP8 (E4M3/E5M2/E8M0) and requested device")
         register_api_bindings(safetensors_module, "safetensors", ("safe_open",),
             Fidelity.APPROXIMATE, "Torch reader uses the active frontend; other frameworks "
             "delegate to the original SafeTensor reader")

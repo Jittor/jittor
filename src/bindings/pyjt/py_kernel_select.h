@@ -28,6 +28,9 @@ void kernel_select_invalidate(PyObject* op_names);
 // Whether any backend has a registration under `op` (C++ callers).
 bool kernel_op_registered(const char* op);
 
+// Monotonically incremented on every kernel registration change.
+uint64_t kernel_select_generation();
+
 // Declares that the Python `supports` predicate `fn` answers what the named
 // native rule answers, so the loop below can evaluate the rule instead of
 // calling back into Python for it. A rule may also say it does not know --

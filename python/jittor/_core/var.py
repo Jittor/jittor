@@ -42,7 +42,10 @@ Var.cast = Var.cast
 
 
 def _is_floating_point(self):
-    return _jittor_dtype_name(self.dtype) in ("float16", "bfloat16", "float32", "float64")
+    return _jittor_dtype_name(self.dtype) in (
+        "float16", "bfloat16", "float32", "float64",
+        "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu",
+    )
 
 
 def _is_complex(self):
@@ -50,7 +53,9 @@ def _is_complex(self):
 
 
 def _is_signed(self):
-    return _jittor_dtype_name(self.dtype) not in ("bool", "uint8", "uint16", "uint32", "uint64")
+    return _jittor_dtype_name(self.dtype) not in (
+        "bool", "uint8", "uint16", "uint32", "uint64", "float8_e8m0fnu",
+    )
 
 
 # Dtype queries belong to the native tensor; installing another frontend must
@@ -96,7 +101,7 @@ def array(data, dtype=None):
     elif dtype is not None:
         dtype = _dtype_for_compute(dtype)
         with flag_scope(auto_convert_64_to_32=0):
-            if dtype == "bfloat16":
+            if dtype in ("bfloat16", "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu"):
                 ret = ops.array(np.array(data, "float32")).cast(dtype)
             else:
                 ret = ops.array(np.array(data, dtype))
@@ -197,7 +202,11 @@ def random(shape, dtype="float32", type="uniform", generator=None, *, _torch_nor
             raise RuntimeError(f"Trying to create tensor with negative dimension {dim}: {shape}")
     dtype = _dtype_for_compute(dtype)
     name = _jittor_dtype_name(dtype)
-    draw = "float32" if name in ("float16", "bfloat16") else name
+    draw = (
+        "float32"
+        if name in ("float16", "bfloat16", "float8_e4m3fn", "float8_e5m2", "float8_e8m0fnu")
+        else name
+    )
     # A captured step replays its own Philox stream, which knows nothing of an
     # explicit generator's state: only the global stream is captured.
     ret = _captured_draw(shape, draw, type) if generator is None else None
