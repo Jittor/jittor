@@ -315,7 +315,7 @@ def _torch_setitem(self, slices, value):
     if _owner.jt.flags.no_grad or not self.requires_grad:
         # Detached indexed stores must keep shared allocations (NumPy,
         # DLPack and retained aliases), like copy_ and the other in-place ops.
-        return _ip(self, self.setitem(slices, value), preserve_storage=True)
+        return _ip(self, self.setitem(slices, value), preserve_storage=True, fresh_result=True)
     result = _orig_setitem(self, slices, value)
     return result
 

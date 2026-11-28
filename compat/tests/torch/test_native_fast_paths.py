@@ -1450,6 +1450,26 @@ class TestFastSilu(unittest.TestCase):
                     np.testing.assert_array_equal(got.float().cpu().numpy(), want.float().cpu().numpy())
 
 
+class TestDeferredSliceStore(unittest.TestCase):
+    @unittest.skipUnless(_CUDA_KERNELS, "requires CUDA")
+    def test_slice_store_keeps_a_pending_clone_lazy(self):
+        with torch.no_grad(), jt.flag_scope(auto_flush_ops=0, async_flush_ops=0):
+            source = torch.arange(24, device="cuda", dtype=torch.float32).reshape(2, 12)
+            source.sync()
+            updated = source.clone()
+            version = updated._version
+            batches = jt.flags.exec_called
+            updated[:, :4] = -1.0
+            self.assertEqual(jt.flags.exec_called, batches)
+            updated[:, 8:] = -2.0
+            self.assertEqual(updated._version, version + 2)
+            expected = np.arange(24, dtype=np.float32).reshape(2, 12)
+            np.testing.assert_array_equal(source.cpu().numpy(), expected)
+            expected[:, :4] = -1
+            expected[:, 8:] = -2
+            np.testing.assert_array_equal(updated.cpu().numpy(), expected)
+
+
 class TestSdpaRoutes(unittest.TestCase):
     @unittest.skipUnless(_CUDA_KERNELS, "the routes remembered are CUDA kernels")
     def test_a_remembered_route_gives_the_walk_s_answer(self):

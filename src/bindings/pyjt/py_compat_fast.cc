@@ -2357,7 +2357,7 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
     NanoString dtype = a->dtype();
     if (dtype != ns_float32 && dtype != ns_float16 && dtype != ns_bfloat16) return false;
     if (a == b || a->mem_ptr || a->is_finished() || target->view || target->views
-            || a->share_src || a->share_next || a->liveness.forward.count() != 1
+            || a->share_src || a->share_next
             || !a->is_stop_grad() || !b->is_stop_grad() || !a->is_contiguous()
             || a->shape != b->shape || a->dtype() != b->dtype()
             || a->placement != b->placement || a->device_id != b->device_id)
@@ -2368,24 +2368,34 @@ bool try_defer_unaliased_inplace(PyObject* self, PyObject* value, bool fresh_res
     // output aliased with an input. Broader producers retain the store path.
     Op* producer = a->input();
     if (!producer || !producer->saved_storage_versions.empty()) return false;
+    Op* update = b->input();
+    if (!update || !update->saved_storage_versions.empty()) return false;
+    static const auto copy = get_op_id("copy");
+    // A private indexed update of a pending clone can keep its native graph.
+    const bool indexed = fresh_result && update->is_op(op_ids::setitem()) && update->input(0) == a
+        && producer->is_op(copy);
     bool dtype_cast = fresh_result && producer->is_op(op_ids::unary()) && producer->ns == ns_cast;
-    if (!dtype_cast && !((has_op("cublas_matmul")
+    if (!indexed && !dtype_cast && !((has_op("cublas_matmul")
                 && producer->is_op(get_op_id("cublas_matmul")))
             || (has_op("cublas_batched_matmul")
                 && producer->is_op(get_op_id("cublas_batched_matmul"))))) return false;
-    Op* update = b->input();
-    if (!update || !update->is_op(op_ids::binary())
-            || !update->saved_storage_versions.empty()) return false;
+    if (!indexed && (a->liveness.forward.count() != 1 || !update->is_op(op_ids::binary())))
+        return false;
     int readers = 0;
     for (auto* consumer : a->outputs())
         if (consumer != update || ++readers > 1) return false;
     if (readers != 1) return false;
+    // A pending producer can contribute forward liveness even for a stopped
+    // tensor. The backward claims on this destination must be exactly the
+    // holder and its sole indexed reader. Aliases or queued batches add claims.
+    if (indexed && a->liveness.backward.count() != 2) return false;
     auto version = a->peek_storage_version();
-    if (version && version.use_count() != 2) return false;
+    if (version && (version.use_count() != 2
+            || version->externally_visible.load(std::memory_order_relaxed))) return false;
     if (a->autograd_alias && (a->autograd_alias.use_count() != 1
             || a->autograd_alias->version.use_count() != 1)) return false;
     if (!version) version = a->storage_version_token();
-    if (dtype_cast) {
+    if (dtype_cast || indexed) {
         target->assign(replacement);
     } else {
         // copy_(rhs) must leave the destination independent of its live RHS.
