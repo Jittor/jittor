@@ -3001,6 +3001,12 @@ def _api_contiguous(self, memory_format="contiguous_format"):
     fast = _FAST_CONTIGUOUS
     if fast is not None and _owner.jt.contiguous is _NATIVE_CONTIGUOUS:
         if self.ndim == 4 and _owner.jt.flags.no_grad and self.placement_backend == 1:
+            if _owner.jt.flags.keep_graph == 2:
+                from jittor.backends.cuda.kernels.nn.cudnn_attention_cuda import contiguous_attention_output
+
+                ready = contiguous_attention_output(self)
+                if ready is not None:
+                    return ready
             from jittor.backends.cuda.kernels.nn.short_attention_cuda import try_contiguous
 
             ready = try_contiguous(self)

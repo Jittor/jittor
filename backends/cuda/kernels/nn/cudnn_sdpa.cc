@@ -40,7 +40,7 @@ namespace fe = cudnn_frontend;
 namespace {
 
 enum { DTYPE_HALF = 0, DTYPE_BF16 = 1 };
-enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4, LAYOUT_PACKED_QKV = 8, TUNE_FORWARD = 16 };
+enum { LAYOUT_Q = 1, LAYOUT_K = 2, LAYOUT_V = 4, LAYOUT_PACKED_QKV = 8, TUNE_FORWARD = 16, LAYOUT_DENSE_OUTPUT = 32 };
 
 using Key = std::tuple<int, int, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
                        int, uint32_t, int64_t, int64_t, cudnnHandle_t>;
@@ -149,8 +149,10 @@ std::shared_ptr<Forward> forward_graph(cudnnHandle_t handle, int dtype, int64_t 
     }
     auto outputs = graph.sdpa(entry->q, entry->k, entry->v, options);
     entry->o = outputs[0];
+    const bool seq_major_output = !(layout & LAYOUT_DENSE_OUTPUT)
+        && ((layout & LAYOUT_Q) || packed_qkv);
     entry->o->set_output(true).set_dim(dims(b, h, sq, d))
-        .set_stride(strides(((layout & LAYOUT_Q) != 0) || packed_qkv, h, sq, d));
+        .set_stride(strides(seq_major_output, h, sq, d));
     if (training) {
         entry->stats = outputs[1];
         entry->stats->set_output(true).set_data_type(fe::DataType_t::FLOAT)
