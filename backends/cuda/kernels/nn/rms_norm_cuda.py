@@ -66,12 +66,7 @@ def _rms_norm_contract(x, gamma, epsilon, residual=None):
     return hidden_size, threads, threads // 32, epsilon_value
 
 
-_RMS_NORM_SOURCE = r"""
-    __device__ __forceinline__ float warp_sum(float value) {
-        for (int offset = 16; offset > 0; offset >>= 1)
-            value += __shfl_down_sync(0xffffffff, value, offset);
-        return value;
-    }
+_RMS_NORM_SUBWARP_2B = r"""
     __global__ __launch_bounds__(128) static void rms_norm_subwarp_2b(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ gamma,
@@ -88,8 +83,7 @@ _RMS_NORM_SOURCE = r"""
             float sum = 0.0f;
             uint4 raw = make_uint4(0, 0, 0, 0);
             if (active) {
-                const uint4* x8 = reinterpret_cast<const uint4*>(x + row * %(hidden_size)dLL);
-                raw = x8[lane];
+%(subwarp_load)s
                 const in0_type* vp = reinterpret_cast<const in0_type*>(&raw);
                 #pragma unroll
                 for (int k = 0; k < 8; ++k) {
@@ -131,7 +125,16 @@ _RMS_NORM_SOURCE = r"""
             }
         }
     }
-    __global__ __launch_bounds__(%(vec2_threads)d) static void rms_norm_vec2b(
+"""
+
+
+_RMS_NORM_SOURCE = r"""
+    __device__ __forceinline__ float warp_sum(float value) {
+        for (int offset = 16; offset > 0; offset >>= 1)
+            value += __shfl_down_sync(0xffffffff, value, offset);
+        return value;
+    }
+""" + _RMS_NORM_SUBWARP_2B + r"""    __global__ __launch_bounds__(%(vec2_threads)d) static void rms_norm_vec2b(
             const in0_type* __restrict__ x,
             const in1_type* __restrict__ gamma,
             out0_type* __restrict__ y,
@@ -703,13 +706,19 @@ def _vec_launch_params(hidden_size, elem_per_vec):
 
 @lru_cache(maxsize=256)
 def _format_rms_norm_source(template, hidden_size, threads, warps,
-                            round_before_weight):
+                            round_before_weight, subwarp_load=None):
     # Cap block size at 512 threads so SM89 (1536 threads/SM) runs 3 blocks/SM
     # at 100% occupancy instead of 1 block/SM (66.7%) with 1024 threads.
     launch_threads = min(threads, 512)
     vec2_n, vec2_subwarp, vec2_group, vec2_threads, vec2_warps = _vec_launch_params(hidden_size, 8)
     vec4_n, vec4_subwarp, vec4_group, vec4_threads, vec4_warps = _vec_launch_params(hidden_size, 4)
+    if subwarp_load is None:
+        subwarp_load = (
+            f"                const uint4* x8 = reinterpret_cast<const uint4*>(x + row * {hidden_size}LL);\n"
+            "                raw = x8[lane];"
+        )
     return template % {
+        "subwarp_load": subwarp_load,
         "hidden_size": hidden_size,
         "threads": threads,
         "warps": warps,
@@ -815,6 +824,55 @@ def _warp_rms_norm_source(residual=False, weight_offset=0.0):
 
 def _is_wide_bfloat16_row(x):
     return x.ndim == 2 and x.shape[1] == 4096 and _jittor_dtype_name(x.dtype) == "bfloat16"
+
+
+@lru_cache(maxsize=128)
+def _rms_norm_view_source(shape, strides, offset):
+    hidden = shape[-1]
+    row_size = 1
+    indices = [f"{offset}LL"]
+    for dim, stride in reversed(tuple(zip(shape[:-1], strides[:-1]))):
+        if dim > 1 and stride:
+            indices.append(f"(row / {row_size}LL % {dim}LL) * {stride}LL")
+        row_size *= dim
+    row_offset = " + ".join(indices)
+    load = f"""
+                const in0_type* src = x + {row_offset} + lane * 8;
+                if ((reinterpret_cast<uintptr_t>(src) & 15u) == 0) {{
+                    raw = *reinterpret_cast<const uint4*>(src);
+                }} else {{
+                    in0_type* elements = reinterpret_cast<in0_type*>(&raw);
+                    #pragma unroll
+                    for (int i = 0; i < 8; ++i) elements[i] = src[i];
+                }}"""
+    launch = r"""
+    const long long rows = out0->num / %(hidden_size)d;
+    constexpr int kRowsPerBlock = 128 / %(vec2_group)d;
+    rms_norm_subwarp_2b<<<(unsigned)((rows + kRowsPerBlock - 1) / kRowsPerBlock), 128>>>(
+        in0_p, in1_p, out0_p, rows, static_cast<float>(data["eps"]));
+    CHECK(0 == cudaGetLastError());
+    """
+    return _format_rms_norm_source(
+        _RMS_NORM_SUBWARP_2B + launch, hidden, 32, 1, False, load)
+
+
+@optional_kernel("nn.rms_norm.view.inference", "cuda", supports=_rms_norm_supported)
+def _rms_norm_view_cuda(x, gamma, epsilon):
+    """Single-round RMSNorm over short half-precision rows in a strided view."""
+    from .fused_attention_f32_cuda import _dense_storage_layout
+
+    hidden = int(x.shape[-1])
+    dtype = _jittor_dtype_name(x.dtype)
+    if (hidden > 256 or hidden % 8 or dtype not in ("bfloat16", "float16")
+            or not gamma._storage_is_contiguous()):
+        return None
+    layout = _dense_storage_layout(x)
+    if layout is None:
+        return None
+    base, strides, offset = layout
+    source = _rms_norm_view_source(tuple(x.shape), strides, offset)
+    return _stop_grad_outputs(jt.code(x.shape, x.dtype, [base, gamma], cuda_src=source,
+                                      data={"eps": float(epsilon)}))
 
 
 @optional_kernel("nn.rms_norm.single_round.inference", "cuda", supports=_rms_norm_supported)

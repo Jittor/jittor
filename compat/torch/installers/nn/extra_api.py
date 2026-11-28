@@ -621,7 +621,7 @@ class LocalResponseNorm(nn.Module):
 
 
 def _try_single_round_rms_norm(x, normalized_shape, weight, eps):
-    """Fuse the CUDA inference path for a contiguous half-precision row."""
+    """Fuse CUDA inference normalization over a half-precision row."""
     name = _dtype_to_str(x.dtype)
     if not (
         jt.flags.no_grad
@@ -631,10 +631,11 @@ def _try_single_round_rms_norm(x, normalized_shape, weight, eps):
         and len(normalized_shape) == 1
         and tuple(x.shape[-1:]) == normalized_shape
         and tuple(weight.shape) == normalized_shape
-        and x._storage_is_contiguous()
         and weight._storage_is_contiguous()
     ):
         return None
+    if not x._storage_is_contiguous():
+        return _try_dispatch("nn.rms_norm.view.inference", x, weight, eps)
     return _try_dispatch("nn.rms_norm.single_round.inference", x, weight, eps)
 
 
